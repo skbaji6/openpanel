@@ -107,4 +107,28 @@ describe('normalizeEvent', () => {
     });
     expect(result?.profileId).toBe('7');
   });
+
+  test('strips NUL and replaces lone surrogates in id, name, profile id and string properties', () => {
+    const cutPrefix = 'x'.repeat(MAX_PROPERTY_STRING_LENGTH - 1);
+    const result = normalizeEvent({
+      ...base,
+      id: 'id\u0000',
+      event: {
+        ...base.event,
+        name: 'add\u0000_to_cart',
+        profileId: 'u\uD800',
+        properties: {
+          'k\u0000ey': 'a\u0000b',
+          emoji: '😀',
+          cut: `${cutPrefix}😀`,
+        },
+      },
+    });
+    expect(result?.eventId).toBe('id');
+    expect(result?.name).toBe('add_to_cart');
+    expect(result?.profileId).toBe('u�');
+    expect(result?.properties.key).toBe('ab');
+    expect(result?.properties.emoji).toBe('😀');
+    expect(result?.properties.cut).toBe(`${cutPrefix}�`);
+  });
 });

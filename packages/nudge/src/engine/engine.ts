@@ -1,6 +1,11 @@
 import type { sql as nudgeSql } from '../db/client';
 import type { NormalizedEvent } from '../events/normalize';
-import type { Goal, RuleDefinition } from '../rules/rule.schema';
+import { sanitizeText } from '../events/sanitize';
+import {
+  type Goal,
+  type RuleDefinition,
+  zRuleDefinition,
+} from '../rules/rule.schema';
 
 // Prisma's interactive transactions default to 5 s; a consumer batch can need longer.
 const BATCH_TRANSACTION_TIMEOUT_MS = 60_000;
@@ -101,13 +106,13 @@ export const ENROLL_SQL = `
       WHERE project_id = $1 AND profile_id = $4 AND rule_id = $2::uuid AND match_value = $5
         AND (status = 'active'
              OR (status = 'completed' AND (NOT $8::boolean
-                 OR created_at > $7::timestamptz - make_interval(secs => $9::int)))))
+                 OR created_at > $7::timestamptz - make_interval(secs => $9::double precision)))))
     ON CONFLICT (project_id, rule_id, profile_id, match_value) WHERE status = 'active' DO NOTHING
     RETURNING id, trigger_time
   ), new_steps AS (
     INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
     SELECT enrollment.id, (step.ordinality - 1)::int,
-           enrollment.trigger_time + make_interval(secs => (step.value->>'delaySeconds')::int), 'pending'
+           enrollment.trigger_time + make_interval(secs => (step.value->>'delaySeconds')::double precision), 'pending'
     FROM enrollment, jsonb_array_elements($3::jsonb->'steps') WITH ORDINALITY AS step
   )
   SELECT id::text FROM enrollment`;
@@ -126,7 +131,7 @@ const GOAL_CANDIDATES_SQL = `
   WHERE project_id = $1 AND profile_id = $2 AND status = 'active'
     AND trigger_time <= $4::timestamptz AND rule_snapshot->'goal'->>'event' = $3`;
 
-const STEP_DELAY = `make_interval(secs => (e.rule_snapshot->'steps'->s.step_index->>'delaySeconds')::int)`;
+const STEP_DELAY = `make_interval(secs => (e.rule_snapshot->'steps'->s.step_index->>'delaySeconds')::double precision)`;
 const NOT_EXCLUDED = `NOT (COALESCE(e.rule_snapshot->'goal'->'excludeEvents', '[]'::jsonb) ?`;
 
 // GREATEST keeps the debounce order-independent: an older event never pulls due_at back.
@@ -162,6 +167,48 @@ const INTEREST_NAMES_SQL = `
     SELECT rule_snapshot->'goal'->>'event' FROM nudge.enrollments
     WHERE status = 'active' AND ($1::text IS NULL OR project_id = $1::text)
   ) names WHERE name IS NOT NULL`;
+
+// Every engine write (enroll, complete, debounce) is scoped to one (project, profile).
+// Locking those keys first gives each statement a snapshot that sees committed enrollments,
+// and taking them in hash order keeps overlapping batches from deadlocking each other.
+const LOCK_PROFILES_SQL = `
+  SELECT count(pg_advisory_xact_lock(key_hash))::int AS locked FROM (
+    SELECT DISTINCT hashtextextended(profile_key, 0) AS key_hash
+    FROM jsonb_array_elements_text($1::jsonb) AS profile_key
+    ORDER BY key_hash
+  ) ordered_keys`;
+
+function sanitizeEvent(event: NormalizedEvent): NormalizedEvent {
+  const properties: NormalizedEvent['properties'] = {};
+  for (const [key, value] of Object.entries(event.properties)) {
+    properties[sanitizeText(key)] =
+      typeof value === 'string' ? sanitizeText(value) : value;
+  }
+  return {
+    ...event,
+    eventId: sanitizeText(event.eventId),
+    projectId: sanitizeText(event.projectId),
+    profileId: sanitizeText(event.profileId),
+    name: sanitizeText(event.name),
+    properties,
+  };
+}
+
+// A stored rule that no longer passes the schema (e.g. written around the API) is skipped, not fatal for the batch.
+async function loadActiveRules(
+  db: Queryable,
+  projectId: string
+): Promise<RuleRow[]> {
+  const rows = await db.$queryRawUnsafe<{ id: string; definition: unknown }[]>(
+    `SELECT id::text, definition FROM nudge.rules
+     WHERE project_id = $1 AND status = 'active'`,
+    projectId
+  );
+  return rows.flatMap((row) => {
+    const parsed = zRuleDefinition.safeParse(row.definition);
+    return parsed.success ? [{ id: row.id, definition: parsed.data }] : [];
+  });
+}
 
 function eventKey(projectId: string, eventId: string): string {
   return JSON.stringify([projectId, eventId]);
@@ -333,17 +380,22 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
 
   async function handleEvents(events: NormalizedEvent[]): Promise<void> {
     const latestAllowed = now().getTime() + MAX_FUTURE_SKEW_MS;
-    const plausible = events.filter(
-      (event) => event.time.getTime() <= latestAllowed
-    );
-    if (plausible.length === 0) {
+    const ordered = events
+      .filter((event) => event.time.getTime() <= latestAllowed)
+      .map(sanitizeEvent)
+      .sort((a, b) => a.time.getTime() - b.time.getTime());
+    if (ordered.length === 0) {
       return;
     }
-    const ordered = plausible.sort(
-      (a, b) => a.time.getTime() - b.time.getTime()
+    const profileKeys = ordered.map((event) =>
+      JSON.stringify([event.projectId, event.profileId])
     );
     await deps.sql.$transaction(
       async (tx) => {
+        await tx.$queryRawUnsafe(
+          LOCK_PROFILES_SQL,
+          JSON.stringify(profileKeys)
+        );
         const fresh = await insertEvents(tx, ordered);
         const rulesByProject = new Map<string, RuleRow[]>();
         for (const event of ordered) {
@@ -353,11 +405,7 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
           }
           let rules = rulesByProject.get(event.projectId);
           if (!rules) {
-            rules = await tx.$queryRawUnsafe<RuleRow[]>(
-              `SELECT id::text, definition FROM nudge.rules
-               WHERE project_id = $1 AND status = 'active'`,
-              event.projectId
-            );
+            rules = await loadActiveRules(tx, event.projectId);
             rulesByProject.set(event.projectId, rules);
           }
           await processEvent(tx, event, rules);

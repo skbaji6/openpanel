@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { zRuleDefinition } from './rule.schema';
+import { MAX_DELAY_SECONDS, zRuleDefinition } from './rule.schema';
 import { STARTER_RULES } from './starter-rules';
 
 const valid = STARTER_RULES['cart-abandoned'];
@@ -64,5 +64,28 @@ describe('zRuleDefinition', () => {
       goal: { kind: 'inactivity' },
     });
     expect(parsed.goal).toEqual({ kind: 'inactivity', excludeEvents: [] });
+  });
+
+  it('rejects a delay or cooldown above 90 days', () => {
+    const step = valid.steps[0]!;
+    const tooLong = MAX_DELAY_SECONDS + 1;
+    expect(
+      zRuleDefinition.safeParse({
+        ...valid,
+        steps: [{ ...step, delaySeconds: tooLong }],
+      }).success
+    ).toBe(false);
+    expect(
+      zRuleDefinition.safeParse({
+        ...valid,
+        reentry: { enabled: true, cooldownSeconds: tooLong },
+      }).success
+    ).toBe(false);
+    expect(
+      zRuleDefinition.safeParse({
+        ...valid,
+        steps: [{ ...step, delaySeconds: MAX_DELAY_SECONDS }],
+      }).success
+    ).toBe(true);
   });
 });

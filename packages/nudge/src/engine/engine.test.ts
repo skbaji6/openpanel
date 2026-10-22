@@ -115,6 +115,50 @@ function steps(
   );
 }
 
+const OVERLAP_ROUNDS = 20;
+const OVERLAP_TEST_TIMEOUT_MS = 60_000;
+const BLOCKED_SESSION_POLL_MS = 20;
+const BLOCKED_SESSION_TIMEOUT_MS = 10_000;
+
+// Holds the engine's transaction open after its work, just before commit, until release().
+function gatedEngine() {
+  const gate = Promise.withResolvers<void>();
+  const commit = Promise.withResolvers<void>();
+  const gatedSql = new Proxy(sql, {
+    get(target, prop) {
+      if (prop !== '$transaction') {
+        return Reflect.get(target, prop);
+      }
+      return (fn: (tx: unknown) => Promise<unknown>, options: unknown) =>
+        target.$transaction(async (tx) => {
+          const result = await fn(tx);
+          commit.resolve();
+          await gate.promise;
+          return result;
+        }, options as never);
+    },
+  });
+  return {
+    engine: createEngine({ sql: gatedSql, now: () => clock }),
+    atCommit: commit.promise,
+    release: () => gate.resolve(),
+  };
+}
+
+async function waitForBlockedSession() {
+  const deadline = Date.now() + BLOCKED_SESSION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const [row] = await sql.$queryRawUnsafe<{ waiting: number }[]>(
+      'SELECT count(*)::int AS waiting FROM pg_locks WHERE NOT granted'
+    );
+    if ((row?.waiting ?? 0) > 0) {
+      return;
+    }
+    await Bun.sleep(BLOCKED_SESSION_POLL_MS);
+  }
+  throw new Error('no session blocked on a lock');
+}
+
 async function insertReferenceSet(setKey: string, values: string[]) {
   await sql.$executeRawUnsafe(
     'INSERT INTO nudge.reference_sets (project_id, set_key, values) VALUES ($1, $2, $3::jsonb)',
@@ -711,6 +755,107 @@ describe('engine', () => {
       return rows.map((r) => r['QUERY PLAN']).join('\n');
     });
     expect(plan).toContain('enrollments_reentry_idx');
+  });
+
+  it('REVIEW race: a trigger blocked behind a batch that enrolls and completes the same key does not re-enroll when re-entry is disabled', async () => {
+    await insertRule(rule());
+    const held = gatedEngine();
+    const runA = held.engine.handleEvents([
+      event('purchase', at(0)),
+      event('opened', at(5)),
+    ]);
+    await held.atCommit;
+    const runB = engine.handleEvents([event('purchase', at(10))]);
+    await waitForBlockedSession();
+    held.release();
+    await Promise.all([runA, runB]);
+
+    expect((await enrollments()).map((r) => r.status)).toEqual(['completed']);
+    expect((await steps()).map((s) => s.status)).toEqual([
+      'cancelled',
+      'cancelled',
+    ]);
+  });
+
+  it(
+    'overlapping batches with opposite event-time order over the same two keys complete without deadlock',
+    async () => {
+      await insertRule(
+        rule({ reentry: { enabled: true, cooldownSeconds: 0 } })
+      );
+      const rounds = Array.from(
+        { length: OVERLAP_ROUNDS },
+        (_, round) => round
+      );
+      for (const round of rounds) {
+        const first = { profileId: `u1-${round}` };
+        const second = { profileId: `u2-${round}` };
+        await Promise.all([
+          engine.handleEvents([
+            event('purchase', at(0), {}, first),
+            event('purchase', at(1), {}, second),
+          ]),
+          engine.handleEvents([
+            event('purchase', at(0), {}, second),
+            event('purchase', at(1), {}, first),
+          ]),
+        ]);
+      }
+      expect(await count('enrollments')).toBe(2 * OVERLAP_ROUNDS);
+      expect(await count('steps')).toBe(4 * OVERLAP_ROUNDS);
+    },
+    OVERLAP_TEST_TIMEOUT_MS
+  );
+
+  it('a batch with one valid and one hostile event stores both, the hostile one sanitized', async () => {
+    await insertRule(rule({ matchOn: 'book_id' }));
+    await engine.handleEvents([
+      event(
+        'purch\u0000ase',
+        at(0),
+        { 'book\u0000_id': 'a\u0000b' },
+        { profileId: 'u\uD800' }
+      ),
+      event('page_view', at(1), { note: 'fine 😀' }),
+    ]);
+
+    const rows = await sql.$queryRawUnsafe<
+      { name: string; profile_id: string; properties: unknown }[]
+    >(
+      'SELECT name, profile_id, properties FROM nudge.events ORDER BY event_time'
+    );
+    expect(rows).toEqual([
+      { name: 'purchase', profile_id: 'u�', properties: { book_id: 'ab' } },
+      {
+        name: 'page_view',
+        profile_id: PROFILE,
+        properties: { note: 'fine 😀' },
+      },
+    ]);
+    expect((await onlyEnrollment()).match_value).toBe('ab');
+  });
+
+  it('a stored rule with an out-of-range delay is skipped without failing other projects in the batch', async () => {
+    // Skipped (not enrolled): the stored definition fails zRuleDefinition, so the engine ignores the rule.
+    await insertRule(
+      rule({
+        steps: [
+          {
+            delaySeconds: 3_000_000_000,
+            channel: 'email',
+            template: { body: 'x' },
+          },
+        ],
+      })
+    );
+    await insertRule(rule(), PROJECT_B);
+    await engine.handleEvents([
+      event('purchase', at(0)),
+      event('purchase', at(0), {}, { projectId: PROJECT_B }),
+    ]);
+
+    expect(await count('events')).toBe(2);
+    expect((await enrollments()).map((r) => r.project_id)).toEqual([PROJECT_B]);
   });
 
   it('purgeOldEvents deletes events older than retention and keeps newer ones', async () => {

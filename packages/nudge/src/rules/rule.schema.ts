@@ -2,9 +2,10 @@ import { z } from 'zod';
 
 const MAX_SUBJECT_LENGTH = 300;
 const MAX_BODY_LENGTH = 20_000;
+export const MAX_DELAY_SECONDS = 90 * 24 * 60 * 60;
 
 export const zStep = z.object({
-  delaySeconds: z.number().int().min(0),
+  delaySeconds: z.number().int().min(0).max(MAX_DELAY_SECONDS),
   channel: z.enum(['email', 'webhook', 'push']),
   template: z.object({
     subject: z.string().max(MAX_SUBJECT_LENGTH).optional(),
@@ -49,7 +50,7 @@ export const zRuleDefinition = z.object({
     ),
   reentry: z.object({
     enabled: z.boolean(),
-    cooldownSeconds: z.number().int().min(0),
+    cooldownSeconds: z.number().int().min(0).max(MAX_DELAY_SECONDS),
   }),
   allowedEventProps: z.array(z.string().min(1)),
 });
