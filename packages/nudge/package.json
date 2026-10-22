@@ -6,6 +6,7 @@
   "sideEffects": false,
   "scripts": {
     "start": "bun src/worker.ts",
+    "migrate": "bun src/db/migrate.ts",
     "test": "bun test --isolate",
     "typecheck": "tsc --noEmit"
   },
