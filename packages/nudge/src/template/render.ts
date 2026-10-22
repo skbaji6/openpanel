@@ -52,6 +52,8 @@ const STYLE_CLOSE_TAG = /<\/style\s*>/iy;
 // A stand-in counts as markup start: a value right after '<' could become one.
 const MARKUP_START = /[A-Za-z/!?]/;
 
+const CONTROL_CHARACTERS = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
+
 interface RenderVars {
   profile: Record<string, unknown>;
   event: Record<string, unknown>;
@@ -209,7 +211,21 @@ const resolve = (path: string, vars: RenderVars, inPlainText: boolean) => {
 // attacker-controlled data as `profile`. event.* values (attacker-controlled)
 // render only in plain text of a template the strict tokenizer fully
 // understands; otherwise they render empty.
-export function renderTemplate(template: string, vars: RenderVars): string {
+//
+// 'text' mode is for output that is not HTML (email subject, push, webhook):
+// no escaping and no markup analysis, but the event allowlist still applies.
+// Control characters in values become spaces so a value cannot start a new
+// header line or otherwise change the shape of a single-line field.
+export function renderTemplate(
+  template: string,
+  vars: RenderVars,
+  opts: { mode?: 'html' | 'text' } = {}
+): string {
+  if (opts.mode === 'text') {
+    return template.replace(PLACEHOLDER, (_match: string, rawPath: string) =>
+      resolve(rawPath.trim(), vars, true).replace(CONTROL_CHARACTERS, ' ')
+    );
+  }
   const plainText = placeholderIsPlainText(template);
   let index = 0;
   return template.replace(PLACEHOLDER, (_match: string, rawPath: string) =>
