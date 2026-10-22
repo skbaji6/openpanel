@@ -14,8 +14,10 @@ import { type NormalizedEvent, normalizeEvent } from '../events/normalize';
 import type { Goal, RuleDefinition } from '../rules/rule.schema';
 import {
   createEngine,
+  ENROLL_SQL,
   evaluateGoal,
   GOAL_FACTS_SQL,
+  MAX_FUTURE_SKEW_MS,
   matchesTrigger,
 } from './engine';
 
@@ -110,6 +112,15 @@ function steps(
      WHERE $1::uuid IS NULL OR enrollment_id = $1::uuid
      ORDER BY enrollment_id, step_index`,
     enrollmentId ?? null
+  );
+}
+
+async function insertReferenceSet(setKey: string, values: string[]) {
+  await sql.$executeRawUnsafe(
+    'INSERT INTO nudge.reference_sets (project_id, set_key, values) VALUES ($1, $2, $3::jsonb)',
+    PROJECT_A,
+    setKey,
+    JSON.stringify(values)
   );
 }
 
@@ -558,6 +569,148 @@ describe('engine', () => {
     await engine.handleEvent(event('purchase', at(0)));
     await engine.handleEvent(event('purchase', at(1)));
     expect(await count('enrollments')).toBe(1);
+  });
+
+  it('set goal with matchOn: the reference set is keyed by the match value, so two books with different sets complete independently', async () => {
+    await insertRule(
+      rule({
+        matchOn: 'item_id',
+        goal: {
+          kind: 'set',
+          event: 'section_opened',
+          property: 'section_id',
+          setKey: 'item_id',
+        },
+      })
+    );
+    await insertReferenceSet(BOOK_A, ['a1', 'a2']);
+    await insertReferenceSet(BOOK_B, ['b1']);
+    await engine.handleEvent(event('purchase', at(0), { item_id: BOOK_A }));
+    await engine.handleEvent(event('purchase', at(0), { item_id: BOOK_B }));
+    await engine.handleEvent(
+      event('section_opened', at(1), { item_id: BOOK_B, section_id: 'b1' })
+    );
+    await engine.handleEvent(
+      event('section_opened', at(2), { item_id: BOOK_A, section_id: 'a1' })
+    );
+
+    let rows = await enrollments();
+    expect(rows.map((r) => [r.match_value, r.status])).toEqual([
+      [BOOK_A, 'active'],
+      [BOOK_B, 'completed'],
+    ]);
+    const [bookA] = rows;
+    expect(bookA && (await engine.evaluateEnrollment(bookA.id))).toEqual({
+      met: false,
+      missing: ['a2'],
+    });
+
+    await engine.handleEvent(
+      event('section_opened', at(3), { item_id: BOOK_A, section_id: 'a2' })
+    );
+    rows = await enrollments();
+    expect(rows.map((r) => r.status)).toEqual(['completed', 'completed']);
+  });
+
+  it('set goal uses the reference values snapshotted at enrollment; a registry edit only affects new enrollments', async () => {
+    await insertRule(
+      rule({
+        goal: {
+          kind: 'set',
+          event: 'section_opened',
+          property: 'section_id',
+          setKey: 'k',
+        },
+      })
+    );
+    await insertReferenceSet('k', ['s1', 's2']);
+    await engine.handleEvent(event('purchase', at(0), {}, { profileId: 'u1' }));
+    await sql.$executeRawUnsafe(
+      `UPDATE nudge.reference_sets SET values = '["s1"]'::jsonb WHERE project_id = $1 AND set_key = 'k'`,
+      PROJECT_A
+    );
+    await engine.handleEvent(event('purchase', at(0), {}, { profileId: 'u2' }));
+    await engine.handleEvent(
+      event('section_opened', at(1), { section_id: 's1' }, { profileId: 'u1' })
+    );
+    await engine.handleEvent(
+      event('section_opened', at(1), { section_id: 's1' }, { profileId: 'u2' })
+    );
+
+    const rows = await sql.$queryRawUnsafe<
+      { id: string; profile_id: string; status: string; values: string[] }[]
+    >(
+      `SELECT id::text, profile_id, status, rule_snapshot->'referenceValues' AS values
+       FROM nudge.enrollments ORDER BY profile_id`
+    );
+    expect(rows.map((r) => [r.profile_id, r.status, r.values])).toEqual([
+      ['u1', 'active', ['s1', 's2']],
+      ['u2', 'completed', ['s1']],
+    ]);
+    const [first] = rows;
+    expect(first && (await engine.evaluateEnrollment(first.id))).toEqual({
+      met: false,
+      missing: ['s2'],
+    });
+  });
+
+  it('a cancelled enrollment does not block re-entry even when re-entry is disabled', async () => {
+    await insertRule(rule());
+    await engine.handleEvent(event('purchase', at(0)));
+    await sql.$executeRawUnsafe(
+      `UPDATE nudge.enrollments SET status = 'cancelled'`
+    );
+    await engine.handleEvent(event('purchase', at(1)));
+
+    expect((await enrollments()).map((r) => r.status).sort()).toEqual([
+      'active',
+      'cancelled',
+    ]);
+  });
+
+  it('events more than MAX_FUTURE_SKEW_MS after now are dropped before storing', async () => {
+    await insertRule(rule());
+    const tooLate = new Date(NOW.getTime() + MAX_FUTURE_SKEW_MS + MINUTE_MS);
+    const justInside = new Date(NOW.getTime() + MAX_FUTURE_SKEW_MS);
+    await engine.handleEvents([
+      event('purchase', tooLate),
+      event('page_view', justInside),
+    ]);
+    await engine.handleEvent(
+      event('purchase', tooLate, {}, { profileId: 'u2' })
+    );
+
+    expect(await count('events')).toBe(1);
+    expect(await count('enrollments')).toBe(0);
+  });
+
+  it('PERF re-entry lookup in the enrollment insert uses enrollments_reentry_idx', async () => {
+    const ruleId = randomUUID();
+    await sql.$executeRawUnsafe(
+      `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time, created_at)
+       SELECT gen_random_uuid(), $1, $2::uuid, '{}'::jsonb, 'u' || (g % 2000), 'm' || g, 'completed', now(), now()
+       FROM generate_series(1, 20000) g`,
+      PROJECT_A,
+      ruleId
+    );
+    await sql.$executeRawUnsafe('ANALYZE nudge.enrollments');
+    const plan = await sql.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
+      const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
+        `EXPLAIN ${ENROLL_SQL}`,
+        PROJECT_A,
+        ruleId,
+        JSON.stringify(rule()),
+        'u7',
+        'm7',
+        NOW.toISOString(),
+        NOW.toISOString(),
+        true,
+        0
+      );
+      return rows.map((r) => r['QUERY PLAN']).join('\n');
+    });
+    expect(plan).toContain('enrollments_reentry_idx');
   });
 
   it('purgeOldEvents deletes events older than retention and keeps newer ones', async () => {

@@ -5,6 +5,8 @@ import type { Goal, RuleDefinition } from '../rules/rule.schema';
 // Prisma's interactive transactions default to 5 s; a consumer batch can need longer.
 const BATCH_TRANSACTION_TIMEOUT_MS = 60_000;
 const MS_PER_DAY = 86_400_000;
+// Events can be forged; a far-future time would push inactivity timers out indefinitely.
+export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
 
 type Sql = typeof nudgeSql;
 type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;
@@ -30,8 +32,11 @@ interface EnrollmentRow {
   profile_id: string;
   match_value: string;
   trigger_time: Date;
-  rule_snapshot: RuleDefinition;
+  rule_snapshot: RuleSnapshot;
 }
+
+// Reference values are frozen at enrollment so registry edits only affect new enrollments.
+export type RuleSnapshot = RuleDefinition & { referenceValues?: string[] };
 
 function propertyAsString(
   properties: NormalizedEvent['properties'],
@@ -86,16 +91,17 @@ const INSERT_EVENTS_SQL = `
   RETURNING project_id, event_id`;
 
 // Params: project, rule id, snapshot, profile, match value, trigger time, now, reentry enabled, cooldown seconds.
-const ENROLL_SQL = `
+export const ENROLL_SQL = `
   WITH enrollment AS (
     INSERT INTO nudge.enrollments
       (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time, created_at)
     SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, $4, $5, 'active', $6::timestamptz, $7::timestamptz
     WHERE NOT EXISTS (
       SELECT 1 FROM nudge.enrollments
-      WHERE project_id = $1 AND rule_id = $2::uuid AND profile_id = $4 AND match_value = $5
-        AND (status = 'active' OR NOT $8::boolean
-             OR created_at > $7::timestamptz - make_interval(secs => $9::int)))
+      WHERE project_id = $1 AND profile_id = $4 AND rule_id = $2::uuid AND match_value = $5
+        AND (status = 'active'
+             OR (status = 'completed' AND (NOT $8::boolean
+                 OR created_at > $7::timestamptz - make_interval(secs => $9::int)))))
     ON CONFLICT (project_id, rule_id, profile_id, match_value) WHERE status = 'active' DO NOTHING
     RETURNING id, trigger_time
   ), new_steps AS (
@@ -179,6 +185,15 @@ async function insertEvents(
   return new Set(inserted.map((row) => eventKey(row.project_id, row.event_id)));
 }
 
+// With matchOn, the registry is keyed by the match value (one set per book); otherwise by setKey.
+export function referenceSetKey(
+  definition: RuleDefinition,
+  goal: Extract<Goal, { kind: 'set' }>,
+  matchValue: string
+): string {
+  return definition.matchOn ? matchValue : goal.setKey;
+}
+
 async function loadReferenceSet(
   db: Queryable,
   projectId: string,
@@ -224,14 +239,10 @@ async function evaluate(
     enrollment.match_value,
     setProperty
   );
-  const referenceSet =
-    goal.kind === 'set'
-      ? await loadReferenceSet(db, enrollment.project_id, goal.setKey)
-      : [];
   return evaluateGoal(goal, {
     goalEventSeen: rows.length > 0,
     seenValues: rows.flatMap((row) => (row.value === null ? [] : [row.value])),
-    referenceSet,
+    referenceSet: enrollment.rule_snapshot.referenceValues ?? [],
   });
 }
 
@@ -254,11 +265,23 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
     const matchValue = definition.matchOn
       ? (propertyAsString(event.properties, definition.matchOn) ?? '')
       : '';
+    const { goal } = definition;
+    const snapshot: RuleSnapshot =
+      goal.kind === 'set'
+        ? {
+            ...definition,
+            referenceValues: await loadReferenceSet(
+              db,
+              event.projectId,
+              referenceSetKey(definition, goal, matchValue)
+            ),
+          }
+        : definition;
     const [row] = await db.$queryRawUnsafe<{ id: string }[]>(
       ENROLL_SQL,
       event.projectId,
       rule.id,
-      JSON.stringify(definition),
+      JSON.stringify(snapshot),
       event.profileId,
       matchValue,
       event.time.toISOString(),
@@ -309,10 +332,14 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
   }
 
   async function handleEvents(events: NormalizedEvent[]): Promise<void> {
-    if (events.length === 0) {
+    const latestAllowed = now().getTime() + MAX_FUTURE_SKEW_MS;
+    const plausible = events.filter(
+      (event) => event.time.getTime() <= latestAllowed
+    );
+    if (plausible.length === 0) {
       return;
     }
-    const ordered = [...events].sort(
+    const ordered = plausible.sort(
       (a, b) => a.time.getTime() - b.time.getTime()
     );
     await deps.sql.$transaction(
