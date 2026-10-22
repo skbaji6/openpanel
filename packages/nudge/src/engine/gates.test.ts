@@ -20,6 +20,13 @@ describe('gates', () => {
         CFG
       )
     ).toBe(false);
+    expect(
+      lagAllowsSending(
+        { lag: 0, updatedAt: new Date(NOW.getTime() + 61_000) },
+        NOW,
+        CFG
+      )
+    ).toBe(false);
     expect(lagAllowsSending({ lag: 1001, updatedAt: NOW }, NOW, CFG)).toBe(
       false
     );

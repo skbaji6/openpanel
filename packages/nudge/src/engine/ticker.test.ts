@@ -26,7 +26,13 @@ import { migrate } from '../db/migrate';
 import { resetNudgeTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine, lockProfiles } from './engine';
-import { CLAIM_SQL, runTick } from './ticker';
+import {
+  CLAIM_SQL,
+  MARK_SQL,
+  runTick,
+  type TickDeps,
+  type TickResult,
+} from './ticker';
 
 const NOW = new Date('2026-10-22T12:00:00.000Z');
 const MINUTE_MS = 60_000;
@@ -82,7 +88,7 @@ function fakeAdapter(id: ChannelId): ChannelAdapter<{ secret: string }> {
   };
 }
 
-function tick(cfg: NudgeConfig = CFG) {
+function tick(cfg: NudgeConfig = CFG, overrides: Partial<TickDeps> = {}) {
   return runTick({
     sql,
     engine,
@@ -90,7 +96,60 @@ function tick(cfg: NudgeConfig = CFG) {
     cfg,
     renderUnsubscribeUrl: (projectId, profileId, channel) =>
       `https://nudge.test/u/${projectId}/${profileId}/${channel}`,
+    ...overrides,
   });
+}
+
+// Rejects the first `failures` calls of one client method (only those with this query text, if given).
+function flakySql(
+  method: '$executeRawUnsafe' | '$transaction',
+  query: string | null,
+  failures: number
+): typeof sql {
+  let remaining = failures;
+  return new Proxy(sql, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      return (...args: unknown[]) => {
+        const matches =
+          prop === method && (query === null || args[0] === query);
+        if (matches && remaining > 0) {
+          remaining--;
+          return Promise.reject(new Error('injected database failure'));
+        }
+        return value.apply(target, args);
+      };
+    },
+  });
+}
+
+async function holdProfileLock() {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let locked: () => void = () => undefined;
+  const isLocked = new Promise<void>((resolve) => {
+    locked = resolve;
+  });
+  const holder = sql.$transaction(
+    async (tx) => {
+      await lockProfiles(tx, [{ projectId: PROJECT, profileId: PROFILE }]);
+      locked();
+      await released;
+    },
+    { timeout: 20_000 }
+  );
+  await isLocked;
+  return {
+    async release() {
+      release();
+      await holder;
+    },
+  };
 }
 
 function rule(overrides: Partial<RuleDefinition> = {}): RuleDefinition {
@@ -699,7 +758,9 @@ describe('runTick', () => {
     });
     await Bun.sleep(500);
     expect(done).toBe(false);
-    expect((await steps(enrollmentId))[0]?.status).toBe('sending');
+    // The sent mark does not wait for the lock; completing the enrollment does.
+    expect((await steps(enrollmentId))[0]?.status).toBe('sent');
+    expect(await enrollmentStatus(enrollmentId)).toBe('active');
     release();
     await holder;
     expect(await running).toEqual({ ...ZERO, sent: 1 });
@@ -789,6 +850,200 @@ describe('runTick', () => {
     const all = errorLog.mock.calls.map((args) => args.join(' ')).join('\n');
     expect(all).toContain('boom');
     expect(all).not.toContain(SECRET);
+  });
+
+  it('REGRESSION e1: a failed sent mark is retried in-process and the step is never requeued', async () => {
+    const { enrollmentId } = await enrollOne();
+    const flaky = flakySql('$executeRawUnsafe', MARK_SQL, 1);
+    expect(await tick(CFG, { sql: flaky })).toEqual({ ...ZERO, sent: 1 });
+    clock = new Date(NOW.getTime() + 10 * MINUTE_MS);
+    await setConsumerState(0, clock);
+    expect(await tick(CFG, { sql: flaky })).toEqual(ZERO);
+    expect(calls).toHaveLength(1);
+    expect((await steps(enrollmentId))[0]?.status).toBe('sent');
+  });
+
+  it('REGRESSION e1: when every sent mark attempt fails the step stays sending and is not requeued', async () => {
+    const { enrollmentId } = await enrollOne();
+    const broken = flakySql('$executeRawUnsafe', MARK_SQL, 3);
+    expect(await tick(CFG, { sql: broken })).toEqual(ZERO);
+    const [step] = await steps(enrollmentId);
+    expect(step?.status).toBe('sending');
+    expect(step?.attempt).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(errorLog.mock.calls.flat().join(' ')).toContain(
+      'recording the send result failed'
+    );
+  });
+
+  it('REGRESSION e2: each step is sent once when a second tick overlaps a slow first tick (leaseSeconds 1)', async () => {
+    const definition = rule();
+    const ruleId = await insertRule(definition);
+    await addContact('b@example.test', {}, 'u2');
+    const first = await enroll({ ruleId, definition, steps: [{ dueAt: DUE }] });
+    const second = await enroll({
+      ruleId,
+      definition,
+      profileId: 'u2',
+      steps: [{ dueAt: DUE }],
+    });
+    const cfg = { ...CFG, leaseSeconds: 1, sendConcurrency: 1 };
+    let evaluations = 0;
+    // The first step's lease is extended at +0.9 s, after the batch lease was stamped at +0 s.
+    const slowEngine = {
+      ...engine,
+      evaluateEnrollment(id: string) {
+        if (evaluations++ === 0) {
+          clock = new Date(NOW.getTime() + 900);
+        }
+        return engine.evaluateEnrollment(id);
+      },
+    };
+    let overlapping: Promise<TickResult> | undefined;
+    respond = async () => {
+      if (!overlapping) {
+        clock = new Date(NOW.getTime() + 1200);
+        overlapping = tick(cfg, { engine: slowEngine });
+        await overlapping;
+      }
+      return { ok: true };
+    };
+    const a = await tick(cfg, { engine: slowEngine });
+    const b = await overlapping;
+    expect(calls.map((call) => call.opts.idempotencyKey).sort()).toEqual(
+      [`${first}:0`, `${second}:0`].sort()
+    );
+    expect(a.sent + (b?.sent ?? 0)).toBe(2);
+    expect((await steps(first))[0]?.status).toBe('sent');
+    expect((await steps(second))[0]?.status).toBe('sent');
+  });
+
+  it('REGRESSION e3: a goal reached while a send is in flight cancels the requeued step and completes the enrollment', async () => {
+    const { enrollmentId } = await enrollOne();
+    respond = async () => {
+      await engine.handleEvent({
+        eventId: 'goal',
+        projectId: PROJECT,
+        profileId: PROFILE,
+        name: 'opened',
+        properties: {},
+        time: NOW,
+      });
+      return { ok: false, retryable: true, reason: '421 busy' };
+    };
+    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
+    const [step] = await steps(enrollmentId);
+    expect(step?.status).toBe('cancelled');
+    expect(step?.sent_at).toBeNull();
+    expect(await enrollmentStatus(enrollmentId)).toBe('completed');
+  });
+
+  it('a retry requeue waits for the profile lock', async () => {
+    const { enrollmentId } = await enrollOne();
+    respond = async () => ({ ok: false, retryable: true, reason: '421' });
+    const lock = await holdProfileLock();
+    let done = false;
+    const running = tick().then((result) => {
+      done = true;
+      return result;
+    });
+    await Bun.sleep(500);
+    expect(done).toBe(false);
+    expect((await steps(enrollmentId))[0]?.status).toBe('sending');
+    await lock.release();
+    expect(await running).toEqual({ ...ZERO, postponed: 1 });
+    expect((await steps(enrollmentId))[0]?.status).toBe('pending');
+  });
+
+  it('an expired sending step under a completed enrollment or a paused rule is cancelled and its cap reservation cleared', async () => {
+    const expired = {
+      dueAt: DUE,
+      status: 'sending',
+      attempt: 1,
+      leaseUntil: new Date(NOW.getTime() - 1000),
+      sentAt: new Date(NOW.getTime() - 5 * MINUTE_MS),
+    };
+    const completed = await enrollOne(rule({ name: 'completed' }), [expired]);
+    await sql.$executeRawUnsafe(
+      `UPDATE nudge.enrollments SET status = 'completed' WHERE id = $1::uuid`,
+      completed.enrollmentId
+    );
+    const paused = await enrollOne(rule({ name: 'paused' }), [expired]);
+    await sql.$executeRawUnsafe(
+      `UPDATE nudge.rules SET status = 'paused' WHERE id = $1::uuid`,
+      paused.ruleId
+    );
+    expect(await tick()).toEqual(ZERO);
+    for (const { enrollmentId } of [completed, paused]) {
+      const [step] = await steps(enrollmentId);
+      expect(step?.status).toBe('cancelled');
+      expect(step?.sent_at).toBeNull();
+      expect(step?.lease_until).toBeNull();
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a rule paused between claim and send sends nothing and cancels the step', async () => {
+    const { ruleId, enrollmentId } = await enrollOne();
+    const pausing = {
+      ...engine,
+      async evaluateEnrollment(id: string) {
+        await sql.$executeRawUnsafe(
+          `UPDATE nudge.rules SET status = 'paused' WHERE id = $1::uuid`,
+          ruleId
+        );
+        return await engine.evaluateEnrollment(id);
+      },
+    };
+    expect(await tick(CFG, { engine: pausing })).toEqual({
+      ...ZERO,
+      skipped: 1,
+    });
+    expect(calls).toHaveLength(0);
+    const [step] = await steps(enrollmentId);
+    expect(step?.status).toBe('cancelled');
+    expect(step?.outcome).toEqual({ reason: 'inactive' });
+  });
+
+  it('after an outage with two overdue steps only step 0 is claimed first', async () => {
+    const definition = rule({
+      steps: [
+        { delaySeconds: HOUR, channel: 'email', template: { body: 'one' } },
+        { delaySeconds: DAY, channel: 'email', template: { body: 'two' } },
+      ],
+    });
+    const { enrollmentId } = await enrollOne(definition, [
+      { dueAt: new Date(DUE.getTime() - DAY * 1000) },
+      { dueAt: DUE },
+    ]);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect((await steps(enrollmentId)).map((s) => s.status)).toEqual([
+      'sent',
+      'pending',
+    ]);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect(calls.map((call) => call.opts.idempotencyKey)).toEqual([
+      `${enrollmentId}:0`,
+      `${enrollmentId}:1`,
+    ]);
+  });
+
+  it('REVIEW FOCUS lag: an updated_at more than 60 s in the future blocks sending', async () => {
+    const { enrollmentId } = await enrollOne();
+    await setConsumerState(0, new Date(NOW.getTime() + 61_000));
+    expect(await tick()).toEqual(ZERO);
+    expect((await steps(enrollmentId))[0]?.status).toBe('pending');
+  });
+
+  it('the sweep completes an enrollment whose completion failed after its last step', async () => {
+    const { enrollmentId } = await enrollOne();
+    const flaky = flakySql('$transaction', null, 1);
+    expect(await tick(CFG, { sql: flaky })).toEqual({ ...ZERO, sent: 1 });
+    expect((await steps(enrollmentId))[0]?.status).toBe('sent');
+    expect(await enrollmentStatus(enrollmentId)).toBe('active');
+    expect(await tick()).toEqual(ZERO);
+    expect(await enrollmentStatus(enrollmentId)).toBe('completed');
+    expect(calls).toHaveLength(1);
   });
 
   it('the claim query uses the pending and lease indexes', async () => {

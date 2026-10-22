@@ -23,7 +23,9 @@ export function lagAllowsSending(
   if (!state) {
     return false;
   }
-  const isStale = now.getTime() - state.updatedAt.getTime() > MAX_STATE_AGE_MS;
+  // A clock-skewed future updatedAt is as untrustworthy as an old one.
+  const isStale =
+    Math.abs(now.getTime() - state.updatedAt.getTime()) > MAX_STATE_AGE_MS;
   return !isStale && state.lag <= cfg.maxLag;
 }
 
