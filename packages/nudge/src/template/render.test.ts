@@ -165,6 +165,16 @@ describe('renderTemplate', () => {
       'unquoted attribute': `<a href=${url}>`,
       'html comment': '<!-- {{event.x}} -->',
       'tag name position': `<a ${url}>`,
+      'quote before equals (N1a)': `<a b'="'>" href="${url}">x</a>`,
+      'quote inside unquoted value (N1b)': `<a b=x'y c="'>" href="${url}">x</a>`,
+      'quote after title (N1c)': `<title><x '</title><a b="'>" href="${url}">x</a>`,
+      'double escaped script (N2)':
+        '<script><!--<script></script>var u={{event.x}};</script>',
+      'cdata (N3)': '<![CDATA[ {{event.x}} ]]>',
+      'processing instruction (N3)': '<?php {{event.x}} ?>',
+      'bogus end tag (N3)': '</ {{event.x}}>',
+      'value completing a tag (oracle)': '<{{event.x}}{{event.x}}href=',
+      'doctype (N3)': '<!DOCTYPE {{event.x}}>',
     };
     for (const [name, template] of Object.entries(emptyCases)) {
       it(`renders empty for ${name}`, () => {
@@ -174,6 +184,14 @@ describe('renderTemplate', () => {
         expect(out).not.toMatch(/X(?!\w)/);
       });
     }
+
+    it('fails the whole template closed, even placeholders before the construct', () => {
+      expect(renderTemplate('{{event.x}}<?php ?>', v)).toBe('<?php ?>');
+      expect(renderTemplate('{{event.x}}<a "bad">', v)).toBe('<a "bad">');
+      expect(renderTemplate('{{event.x}}<!-- never closed', v)).toBe(
+        '<!-- never closed'
+      );
+    });
 
     it('renders escaped values in plain text', () => {
       expect(renderTemplate('<p>{{event.title}}</p>', v)).toBe(
@@ -188,7 +206,7 @@ describe('renderTemplate', () => {
         '<style>a{}</style>X'
       );
       expect(renderTemplate('<SCRIPT>1</SCRIPT >{{event.x}}', v)).toBe(
-        '<SCRIPT>1</SCRIPT >X'
+        '<SCRIPT>1</SCRIPT >'
       );
       expect(renderTemplate('a < b {{event.x}}', v)).toBe('a < b X');
     });

@@ -24,6 +24,7 @@
     "@types/node": "catalog:",
     "@types/nodemailer": "8.0.0",
     "bun-types": "1.4.0",
+    "parse5": "7.3.0",
     "typescript": "catalog:"
   }
 }
