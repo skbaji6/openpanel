@@ -13,8 +13,8 @@ const MS_PER_DAY = 86_400_000;
 // Events can be forged; a far-future time would push inactivity timers out indefinitely.
 export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
 
-type Sql = typeof nudgeSql;
-type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;
+export type Sql = typeof nudgeSql;
+export type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;
 
 export interface GoalResult {
   met: boolean;
@@ -177,6 +177,17 @@ const LOCK_PROFILES_SQL = `
     FROM jsonb_array_elements_text($1::jsonb) AS profile_key
     ORDER BY key_hash
   ) ordered_keys`;
+
+// The ticker takes the same lock before changing steps or enrollments, so the two never deadlock.
+export async function lockProfiles(
+  db: Queryable,
+  keys: { projectId: string; profileId: string }[]
+): Promise<void> {
+  const profileKeys = keys.map((key) =>
+    JSON.stringify([key.projectId, key.profileId])
+  );
+  await db.$queryRawUnsafe(LOCK_PROFILES_SQL, JSON.stringify(profileKeys));
+}
 
 function sanitizeEvent(event: NormalizedEvent): NormalizedEvent {
   const properties: NormalizedEvent['properties'] = {};
@@ -387,15 +398,9 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
     if (ordered.length === 0) {
       return;
     }
-    const profileKeys = ordered.map((event) =>
-      JSON.stringify([event.projectId, event.profileId])
-    );
     await deps.sql.$transaction(
       async (tx) => {
-        await tx.$queryRawUnsafe(
-          LOCK_PROFILES_SQL,
-          JSON.stringify(profileKeys)
-        );
+        await lockProfiles(tx, ordered);
         const fresh = await insertEvents(tx, ordered);
         const rulesByProject = new Map<string, RuleRow[]>();
         for (const event of ordered) {
