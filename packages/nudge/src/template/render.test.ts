@@ -142,4 +142,71 @@ describe('renderTemplate', () => {
     renderTemplate('{{profile.firstName}}'.repeat(50_000), vars());
     expect(performance.now() - start).toBeLessThan(2000);
   });
+
+  describe('event placeholders fail closed outside plain text', () => {
+    const v = vars({
+      event: { url: 'javascript:alert(1)', h: '<b>', x: 'X', title: '<i>' },
+      allowedEventProps: ['url', 'h', 'x', 'title'],
+    });
+    const url = '{{event.url}}';
+    const emptyCases: Record<string, string> = {
+      'long style before href': `<a style="${'color:red;'.repeat(210)}" href="${url}">x</a>`,
+      'long href value before placeholder': `<a href="https://x.test/?${'a'.repeat(2000)}&u=${url}">`,
+      'less-than inside quoted value': `<a href="/s?q=a<b&u=${url}">`,
+      'greater-than inside quoted value': `<a title="a>b" href="${url}">`,
+      'css url in style attribute': `<div style="background:url(${url})">`,
+      'style element': `<style>a{background:url(${url})}</style>`,
+      'background attribute': `<td background="${url}">`,
+      'object data': `<object data="${url}">`,
+      'meta refresh': `<meta http-equiv="refresh" content="0;url=${url}">`,
+      'iframe srcdoc': '<iframe srcdoc="{{event.h}}">',
+      'onclick handler': `<a onclick="${url}">`,
+      'script body': `<script>var u = "${url}"</script>`,
+      'unquoted attribute': `<a href=${url}>`,
+      'html comment': '<!-- {{event.x}} -->',
+      'tag name position': `<a ${url}>`,
+    };
+    for (const [name, template] of Object.entries(emptyCases)) {
+      it(`renders empty for ${name}`, () => {
+        const out = renderTemplate(template, v);
+        expect(out).not.toContain('javascript:');
+        expect(out).not.toContain('&lt;b&gt;');
+        expect(out).not.toMatch(/X(?!\w)/);
+      });
+    }
+
+    it('renders escaped values in plain text', () => {
+      expect(renderTemplate('<p>{{event.title}}</p>', v)).toBe(
+        '<p>&lt;i&gt;</p>'
+      );
+    });
+
+    it('renders after a closed tag, comment, style and script', () => {
+      expect(renderTemplate('<b>ok</b>{{event.x}}', v)).toBe('<b>ok</b>X');
+      expect(renderTemplate('<!-- c -->{{event.x}}', v)).toBe('<!-- c -->X');
+      expect(renderTemplate('<style>a{}</style>{{event.x}}', v)).toBe(
+        '<style>a{}</style>X'
+      );
+      expect(renderTemplate('<SCRIPT>1</SCRIPT >{{event.x}}', v)).toBe(
+        '<SCRIPT>1</SCRIPT >X'
+      );
+      expect(renderTemplate('a < b {{event.x}}', v)).toBe('a < b X');
+    });
+
+    it('keeps profile and missing working inside attributes', () => {
+      expect(
+        renderTemplate(
+          '<a href="https://x.test/{{profile.firstName}}?m={{missing}}">',
+          vars({ missing: ['a&b'] })
+        )
+      ).toBe('<a href="https://x.test/Ada?m=a&amp;b">');
+    });
+
+    it('stays linear with a very long attribute value before the placeholder', () => {
+      const long = `<a title="${'x'.repeat(500_000)}" href="{{event.url}}">${'<a '.repeat(100_000)}`;
+      const start = performance.now();
+      expect(renderTemplate(long, v)).toContain('href=""');
+      expect(performance.now() - start).toBeLessThan(2000);
+    });
+  });
 });

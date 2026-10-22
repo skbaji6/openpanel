@@ -51,7 +51,7 @@ export const zRuleDefinition = z.object({
     enabled: z.boolean(),
     cooldownSeconds: z.number().int().min(0),
   }),
-  allowedEventProps: z.array(z.string()),
+  allowedEventProps: z.array(z.string().min(1)),
 });
 
 export type Step = z.infer<typeof zStep>;
