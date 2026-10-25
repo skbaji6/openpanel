@@ -1,0 +1,80 @@
+# Journey nudge worker: an OVERRIDE file, never used on its own.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nudge.yml up -d
+#
+# It targets the self-hosted stack (the docker-compose.yml that `openpanel init` renders from
+# self-hosting/docker-compose.template.yml: op-db, op-kv, op-rp with healthchecks, and op-dashboard).
+# `openpanel init` does not know about it: copy this file next to that docker-compose.yml and add the
+# `-f docker-compose.nudge.yml` by hand on every compose command, including upgrades.
+# The repository's own development docker-compose.yml has no healthchecks and no dashboard service, so
+# in development run the worker with `bun run --filter @openpanel/nudge start` instead.
+#
+# Values are interpolated from the shell and from the .env next to docker-compose.yml, which an
+# `openpanel init` install already has (DATABASE_URL, REDIS_URL, ENCRYPTION_KEY, KAFKA_BROKERS).
+# `${VAR:?...}` marks a required variable: compose refuses to start without it.
+# See packages/nudge/README.md ("Deploy") for every variable.
+
+services:
+  op-nudge:
+    image: ${NUDGE_IMAGE:-openpanel-nudge:local}
+    # Build context is a checkout of this repository. From an install directory set NUDGE_BUILD_CONTEXT to
+    # that checkout, or build/push the image elsewhere and set NUDGE_IMAGE.
+    build:
+      context: ${NUDGE_BUILD_CONTEXT:-.}
+      dockerfile: packages/nudge/Dockerfile
+    restart: always
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      # Shared with op-dashboard below; generate with `openssl rand -hex 32`.
+      NUDGE_PROXY_SECRET: ${NUDGE_PROXY_SECRET:?NUDGE_PROXY_SECRET is required}
+      # Public base URL for unsubscribe links (<NUDGE_PUBLIC_URL>/nudge/unsubscribe); your reverse proxy
+      # must route /nudge/unsubscribe to op-nudge:4100 (README, "Deploy").
+      NUDGE_PUBLIC_URL: ${NUDGE_PUBLIC_URL:?NUDGE_PUBLIC_URL is required}
+      NUDGE_PORT: 4100
+      # Set to true only when op-nudge is reachable solely through ONE trusted reverse proxy that appends
+      # the client address to X-Forwarded-For (for example Caddy routing /nudge/unsubscribe). Otherwise
+      # every caller could pick its own IP for the per-IP rate limits.
+      NUDGE_TRUST_PROXY: ${NUDGE_TRUST_PROXY:-false}
+      NUDGE_GRACE_SECONDS: ${NUDGE_GRACE_SECONDS:-300}
+      NUDGE_MAX_LAG: ${NUDGE_MAX_LAG:-1000}
+      NUDGE_TICK_MS: ${NUDGE_TICK_MS:-5000}
+      NUDGE_LEASE_SECONDS: ${NUDGE_LEASE_SECONDS:-120}
+      NUDGE_EVENT_RETENTION_DAYS: ${NUDGE_EVENT_RETENTION_DAYS:-30}
+      NUDGE_CLAIM_BATCH: ${NUDGE_CLAIM_BATCH:-200}
+      NUDGE_SEND_CONCURRENCY: ${NUDGE_SEND_CONCURRENCY:-10}
+      # Connections per replica; the database is shared with op-api and op-worker.
+      NUDGE_DB_POOL: ${NUDGE_DB_POOL:-10}
+      NUDGE_WEBHOOK_ALLOW_HOSTS: ${NUDGE_WEBHOOK_ALLOW_HOSTS:-}
+      NUDGE_KAFKA_GROUP: ${NUDGE_KAFKA_GROUP:-nudge}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-op-rp:9092}
+      KAFKA_EVENTS_TOPIC: ${KAFKA_EVENTS_TOPIC:-events}
+      KAFKA_CLIENT_ID: ${KAFKA_CLIENT_ID:-openpanel-nudge}
+      KAFKA_SSL: ${KAFKA_SSL:-}
+      KAFKA_SSL_CA_PATH: ${KAFKA_SSL_CA_PATH:-}
+      KAFKA_SSL_REJECT_UNAUTHORIZED: ${KAFKA_SSL_REJECT_UNAUTHORIZED:-}
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-}
+    # Not published to the host: op-dashboard reaches it over the compose network.
+    expose:
+      - "4100"
+    depends_on:
+      op-db:
+        condition: service_healthy
+      op-kv:
+        condition: service_healthy
+      op-rp:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # Merged into the existing dashboard service: turns on its /api/nudge/* proxy.
+  op-dashboard:
+    environment:
+      NUDGE_URL: http://op-nudge:4100
+      NUDGE_PROXY_SECRET: ${NUDGE_PROXY_SECRET:?NUDGE_PROXY_SECRET is required}
