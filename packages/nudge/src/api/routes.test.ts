@@ -589,6 +589,48 @@ describe('dashboard routes', () => {
     expect(leftovers[0]?.n).toBe(0);
   });
 
+  it('a rule reactivated between cancelling and deleting is kept and the delete returns 409', async () => {
+    const ruleId = await insertRule('proj-a');
+    const reactivating = createServer({
+      cfg,
+      sql: new Proxy(sql, {
+        get(target, property, receiver) {
+          if (property !== '$executeRawUnsafe') {
+            return Reflect.get(target, property, receiver);
+          }
+          return async (query: string, ...values: unknown[]) => {
+            if (query.startsWith('DELETE FROM nudge.rules')) {
+              await target.$executeRawUnsafe(
+                "UPDATE nudge.rules SET status = 'active' WHERE id = $1::uuid",
+                ruleId
+              );
+            }
+            return target.$executeRawUnsafe(query, ...values);
+          };
+        },
+      }),
+    });
+    const response = await reactivating.fetch(
+      new Request(`${BASE}/nudge/rules/${ruleId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-nudge-proxy-secret': PROXY_SECRET,
+          'x-nudge-project-id': 'proj-a',
+          'x-nudge-user-id': 'user-1',
+          'x-nudge-csrf': '1',
+        },
+      }),
+      peer('10.0.0.1')
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'rule_reactivated' });
+    const [rule] = await sql.$queryRawUnsafe<{ status: string }[]>(
+      'SELECT status FROM nudge.rules WHERE id = $1::uuid',
+      ruleId
+    );
+    expect(rule?.status).toBe('active');
+  });
+
   it('SECURITY dashboard rule ids from another project return 404', async () => {
     const ruleId = await insertRule('proj-b');
     const active = await insertEnrollment(
@@ -712,6 +754,35 @@ describe('dashboard routes', () => {
       config: { ...config, host: 'smtp2.test', pass: 'new-password' },
     });
     expect(reentered.status).toBe(200);
+  });
+
+  it('SECURITY a mask with no stored secret behind it is rejected, never stored', async () => {
+    const email = await dashboard('PUT', '/nudge/channels/email', {
+      config: {
+        host: 'smtp.test',
+        port: 587,
+        secure: false,
+        pass: MASK,
+        from: 'news@shop.test',
+      },
+    });
+    const webhook = await dashboard('PUT', '/nudge/channels/webhook', {
+      config: {
+        url: 'https://hooks.example.com/nudge',
+        secrets: [MASK, 'whsec-0123456789abcdef'],
+      },
+    });
+    expect([email.status, webhook.status]).toEqual([400, 400]);
+    expect((await email.json()) as { error: string }).toMatchObject({
+      error: 'secrets_required',
+    });
+    expect((await webhook.json()) as { error: string }).toMatchObject({
+      error: 'secrets_required',
+    });
+    const rows = await sql.$queryRawUnsafe<unknown[]>(
+      'SELECT 1 FROM nudge.channel_configs'
+    );
+    expect(rows).toHaveLength(0);
   });
 
   it('SECURITY GET channels never returns a secret value, even masked values do not reveal length', async () => {

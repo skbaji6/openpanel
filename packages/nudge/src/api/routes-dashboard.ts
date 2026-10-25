@@ -216,6 +216,10 @@ function maskConfig(channel: string, config: Record<string, unknown>) {
   );
 }
 
+function containsMask(value: unknown): boolean {
+  return value === MASK || (Array.isArray(value) && value.includes(MASK));
+}
+
 function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -232,6 +236,22 @@ function restoreMaskedSecrets(
     (field) =>
       !visible.has(field) && field in stored && incoming[field] === MASK
   );
+  // A mask with nothing stored behind it (or inside a list) would otherwise be saved as the secret itself.
+  const placeholders = Object.keys(incoming).filter(
+    (field) =>
+      !(visible.has(field) || echoed.includes(field)) &&
+      containsMask(incoming[field])
+  );
+  if (placeholders.length > 0) {
+    throw new HttpError(
+      400,
+      'secrets_required',
+      placeholders.map((field) => ({
+        path: `config.${field}`,
+        message: 'enter this secret; the mask is only a placeholder',
+      }))
+    );
+  }
   if (echoed.length === 0) {
     return incoming;
   }
@@ -439,11 +459,15 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         if (!paused) {
           throw new HttpError(404, 'not_found');
         }
-        await sql.$executeRawUnsafe(
-          'DELETE FROM nudge.rules WHERE id = $1::uuid AND project_id = $2',
+        // A rule reactivated while its work was being cancelled has live enrollments again; keep it.
+        const deleted = await sql.$executeRawUnsafe(
+          `DELETE FROM nudge.rules WHERE id = $1::uuid AND project_id = $2 AND status = 'paused'`,
           ruleId,
           ctx.projectId
         );
+        if (deleted === 0) {
+          throw new HttpError(409, 'rule_reactivated');
+        }
         await rulesChanged();
         return json({ ok: true });
       },
