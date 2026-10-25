@@ -9,6 +9,8 @@ import {
 
 // Prisma's interactive transactions default to 5 s; a consumer batch can need longer.
 const BATCH_TRANSACTION_TIMEOUT_MS = 60_000;
+// The default 2 s wait for a pooled connection is too short while the ticker holds the pool.
+const BATCH_TRANSACTION_MAX_WAIT_MS = 30_000;
 const MS_PER_DAY = 86_400_000;
 // Events can be forged; a far-future time would push inactivity timers out indefinitely.
 export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
@@ -416,7 +418,10 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
           await processEvent(tx, event, rules);
         }
       },
-      { timeout: BATCH_TRANSACTION_TIMEOUT_MS }
+      {
+        timeout: BATCH_TRANSACTION_TIMEOUT_MS,
+        maxWait: BATCH_TRANSACTION_MAX_WAIT_MS,
+      }
     );
   }
 
