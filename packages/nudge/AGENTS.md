@@ -46,3 +46,14 @@ formatters, `bun run fix` or codemods over files you did not create.
   quote this section.
 
 ## How it is built (decisions made)
+
+The spec is the source of truth; its "Recorded deviations" section lists where the code differs.
+
+- One worker process (`src/worker.ts`): Kafka consumer, ticker, daily purge and the HTTP API. Own consumer group, `fromBeginning: false`.
+- Schema `nudge` in core's Postgres, plain SQL migrations in `migrations/` applied at startup; never touch `public`.
+- Consumer (`src/kafka/`): pre-filter on a Redis interest set before any Postgres call; projects with an inactivity rule keep every identified event. Each batch is one transaction under the rules lock and per-profile advisory locks.
+- Engine (`src/engine/engine.ts`): one `events` table is both dedupe and goal facts; enrollments carry a rule snapshot; goals are evaluated in event time; `end_reason` records goal / exhausted / rule_stopped.
+- Ticker (`src/engine/ticker.ts`): claims due steps in order with row leases, rechecks the goal, applies opt-out, quiet hours and caps, sends through a channel adapter (`src/channels/`), gated by consumer lag.
+- HTTP (`src/api/`): dashboard routes behind the shared proxy secret, sync routes behind per-project API keys, signed unsubscribe links; rate limiting and secret redaction on every logged error.
+- Dashboard (`apps/start/src/components/nudge/`): talks to the worker only through its `/nudge-api/*` proxy and keeps its own zod copy (`contract.ts`, checked by a drift test).
+- `scripts/load.ts` measures the performance targets against a `*_test` database; `scripts/e2e.ts` proves the path on a running stack.

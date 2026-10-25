@@ -303,7 +303,7 @@ Unmarked items are design decisions, not claims about the repo.
 - Unsubscribe: public HMAC-signed endpoint, `List-Unsubscribe` and
   `List-Unsubscribe-Post` headers; separate from core's own unsubscribe table.
 - Dashboard API is reached through a new server route file in `apps/start`
-  (`routes/api/nudge.$.tsx`, same pattern as the existing `routes/api/config.tsx`)
+  (as built: `routes/nudge-api.$.tsx`, serving `/nudge-api/*`; see "Recorded deviations")
   that authenticates the user and then calls `nudge-worker`. Auth is decided in
   "Decisions that follow from the verified facts" (the route forwards the
   cookie to core's tRPC `project.getProjectWithClients`; custom header or
@@ -433,7 +433,7 @@ Dashboard and deploy
 ## Decisions that follow from the verified facts
 
 - **Dashboard auth (decided):** the service imports no core session code.
-  The `apps/start` proxy route (`routes/api/nudge.$.tsx`) forwards the session
+  The `apps/start` proxy route (as built: `routes/nudge-api.$.tsx`) forwards the session
   cookie to core's tRPC `project.getProjectWithClients` for the requested
   project; success means the user may access it, failure returns 403. The
   result is cached for a short TTL per (session, project). Demo mode needs no
@@ -465,6 +465,33 @@ Dashboard and deploy
   `packages/nudge/src/`, and no files are added to `apps/start/src/utils/`.
 - **Idempotency key for an event:** `payload.id`, else a hash of
   (projectId, deviceId, event.name, event.timestamp, event.profileId).
+
+## Recorded deviations (as built)
+
+These supersede the text above where they differ.
+
+- **Storage.** One `nudge.events` table replaces the separate goal/activity facts, seen-values and processed-event-id tables: its primary key `(project_id, event_id)` is the dedupe, and goal, activity and seen-value checks are queries over it. There is no send-log table: the step row (status, attempt, outcome, sent_at) is the send record. Send-log retention and monthly partitions are therefore not done in v1.
+- **Enrollment end reason.** `nudge.enrollments.end_reason` (migration 0005) is `goal` when the goal ended the journey (engine or ticker goal recheck), `exhausted` when every step reached a final state, `rule_stopped` when the rule was paused or deleted; null for active journeys and rows from before 0005.
+- **Results metric.** "Completed after send" counts enrollments with at least one sent step and `end_reason = 'goal'`; conversion rate is that divided by nudged (enrollments with at least one sent step). A goal reached after the final step, or by a journey still running, is not counted, and a count does not prove causation.
+- **Unsubscribe token.** `base64url(JSON array [project, profile, channel, mac])`, where mac is a base64url HMAC-SHA256 over the JSON array of the three fields, keyed by HKDF(`ENCRYPTION_KEY`, info `nudge-unsubscribe`).
+- **Pre-filter.** In a project with an active inactivity rule the consumer keeps every identified event (an activity event can reach a replica before the trigger, on another partition). Elsewhere it keeps events whose name is a live trigger/goal or whose profile has an active enrollment (Redis set shared by replicas).
+- **Dashboard routes.** The proxy is `apps/start/src/routes/nudge-api.$.tsx` serving `/nudge-api/*` (outside `/api`, which the stock Caddy/Coolify setups send to op-api), and `apps/start/src/routes/nudge.unsubscribe.tsx` passes `/nudge/unsubscribe` through to the worker so email links work on the dashboard origin.
+- **Dashboard auth.** The proxy forwards the session cookie to core's tRPC `auth.session`, `project.getProjectWithClients` and `organization.myAccess`: organization owners and admins may change, members may read. The decision is cached for 30 s per (session, project).
+- **Lag gate.** Lag-threshold only: the ticker sends nothing while total group lag exceeds `NUDGE_MAX_LAG` or the recorded lag is older than 60 s. There is no per-partition or event-time watermark; the grace window plus the send-time goal recheck cover late events.
+- **Future events.** Events more than 24 h in the future are dropped (a forged time could push inactivity timers out indefinitely).
+- **Reference-set key.** With `matchOn`, a set goal's reference set is looked up by the match value (one set per item); otherwise by the rule's `setKey`.
+- **Push opt-out.** Not provided; unsubscribe links cover email only.
+- **Event purge.** Daily, chunked (10,000 rows, bounded per run), and it keeps events at or after an active enrollment's trigger for that profile.
+
+## Known limitations / follow-ups
+
+- Per-partition or event-time lag watermark, with a gate that stays closed after offsets were reset by topic retention loss.
+- API key list and revoke endpoints (today: delete the row; the per-replica cache keeps a key valid for up to 5 minutes).
+- History retention purge for finished enrollments and steps.
+- Split the interest refresh: names every 10 s, profiles every 5 minutes (the profile rebuild took about 7 s for 100,000 active profiles).
+- Batch GOAL_CANDIDATES and DEBOUNCE per consumer batch instead of per event (the keep-all case runs at about 350 events/s).
+- Restrict SMTP hosts (today any admin-configured host is dialled from inside the network).
+- Take the rules lock per project instead of globally.
 
 ## Left to the builder
 

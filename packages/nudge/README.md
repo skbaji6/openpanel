@@ -14,13 +14,13 @@ Journey nudges for OpenPanel: a separate worker that consumes the events Kafka t
 | `NUDGE_PORT` | 4100 | HTTP port |
 | `NUDGE_TRUST_PROXY` | false | Take the client IP from `x-forwarded-for` (see below) |
 | `NUDGE_GRACE_SECONDS` | 300 | Window in which an observed goal cancels a pending nudge |
-| `NUDGE_MAX_LAG` | 1000 | Consumer lag above which work is shed |
+| `NUDGE_MAX_LAG` | 1000 | Consumer lag above which the ticker pauses sending (nothing is dropped) |
 | `NUDGE_TICK_MS` | 5000 | Ticker interval |
-| `NUDGE_LEASE_SECONDS` | 120 | Lease on claimed steps |
+| `NUDGE_LEASE_SECONDS` | 120 | Lease on claimed steps; must be more than 31 (30 s send timeout plus mark retries) |
 | `NUDGE_EVENT_RETENTION_DAYS` | 30 | Event retention |
 | `NUDGE_CLAIM_BATCH` | 200 | Steps claimed per tick |
 | `NUDGE_SEND_CONCURRENCY` | 10 | Concurrent sends |
-| `NUDGE_DB_POOL` | 10 | Prisma pool size (the DB is shared with core) |
+| `NUDGE_DB_POOL` | 15 | Prisma pool size (the DB is shared with core); must be at least `NUDGE_SEND_CONCURRENCY` + 3 |
 | `NUDGE_WEBHOOK_ALLOW_HOSTS` | empty | Comma list of internal hosts webhooks may reach |
 | `NUDGE_KAFKA_GROUP` | nudge | Consumer group id |
 | `KAFKA_BROKERS` | required | Comma list |
@@ -83,10 +83,10 @@ Values come from the install's `.env`, which already has `DATABASE_URL`, `REDIS_
 
 No change to the stock Caddy (or Coolify) configuration is needed: both nudge paths are served by the dashboard. Unsubscribe requests travel client -> edge proxy -> dashboard -> worker. The edge proxy sets `X-Forwarded-For` to the client address and the dashboard passes it on unchanged, so the override sets `NUDGE_TRUST_PROXY=true` and the worker rate-limits by the real client. That is only sound while `op-nudge` stays unpublished and the dashboard is reached through the edge proxy: a client that can reach the dashboard (or the worker) directly can choose its own `X-Forwarded-For` and so its own rate-limit bucket. With `false`, every unsubscribe caller shares the dashboard's address and therefore one limit for invalid tokens (valid links are never limited).
 
-Optional, direct to the worker instead of through the dashboard: only if you want the worker's sync endpoints (`/nudge/contacts/*`, `/nudge/devices`) reachable from outside the compose network, route them in Caddy yourself, before `handle_path /api*`:
+Optional, direct to the worker instead of through the dashboard: only if you want the worker's sync endpoints (`/nudge/contacts/*`, `/nudge/devices`, `/nudge/reference-sets/*`) reachable from outside the compose network, route them in Caddy yourself, before `handle_path /api*`:
 
 ```caddyfile
-@nudge_sync path /nudge/contacts/* /nudge/devices
+@nudge_sync path /nudge/contacts/* /nudge/devices /nudge/reference-sets/*
 handle @nudge_sync {
     reverse_proxy op-nudge:4100
 }
@@ -129,8 +129,25 @@ NUDGE_URL=http://localhost:4100 NUDGE_PROXY_SECRET=... API_URL=$API_URL \
 
 - **Scaling.** The worker is one role: consumer, ticker, purge and HTTP API in one process. Run more replicas of the same service; they join one consumer group (`NUDGE_KAFKA_GROUP`) and split the topic's partitions, so replicas beyond the partition count idle on the consumer side. The ticker is safe on every replica (claims use row leases, `NUDGE_LEASE_SECONDS`). Each replica opens up to `NUDGE_DB_POOL` Postgres connections, against the same `max_connections` core uses.
 - **Interest set.** Profiles with active enrollments are kept in Redis (`nudge:interest:profiles`), shared by all replicas and added the moment a profile enrolls. The event names that matter (triggers and goals of active rules) are held in each replica's memory; both are rebuilt from Postgres every 10 s, and right after a rule change through the API on the replica that handled it, so other replicas see a new rule within 10 s.
-- **Lag gate.** Every 10 s the worker writes the group's total lag to `nudge.consumer_state`. The ticker sends nothing while that lag is above `NUDGE_MAX_LAG` or the value is older than 60 s, so a backlog never produces nudges whose goal events are still unread.
-- **Retention.** Once a day each replica deletes `nudge.events` rows older than `NUDGE_EVENT_RETENTION_DAYS`.
+- **Capacity.** One local run of `scripts/load.ts` (Postgres 14 and Redis 7 in Docker on a Windows laptop) measured about 2,000 events/s per replica when 95% of events are pre-filtered out, and about 350 events/s for a project with an active inactivity rule, where every identified event is written (see "Event pre-filter trade-off"). The numbers are indicative, not guarantees. Plan replicas >= topic events/s / 2,000, or / 350 for the share of traffic from projects with an inactivity rule, and never more replicas than the topic has partitions (extra replicas idle on the consumer side). One replica's ticker sends a 200-step batch per tick; see `scripts/load.ts` output for the current per-tick time.
+- **Lag gate.** Every 10 s the worker writes the group's total lag to `nudge.consumer_state`. The ticker sends nothing while that lag is above `NUDGE_MAX_LAG` or the value is older than 60 s, so a backlog never produces nudges whose goal events are still unread. The gate pauses sending; it does not shed or drop work: due steps wait and go out once the consumer catches up. While it is closed the worker logs `sending paused` at most once a minute with the lag, the threshold and the state's age.
+- **Outage longer than topic retention.** If the worker is down longer than the topic keeps messages, the consumer group's offsets point at deleted data and it restarts at the latest offset, so lag drops to 0 and the gate reopens, although the goal events of that window were never read. Steps that come due then can nudge people who already reached the goal. Before restarting after such an outage, pause the affected rules (or accept that goal events from the gap were lost).
+- **Event retention.** Once a day each replica deletes `nudge.events` rows older than `NUDGE_EVENT_RETENTION_DAYS`, in chunks of 10,000, except events a live enrollment may still read (at or after an active enrollment's trigger for that profile).
+- **History retention is not implemented.** `nudge.enrollments` (with each rule snapshot) and `nudge.steps` grow without bound. Purge finished journeys by hand when needed, for example older than 180 days:
+
+  ```sql
+  DELETE FROM nudge.steps s USING nudge.enrollments e
+  WHERE s.enrollment_id = e.id AND e.status IN ('completed', 'cancelled')
+    AND e.created_at < now() - interval '180 days';
+  DELETE FROM nudge.enrollments
+  WHERE status IN ('completed', 'cancelled') AND created_at < now() - interval '180 days';
+  ```
+
+  This also removes them from the Results screen.
+- **Revoking an API key.** There is no revoke endpoint yet: `DELETE FROM nudge.api_keys WHERE id = '<key id>';` (the id is the part of the key before the dot). Each replica caches a valid key for up to 5 minutes, so a revoked key keeps working for at most that long; restart the replicas to cut it off at once.
+- **Push opt-out.** Unsubscribe links exist for email only; push has no opt-out path in the plugin. Suppress push for a user in your own backend, or delete their device tokens (`DELETE /nudge/devices`).
+- **SMTP host.** The email channel's host is set by organization admins in the dashboard, and the worker connects to it from inside your network, so treat that setting as trusted-admin-only (an admin could point it at an internal address). With `secure: false` the connection starts in plain text and upgrades only if the server offers STARTTLS; against a server without STARTTLS the SMTP credentials go over the wire unencrypted.
+- **Healthcheck window.** The HTTP server (and `/nudge/health`) starts last, after migrations and the first interest refresh, which took about 7 s for 100,000 active profiles. The image's healthcheck allows a 30 s start period; with millions of active profiles raise `start_period` in your compose override.
 - **Pre-filter.** See below for when the pre-filter stores every identified event.
 
 Fork rules and touchpoints: see `AGENTS.md` and `TOUCHPOINTS.md`.
