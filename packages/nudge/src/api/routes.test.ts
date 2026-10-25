@@ -6,6 +6,7 @@ import {
   expect,
   it,
   mock,
+  spyOn,
 } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { decryptCredential } from '@openpanel/shared/server';
@@ -14,6 +15,7 @@ import { loadConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetNudgeTables } from '../db/test-helpers';
+import { createEngine, lockProfiles } from '../engine/engine';
 import { STARTER_RULES } from '../rules/starter-rules';
 import { createServer } from './server';
 import { createUnsubscribeUrlRenderer } from './unsubscribe';
@@ -156,6 +158,21 @@ async function statusesOf(enrollmentId: string) {
     enrollment: enrollment?.status,
     steps: steps.map((step) => step.status),
   };
+}
+
+const WAIT_POLL_MS = 20;
+
+// Waits until exactly this many advisory-lock requests are blocked, so interleavings are deterministic.
+async function waitForAdvisoryWaiters(count: number) {
+  for (;;) {
+    const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+    );
+    if (row?.n === count) {
+      return;
+    }
+    await Bun.sleep(WAIT_POLL_MS);
+  }
 }
 
 function unsubscribePath(profileId: string, channel = 'email') {
@@ -328,8 +345,12 @@ describe('sync routes', () => {
     expect(await replaced.json()).toEqual({ setKey: 'book-1', count: 1 });
     const listed = await dashboard('GET', '/nudge/reference-sets');
     expect(await listed.json()).toEqual({
-      referenceSets: [{ setKey: 'book-1', values: ['s3'] }],
+      referenceSets: [{ setKey: 'book-1', count: 1 }],
     });
+    const one = await dashboard('GET', '/nudge/reference-sets/book-1');
+    expect(await one.json()).toEqual({ setKey: 'book-1', values: ['s3'] });
+    const missing = await dashboard('GET', '/nudge/reference-sets/other');
+    expect(missing.status).toBe(404);
     const tooMany = await sync('PUT', '/nudge/reference-sets/book-1', key, {
       values: Array.from({ length: 100_001 }, (_, index) => String(index)),
     });
@@ -462,6 +483,112 @@ describe('dashboard routes', () => {
     expect(rows).toHaveLength(0);
   });
 
+  it('a pause concurrent with an in-flight engine batch leaves no active enrollment or pending step', async () => {
+    const ruleId = await insertRule('proj-a');
+    const { promise: released, resolve: release } =
+      Promise.withResolvers<void>();
+    // Holds u1's profile lock so the engine batch stops inside its transaction, after the shared rule lock.
+    const holder = sql.$transaction(
+      async (tx) => {
+        await lockProfiles(tx, [{ projectId: 'proj-a', profileId: 'u1' }]);
+        await released;
+      },
+      { timeout: 30_000 }
+    );
+    await waitForAdvisoryWaiters(0);
+    const batch = createEngine({ sql }).handleEvent({
+      eventId: randomUUID(),
+      projectId: 'proj-a',
+      profileId: 'u1',
+      name: 'add_to_cart',
+      time: new Date(),
+      properties: { item_id: 'book-1' },
+    });
+    await waitForAdvisoryWaiters(1);
+    const pause = dashboard('PATCH', `/nudge/rules/${ruleId}`, {
+      status: 'paused',
+    });
+    // The pause now waits for the batch's shared rule lock.
+    await waitForAdvisoryWaiters(2);
+    release();
+    await Promise.all([holder, batch]);
+    expect((await pause).status).toBe(200);
+
+    const enrollments = await sql.$queryRawUnsafe<{ status: string }[]>(
+      'SELECT status FROM nudge.enrollments WHERE rule_id = $1::uuid',
+      ruleId
+    );
+    expect(enrollments.map((row) => row.status)).toEqual(['cancelled']);
+    const pending = await sql.$queryRawUnsafe<unknown[]>(
+      "SELECT 1 FROM nudge.steps WHERE status = 'pending'"
+    );
+    expect(pending).toHaveLength(0);
+  });
+
+  it('a delete that fails while cancelling can be retried, and leaves no pending step', async () => {
+    const ruleId = await insertRule('proj-a');
+    const snapshot = JSON.stringify(ruleDefinition());
+    // One more profile than a cancel chunk, so cancelling needs a second transaction.
+    await sql.$executeRawUnsafe(
+      `WITH created AS (
+         INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+         SELECT gen_random_uuid(), 'proj-a', $1::uuid, $2::jsonb, 'p' || n, 'active', now()
+         FROM generate_series(1, 1001) AS n
+         RETURNING id
+       )
+       INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+       SELECT id, 0, now(), 'pending' FROM created`,
+      ruleId,
+      snapshot
+    );
+    let transactions = 0;
+    const failing = createServer({
+      cfg,
+      sql: new Proxy(sql, {
+        get(target, property, receiver) {
+          if (property !== '$transaction') {
+            return Reflect.get(target, property, receiver);
+          }
+          return (...args: Parameters<typeof sql.$transaction>) => {
+            transactions += 1;
+            return transactions === 2
+              ? Promise.reject(new Error('injected chunk failure'))
+              : target.$transaction(...args);
+          };
+        },
+      }),
+    });
+    const errors = spyOn(console, 'error').mockImplementation(() => undefined);
+    const failed = await failing.fetch(
+      new Request(`${BASE}/nudge/rules/${ruleId}`, {
+        method: 'DELETE',
+        headers: {
+          'x-nudge-proxy-secret': PROXY_SECRET,
+          'x-nudge-project-id': 'proj-a',
+          'x-nudge-user-id': 'user-1',
+          'x-nudge-csrf': '1',
+        },
+      }),
+      peer('10.0.0.1')
+    );
+    errors.mockRestore();
+    expect(failed.status).toBe(500);
+    const [rule] = await sql.$queryRawUnsafe<{ status: string }[]>(
+      'SELECT status FROM nudge.rules WHERE id = $1::uuid',
+      ruleId
+    );
+    expect(rule?.status).toBe('paused');
+
+    const retried = await dashboard('DELETE', `/nudge/rules/${ruleId}`);
+    expect(retried.status).toBe(200);
+    const leftovers = await sql.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT (SELECT count(*) FROM nudge.rules)::int
+            + (SELECT count(*) FROM nudge.enrollments WHERE status = 'active')::int
+            + (SELECT count(*) FROM nudge.steps WHERE status = 'pending')::int AS n`
+    );
+    expect(leftovers[0]?.n).toBe(0);
+  });
+
   it('SECURITY dashboard rule ids from another project return 404', async () => {
     const ruleId = await insertRule('proj-b');
     const active = await insertEnrollment(
@@ -531,10 +658,10 @@ describe('dashboard routes', () => {
       config: { ...config, pass: MASK },
     });
 
-    const edited = await dashboard('PUT', '/nudge/channels/email', {
-      config: { ...config, host: 'smtp2.test', pass: MASK },
+    const resaved = await dashboard('PUT', '/nudge/channels/email', {
+      config: { ...config, pass: MASK },
     });
-    expect(edited.status).toBe(200);
+    expect(resaved.status).toBe(200);
     const [after] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
       'SELECT config_encrypted FROM nudge.channel_configs'
     );
@@ -542,12 +669,49 @@ describe('dashboard routes', () => {
       JSON.parse(
         decryptCredential(cfg.encryptionKey, after?.config_encrypted ?? '')
       )
-    ).toEqual({ ...config, host: 'smtp2.test' });
+    ).toEqual(config);
 
     const invalid = await dashboard('PUT', '/nudge/channels/email', {
       config: { host: 'smtp.test' },
     });
     expect(invalid.status).toBe(400);
+  });
+
+  it('SECURITY a masked secret is not kept when a public field changes in the same request', async () => {
+    const config = {
+      host: 'smtp.test',
+      port: 587,
+      secure: false,
+      user: 'mailer',
+      pass: 'super-secret-password',
+      from: 'news@shop.test',
+    };
+    await dashboard('PUT', '/nudge/channels/email', { config });
+    const redirected = await dashboard('PUT', '/nudge/channels/email', {
+      config: { ...config, host: 'attacker.example', pass: MASK },
+    });
+    expect(redirected.status).toBe(400);
+    expect(await redirected.json()).toEqual({
+      error: 'secrets_required',
+      issues: [
+        {
+          path: 'config.pass',
+          message: 're-enter this secret when changing other settings',
+        },
+      ],
+    });
+    const [row] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
+      'SELECT config_encrypted FROM nudge.channel_configs'
+    );
+    expect(
+      JSON.parse(
+        decryptCredential(cfg.encryptionKey, row?.config_encrypted ?? '')
+      )
+    ).toEqual(config);
+    const reentered = await dashboard('PUT', '/nudge/channels/email', {
+      config: { ...config, host: 'smtp2.test', pass: 'new-password' },
+    });
+    expect(reentered.status).toBe(200);
   });
 
   it('SECURITY GET channels never returns a secret value, even masked values do not reveal length', async () => {
@@ -567,7 +731,7 @@ describe('dashboard routes', () => {
     expect(JSON.parse(text)).toEqual({
       channel: 'webhook',
       configured: true,
-      config: { url: 'https://hooks.example.com/nudge', secrets: [MASK, MASK] },
+      config: { url: 'https://hooks.example.com/nudge', secrets: MASK },
     });
     const empty = await dashboard('GET', '/nudge/channels/push');
     expect(await empty.json()).toEqual({
@@ -722,25 +886,42 @@ describe('unsubscribe', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('POST without the one-click body is rejected', async () => {
-    const response = await call('POST', unsubscribePath('u1'));
-    expect(response.status).toBe(400);
-    expect(await optOuts()).toHaveLength(0);
+  it('one-click POST works with a urlencoded, a multipart or an empty body', async () => {
+    const multipart = new FormData();
+    multipart.set('List-Unsubscribe', 'One-Click');
+    const urlencoded = await call('POST', unsubscribePath('u1'), ONE_CLICK);
+    const formData = await call('POST', unsubscribePath('u2'), {
+      rawBody: multipart,
+    });
+    const empty = await call('POST', unsubscribePath('u3'));
+    expect([urlencoded.status, formData.status, empty.status]).toEqual([
+      200, 200, 200,
+    ]);
+    const rows = await optOuts();
+    expect(rows.map((row) => row.profile_id).sort()).toEqual([
+      'u1',
+      'u2',
+      'u3',
+    ]);
   });
 
-  it('SECURITY the 31st unsubscribe call from one IP within a minute returns 429', async () => {
-    const path = unsubscribePath('u1');
+  it('SECURITY the 31st invalid unsubscribe token from one IP returns 429, a valid token still works', async () => {
+    const ip = '203.0.113.9';
     for (let attempt = 0; attempt < 30; attempt++) {
-      const response = await call('GET', path, { ip: '203.0.113.9' });
-      expect(response.status).toBe(200);
+      const response = await call('POST', '/nudge/unsubscribe?t=bad', {
+        ...ONE_CLICK,
+        ip,
+      });
+      expect(response.status).toBe(400);
     }
-    const limited = await call('POST', path, {
-      ...ONE_CLICK,
-      ip: '203.0.113.9',
-    });
+    const limited = await call('GET', '/nudge/unsubscribe?t=bad', { ip });
     expect(limited.status).toBe(429);
-    const otherIp = await call('GET', path, { ip: '203.0.113.10' });
-    expect(otherIp.status).toBe(200);
+    const valid = await call('POST', unsubscribePath('u1'), {
+      ...ONE_CLICK,
+      ip,
+    });
+    expect(valid.status).toBe(200);
+    expect(await optOuts()).toHaveLength(1);
   });
 });
 
@@ -813,6 +994,22 @@ describe('SECURITY limits', () => {
     expect((await attempt('wrong', '198.51.100.7')).status).toBe(429);
     expect((await attempt(key, '198.51.100.7')).status).toBe(429);
     expect((await attempt(key, '198.51.100.8')).status).toBe(200);
+  });
+
+  it('SECURITY a recently verified api key still works from an IP locked out by failed attempts', async () => {
+    const key = await createKey('proj-a');
+    const attempt = (apiKey: string) =>
+      call('PUT', '/nudge/devices', {
+        body: { profileId: 'u1', token: 't', platform: 'ios' },
+        headers: { 'x-nudge-api-key': apiKey },
+        ip: '198.51.100.9',
+      });
+    expect((await attempt(key)).status).toBe(200);
+    for (let failure = 0; failure < 30; failure++) {
+      expect((await attempt('wrong')).status).toBe(401);
+    }
+    expect((await attempt('wrong')).status).toBe(429);
+    expect((await attempt(key)).status).toBe(200);
   });
 
   it('SECURITY an internal error returns a generic 500 without details', async () => {

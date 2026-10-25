@@ -12,6 +12,7 @@ Journey nudges for OpenPanel: a separate worker that consumes the events Kafka t
 | `NUDGE_PROXY_SECRET` | required | Shared secret with the dashboard proxy |
 | `NUDGE_PUBLIC_URL` | required | Base URL for unsubscribe links |
 | `NUDGE_PORT` | 4100 | HTTP port |
+| `NUDGE_TRUST_PROXY` | false | Take the client IP from `x-forwarded-for` (see below) |
 | `NUDGE_GRACE_SECONDS` | 300 | Window in which an observed goal cancels a pending nudge |
 | `NUDGE_MAX_LAG` | 1000 | Consumer lag above which work is shed |
 | `NUDGE_TICK_MS` | 5000 | Ticker interval |
@@ -29,6 +30,10 @@ Journey nudges for OpenPanel: a separate worker that consumes the events Kafka t
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_SASL_MECHANISM` | unset, `scram-sha-512` | SASL needs both username and password |
 
 A blank value counts as unset.
+
+### Client IP and `NUDGE_TRUST_PROXY`
+
+Failed API-key attempts and invalid unsubscribe tokens are limited to 30 per minute per client IP (valid keys and valid unsubscribe links are never limited). With `NUDGE_TRUST_PROXY=false` the client IP is the socket's peer address: behind a reverse proxy every caller shares the proxy's address and therefore one limit. Set it to `true` only when `NUDGE_PORT` is reachable solely through exactly one trusted proxy that appends the client address to `x-forwarded-for`; the worker then uses the rightmost entry. Anything that can reach the port directly could otherwise choose its own IP.
 
 ## Adopters
 

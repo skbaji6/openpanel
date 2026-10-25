@@ -5,6 +5,8 @@ interface Window {
   resetAt: number;
 }
 
+export type RateLimiter = ReturnType<typeof createRateLimiter>;
+
 // Fixed window per key. The map is capped so a flood of distinct keys cannot exhaust memory;
 // the oldest window is evicted first, which at worst resets a counter early.
 export function createRateLimiter(opts: {

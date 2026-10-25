@@ -180,6 +180,24 @@ const LOCK_PROFILES_SQL = `
     ORDER BY key_hash
   ) ordered_keys`;
 
+const RULES_LOCK_KEY = 'nudge:rules';
+
+// Batches hold it shared while they read rules and enroll; stopping a rule takes it exclusively first,
+// so no batch that saw the rule active commits after the stop. Always taken before profile locks.
+export async function lockRules(
+  db: Queryable,
+  mode: 'shared' | 'exclusive'
+): Promise<void> {
+  const lockFunction =
+    mode === 'shared'
+      ? 'pg_advisory_xact_lock_shared'
+      : 'pg_advisory_xact_lock';
+  await db.$executeRawUnsafe(
+    `SELECT ${lockFunction}(hashtextextended($1, 0))`,
+    RULES_LOCK_KEY
+  );
+}
+
 // The ticker takes the same lock before changing steps or enrollments, so the two never deadlock.
 export async function lockProfiles(
   db: Queryable,
@@ -402,6 +420,7 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
     }
     await deps.sql.$transaction(
       async (tx) => {
+        await lockRules(tx, 'shared');
         await lockProfiles(tx, ordered);
         const fresh = await insertEvents(tx, ordered);
         const rulesByProject = new Map<string, RuleRow[]>();

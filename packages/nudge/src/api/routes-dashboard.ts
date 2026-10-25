@@ -7,7 +7,12 @@ import {
 import { z } from 'zod';
 import { getAdapter } from '../channels/registry';
 import type { NudgeConfig } from '../config';
-import { lockProfiles, type Queryable, type Sql } from '../engine/engine';
+import {
+  lockProfiles,
+  lockRules,
+  type Queryable,
+  type Sql,
+} from '../engine/engine';
 import { HH_MM } from '../engine/gates';
 import {
   MAX_DELAY_SECONDS,
@@ -16,7 +21,8 @@ import {
 } from '../rules/rule.schema';
 import { STARTER_RULES } from '../rules/starter-rules';
 import { renderTemplate } from '../template/render';
-import { HttpError, json, parseJsonBody, type Route } from './http';
+import { HttpError, json, parseJsonBody, type Route, validate } from './http';
+import { zIdentifier } from './routes-sync';
 
 const MASK = '********';
 // Fields shown in clear on GET; everything else in a channel config is treated as a secret.
@@ -36,8 +42,8 @@ const MAX_SAMPLE_MISSING = 1000;
 const API_KEY_SECRET_BYTES = 32;
 // Each chunk holds this many profile advisory locks at once; the lock table is shared and finite.
 const CANCEL_CHUNK_PROFILES = 1000;
-// A profile lock may be held by a consumer batch for up to 60 s.
-const LOCKED_TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
+// Stopping a rule first waits for in-flight consumer batches (up to 60 s each), then for profile locks.
+const STOP_TRANSACTION = { timeout: 120_000, maxWait: 30_000 };
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -195,33 +201,57 @@ function ruleIdParam(params: string[]): string {
   return id;
 }
 
-function maskValue(value: unknown): unknown {
-  return Array.isArray(value) ? value.map(() => MASK) : MASK;
+function publicFields(channel: string): Set<string> {
+  return new Set(PUBLIC_CONFIG_FIELDS[channel] ?? []);
 }
 
+// Every secret, arrays included, becomes the same string, so neither length nor count leaks.
 function maskConfig(channel: string, config: Record<string, unknown>) {
-  const visible = new Set(PUBLIC_CONFIG_FIELDS[channel] ?? []);
+  const visible = publicFields(channel);
   return Object.fromEntries(
     Object.entries(config).map(([field, value]) => [
       field,
-      visible.has(field) ? value : maskValue(value),
+      visible.has(field) ? value : MASK,
     ])
   );
 }
 
-// A field sent back exactly as GET masked it keeps its stored value, so editing does not require retyping secrets.
-function unmask(
+function sameValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+// A secret sent back as the mask keeps its stored value, but only while every public field is unchanged:
+// otherwise a caller could point the stored secret at a host of their choosing.
+function restoreMaskedSecrets(
+  channel: string,
   incoming: Record<string, unknown>,
   stored: Record<string, unknown>
 ): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(incoming).map(([field, value]) => {
-      const echoesMask =
-        field in stored &&
-        JSON.stringify(value) === JSON.stringify(maskValue(stored[field]));
-      return [field, echoesMask ? stored[field] : value];
-    })
+  const visible = publicFields(channel);
+  const echoed = Object.keys(incoming).filter(
+    (field) =>
+      !visible.has(field) && field in stored && incoming[field] === MASK
   );
+  if (echoed.length === 0) {
+    return incoming;
+  }
+  const publicChanged = [...visible].some(
+    (field) => !sameValue(incoming[field], stored[field])
+  );
+  if (publicChanged) {
+    throw new HttpError(
+      400,
+      'secrets_required',
+      echoed.map((field) => ({
+        path: `config.${field}`,
+        message: 're-enter this secret when changing other settings',
+      }))
+    );
+  }
+  return {
+    ...incoming,
+    ...Object.fromEntries(echoed.map((field) => [field, stored[field]])),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -265,8 +295,9 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     return rows.length;
   }
 
-  // Applies `change` and cancels the rule's work in one transaction; only a rule with more than
-  // CANCEL_CHUNK_PROFILES enrolled profiles continues in further transactions.
+  // Pauses the rule through `change` and cancels its work in one transaction; only a rule with more
+  // than CANCEL_CHUNK_PROFILES enrolled profiles continues in further transactions. Once the pause
+  // commits no batch enrolls into the rule, so the later chunks need no rule lock.
   async function stopRule<T>(
     projectId: string,
     ruleId: string,
@@ -274,17 +305,18 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
   ): Promise<T | undefined> {
     let more = false;
     const result = await sql.$transaction(async (tx) => {
+      await lockRules(tx, 'exclusive');
       const changed = await change(tx);
       if (changed !== undefined) {
         more =
           (await cancelChunk(tx, projectId, ruleId)) === CANCEL_CHUNK_PROFILES;
       }
       return changed;
-    }, LOCKED_TRANSACTION);
+    }, STOP_TRANSACTION);
     while (more) {
       const cancelled = await sql.$transaction(
         (tx) => cancelChunk(tx, projectId, ruleId),
-        LOCKED_TRANSACTION
+        STOP_TRANSACTION
       );
       more = cancelled === CANCEL_CHUNK_PROFILES;
     }
@@ -393,18 +425,25 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
       auth: 'dashboard',
       async handle(ctx) {
         const ruleId = ruleIdParam(ctx.params);
-        const deleted = await stopRule(ctx.projectId, ruleId, (tx) =>
+        // The row goes last, so a delete that fails while cancelling can simply be retried.
+        const paused = await stopRule(ctx.projectId, ruleId, (tx) =>
           tx
             .$queryRawUnsafe<{ id: string }[]>(
-              'DELETE FROM nudge.rules WHERE id = $1::uuid AND project_id = $2 RETURNING id::text',
+              `UPDATE nudge.rules SET status = 'paused', updated_at = now()
+               WHERE id = $1::uuid AND project_id = $2 RETURNING id::text`,
               ruleId,
               ctx.projectId
             )
             .then(([row]) => row)
         );
-        if (!deleted) {
+        if (!paused) {
           throw new HttpError(404, 'not_found');
         }
+        await sql.$executeRawUnsafe(
+          'DELETE FROM nudge.rules WHERE id = $1::uuid AND project_id = $2',
+          ruleId,
+          ctx.projectId
+        );
         await rulesChanged();
         return json({ ok: true });
       },
@@ -451,7 +490,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         const stored =
           (await storedChannelConfig(ctx.projectId, channel)) ?? {};
         const parsed = getAdapter(channel).configSchema.safeParse(
-          unmask(config, stored)
+          restoreMaskedSecrets(channel, config, stored)
         );
         if (!(parsed.success && isRecord(parsed.data))) {
           throw new HttpError(
@@ -596,17 +635,35 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
       auth: 'dashboard',
       async handle(ctx) {
         const rows = await sql.$queryRawUnsafe<
-          { set_key: string; values: unknown }[]
+          { set_key: string; count: number }[]
         >(
-          'SELECT set_key, values FROM nudge.reference_sets WHERE project_id = $1 ORDER BY set_key',
+          `SELECT set_key, jsonb_array_length(values)::int AS count
+           FROM nudge.reference_sets WHERE project_id = $1 ORDER BY set_key`,
           ctx.projectId
         );
         return json({
           referenceSets: rows.map((row) => ({
             setKey: row.set_key,
-            values: row.values,
+            count: row.count,
           })),
         });
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/reference-sets\/([^/]+)$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const setKey = validate(zIdentifier, ctx.params[0]);
+        const [row] = await sql.$queryRawUnsafe<{ values: unknown }[]>(
+          'SELECT values FROM nudge.reference_sets WHERE project_id = $1 AND set_key = $2',
+          ctx.projectId,
+          setKey
+        );
+        if (!row) {
+          throw new HttpError(404, 'not_found');
+        }
+        return json({ setKey, values: row.values });
       },
     },
   ];

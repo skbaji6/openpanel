@@ -57,15 +57,15 @@ export function createServer(deps: ServerDeps) {
     windowMs: RATE_WINDOW_MS,
     now: deps.now,
   });
-  const unsubscribeLimiter = createRateLimiter({
-    limit: RATE_LIMIT,
-    windowMs: RATE_WINDOW_MS,
-    now: deps.now,
-  });
-  const verifyApiKey = createApiKeyVerifier({ sql, now: deps.now });
+  const apiKeys = createApiKeyVerifier({ sql, now: deps.now });
   const unsubscribe = createUnsubscribeHandlers({
     sql,
     encryptionKey: cfg.encryptionKey,
+    invalidTokenLimiter: createRateLimiter({
+      limit: RATE_LIMIT,
+      windowMs: RATE_WINDOW_MS,
+      now: deps.now,
+    }),
   });
 
   // The rule is already saved; a failed refresh is caught up by the worker's periodic refresh.
@@ -78,12 +78,6 @@ export function createServer(deps: ServerDeps) {
         'interest refresh failed',
         redactSecrets(error, secrets)
       );
-    }
-  }
-
-  function limitUnsubscribe(ip: string) {
-    if (!unsubscribeLimiter.take(ip)) {
-      throw new HttpError(429, 'too_many_requests');
     }
   }
 
@@ -100,27 +94,27 @@ export function createServer(deps: ServerDeps) {
       method: 'GET',
       pattern: /^\/nudge\/unsubscribe$/,
       auth: 'public',
-      handle: (ctx) => {
-        limitUnsubscribe(ctx.ip);
-        return unsubscribe.confirm(ctx.url);
-      },
+      handle: (ctx) => unsubscribe.confirm(ctx.url, ctx.ip),
     },
     {
       method: 'POST',
       pattern: /^\/nudge\/unsubscribe$/,
       auth: 'public',
-      handle: (ctx) => {
-        limitUnsubscribe(ctx.ip);
-        return unsubscribe.optOut(ctx.req, ctx.url);
-      },
+      handle: (ctx) => unsubscribe.optOut(ctx.url, ctx.ip),
     },
   ];
 
+  // A recently verified key skips the limiter, so a caller behind a shared IP is not locked out by others.
   async function authenticateApiKey(req: Request, ip: string): Promise<string> {
+    const header = req.headers.get('x-nudge-api-key');
+    const cachedProjectId = apiKeys.cached(header);
+    if (cachedProjectId) {
+      return cachedProjectId;
+    }
     if (failedKeyLimiter.limited(ip)) {
       throw new HttpError(429, 'too_many_requests');
     }
-    const projectId = await verifyApiKey(req.headers.get('x-nudge-api-key'));
+    const projectId = await apiKeys.verify(header);
     if (!projectId) {
       failedKeyLimiter.take(ip);
       throw new HttpError(401, 'unauthorized');

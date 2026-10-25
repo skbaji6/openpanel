@@ -79,18 +79,26 @@ export function createApiKeyVerifier(deps: {
 }) {
   const now = deps.now ?? Date.now;
   const cache = new Map<string, { projectId: string; expiresAt: number }>();
+  const cacheKeyOf = (header: string) => sha256(header).toString('hex');
 
-  return async (header: string | null): Promise<string | null> => {
+  function cached(header: string | null): string | null {
+    if (!header) {
+      return null;
+    }
+    const cacheKey = cacheKeyOf(header);
+    const hit = cache.get(cacheKey);
+    if (hit && hit.expiresAt > now()) {
+      return hit.projectId;
+    }
+    cache.delete(cacheKey);
+    return null;
+  }
+
+  async function verify(header: string | null): Promise<string | null> {
     const match = header ? API_KEY_PATTERN.exec(header) : null;
     if (!(header && match)) {
       return null;
     }
-    const cacheKey = sha256(header).toString('hex');
-    const cached = cache.get(cacheKey);
-    if (cached && cached.expiresAt > now()) {
-      return cached.projectId;
-    }
-    cache.delete(cacheKey);
     const [, id, secret] = match;
     const [row] = await deps.sql.$queryRawUnsafe<
       { project_id: string; key_hash: string }[]
@@ -105,10 +113,12 @@ export function createApiKeyVerifier(deps: {
     if (cache.size >= API_KEY_CACHE_MAX && !oldest.done) {
       cache.delete(oldest.value);
     }
-    cache.set(cacheKey, {
+    cache.set(cacheKeyOf(header), {
       projectId: row.project_id,
       expiresAt: now() + API_KEY_CACHE_MS,
     });
     return row.project_id;
-  };
+  }
+
+  return { cached, verify };
 }

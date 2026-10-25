@@ -2,7 +2,8 @@ import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { NudgeConfig } from '../config';
 import type { Queryable } from '../engine/engine';
-import { HttpError, readBodyText } from './http';
+import { HttpError } from './http';
+import type { RateLimiter } from './rate-limit';
 
 const HKDF_INFO = 'nudge-unsubscribe';
 const KEY_BYTES = 32;
@@ -124,21 +125,27 @@ function page(title: string, content: string): Response {
 export function createUnsubscribeHandlers(deps: {
   sql: Queryable;
   encryptionKey: string;
+  // Charged only for invalid tokens: a valid signed link always works, even from a shared or limited IP.
+  invalidTokenLimiter: Pick<RateLimiter, 'limited' | 'take'>;
 }) {
   const key = unsubscribeKey(deps.encryptionKey);
 
-  function targetOf(url: URL): UnsubscribeTarget {
+  function targetOf(url: URL, ip: string): UnsubscribeTarget {
     const target = verifyUnsubscribeToken(key, url.searchParams.get('t'));
-    if (!target) {
-      throw new HttpError(400, 'invalid_token');
+    if (target) {
+      return target;
     }
-    return target;
+    if (deps.invalidTokenLimiter.limited(ip)) {
+      throw new HttpError(429, 'too_many_requests');
+    }
+    deps.invalidTokenLimiter.take(ip);
+    throw new HttpError(400, 'invalid_token');
   }
 
   return {
     // Link scanners prefetch GETs, so this only asks; opting out takes the POST.
-    confirm(url: URL): Response {
-      const target = targetOf(url);
+    confirm(url: URL, ip: string): Response {
+      const target = targetOf(url, ip);
       const token = url.searchParams.get('t') ?? '';
       return page(
         'Unsubscribe',
@@ -149,13 +156,10 @@ export function createUnsubscribeHandlers(deps: {
 </form>`
       );
     },
-    // RFC 8058 one-click: no auth, form body List-Unsubscribe=One-Click.
-    async optOut(req: Request, url: URL): Promise<Response> {
-      const target = targetOf(url);
-      const form = new URLSearchParams(await readBodyText(req));
-      if (form.get('List-Unsubscribe') !== 'One-Click') {
-        throw new HttpError(400, 'one_click_body_required');
-      }
+    // RFC 8058 one-click. The signed token is the authority and the insert is idempotent, so the body
+    // (urlencoded or multipart List-Unsubscribe=One-Click, or nothing) is not read.
+    async optOut(url: URL, ip: string): Promise<Response> {
+      const target = targetOf(url, ip);
       await deps.sql.$executeRawUnsafe(
         `INSERT INTO nudge.opt_outs (project_id, profile_id, channel)
          VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
