@@ -10,6 +10,7 @@ const ORGANIZATION = 'org_1';
 const USER = 'user_1';
 const COOKIE = 'session=abc';
 const ONE_MIB = 1024 * 1024;
+const TEST_TIMEOUT_MS = 20;
 
 interface Call {
   url: string;
@@ -20,20 +21,32 @@ function trpcResponse(data: unknown) {
   return Response.json({ result: { data: { json: data } } });
 }
 
+function hangUntilAborted(signal: AbortSignal | null | undefined) {
+  return new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => reject(signal.reason));
+  });
+}
+
 function setup({
   env = {},
   role = 'admin',
   projectStatus = 200,
+  hang,
 }: {
   env?: Partial<ProxyEnv>;
   role?: string | null;
   projectStatus?: number;
+  hang?: 'core' | 'nudge';
 } = {}) {
   const calls: Call[] = [];
   let now = 0;
   const fetchMock = (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     calls.push({ url, init });
+    const target = url.startsWith(API) ? 'core' : 'nudge';
+    if (hang === target) {
+      return hangUntilAborted(init.signal);
+    }
     if (url.startsWith(`${API}/trpc/auth.session`)) {
       return Promise.resolve(trpcResponse({ userId: USER }));
     }
@@ -64,6 +77,7 @@ function setup({
     }),
     fetch: fetchMock as typeof fetch,
     now: () => now,
+    timeouts: { coreMs: TEST_TIMEOUT_MS, nudgeMs: TEST_TIMEOUT_MS },
   });
   return {
     proxy,
@@ -271,5 +285,31 @@ describe('nudge proxy', () => {
     );
     expect(response.status).toBe(400);
     expect(coreCalls()).toHaveLength(0);
+  });
+
+  test.each([
+    'core',
+    'nudge',
+  ] as const)('answers 504 when %s does not respond in time', async (hang) => {
+    const { proxy } = setup({ hang });
+    const response = await proxy.handle(request('rules'));
+    expect(response.status).toBe(504);
+    expect(await response.json()).toEqual({ error: `${hang}_timeout` });
+  });
+
+  test('asks core for the role in the organization that owns the project', async () => {
+    const { proxy, coreCalls } = setup();
+    await proxy.handle(
+      request('rules?organizationId=org_evil', {
+        headers: { 'x-nudge-organization-id': 'org_evil' },
+      })
+    );
+    const membership = coreCalls().find((call) =>
+      call.url.startsWith(`${API}/trpc/organization.myAccess`)
+    );
+    const input = new URL(membership?.url ?? '', API).searchParams.get('input');
+    expect(JSON.parse(input ?? 'null')).toEqual({
+      json: { organizationId: ORGANIZATION },
+    });
   });
 });

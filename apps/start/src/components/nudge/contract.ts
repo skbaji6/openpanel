@@ -1,19 +1,14 @@
 import { z } from 'zod';
 
-// A copy of the nudge service's rule schema; contract.test.ts fails when the two drift apart.
-export const MAX_SUBJECT_LENGTH = 300;
-export const MAX_BODY_LENGTH = 20_000;
+// Copied verbatim from packages/nudge/src/rules/rule.schema.ts; contract.test.ts fails unless the
+// text from MAX_SUBJECT_LENGTH to RuleDefinition matches the service file exactly.
+const MAX_SUBJECT_LENGTH = 300;
+const MAX_BODY_LENGTH = 20_000;
 export const MAX_DELAY_SECONDS = 90 * 24 * 60 * 60;
-
-export const CHANNELS = ['email', 'webhook', 'push'] as const;
-export type Channel = (typeof CHANNELS)[number];
-
-export const GOAL_KINDS = ['event', 'set', 'inactivity'] as const;
-export type GoalKind = (typeof GOAL_KINDS)[number];
 
 export const zStep = z.object({
   delaySeconds: z.number().int().min(0).max(MAX_DELAY_SECONDS),
-  channel: z.enum(CHANNELS),
+  channel: z.enum(['email', 'webhook', 'push']),
   template: z.object({
     subject: z.string().max(MAX_SUBJECT_LENGTH).optional(),
     body: z.string().max(MAX_BODY_LENGTH),
@@ -65,6 +60,16 @@ export const zRuleDefinition = z.object({
 export type Step = z.infer<typeof zStep>;
 export type Goal = z.infer<typeof zGoal>;
 export type RuleDefinition = z.infer<typeof zRuleDefinition>;
+
+export { MAX_BODY_LENGTH, MAX_SUBJECT_LENGTH };
+
+export const CHANNELS = zStep.shape.channel.options;
+export type Channel = Step['channel'];
+
+export const GOAL_KINDS = zGoal.options.map(
+  (option) => option.shape.kind.value
+);
+export type GoalKind = Goal['kind'];
 
 export type RuleStatus = 'active' | 'paused';
 

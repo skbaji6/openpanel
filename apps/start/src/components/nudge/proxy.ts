@@ -8,6 +8,9 @@ const CONTROL_CHARACTERS = /\p{Cc}/u;
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ORGANIZATION_ADMIN_ROLES = new Set(['owner', 'admin']);
 const DENIED_STATUSES = new Set([401, 403, 404]);
+const CORE_TIMEOUT_MS = 10_000;
+// Pausing or deleting a rule may wait up to 150 s in the service (120 s transaction + 30 s lock wait).
+const NUDGE_TIMEOUT_MS = 155_000;
 
 type Requirement = 'member' | 'admin';
 
@@ -50,6 +53,13 @@ type CoreAnswer =
   | { status: 'ok'; data: unknown }
   | { status: 'denied' }
   | { status: 'error' };
+
+function isTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === 'TimeoutError' || error.name === 'AbortError')
+  );
+}
 
 class ProxyError extends Error {
   readonly status: number;
@@ -169,8 +179,13 @@ export function createNudgeProxy(deps: {
   env: () => ProxyEnv;
   fetch?: typeof fetch;
   now?: () => number;
+  timeouts?: { coreMs: number; nudgeMs: number };
 }) {
   const fetchImpl = deps.fetch ?? fetch;
+  const timeouts = deps.timeouts ?? {
+    coreMs: CORE_TIMEOUT_MS,
+    nudgeMs: NUDGE_TIMEOUT_MS,
+  };
   const now = deps.now ?? Date.now;
   const accessCache = new Map<
     string,
@@ -191,6 +206,7 @@ export function createNudgeProxy(deps: {
       const response = await fetchImpl(`${apiUrl}/trpc/${procedure}${query}`, {
         headers: { cookie },
         redirect: 'manual',
+        signal: AbortSignal.timeout(timeouts.coreMs),
       });
       if (DENIED_STATUSES.has(response.status)) {
         return { status: 'denied' };
@@ -202,7 +218,10 @@ export function createNudgeProxy(deps: {
       const result = isRecord(body) ? body.result : undefined;
       const data = isRecord(result) ? result.data : undefined;
       return { status: 'ok', data: isRecord(data) ? data.json : undefined };
-    } catch {
+    } catch (error) {
+      if (isTimeout(error)) {
+        throw new ProxyError(504, 'core_timeout');
+      }
       return { status: 'error' };
     }
   }
@@ -328,8 +347,12 @@ export function createNudgeProxy(deps: {
         headers,
         body,
         redirect: 'manual',
+        signal: AbortSignal.timeout(timeouts.nudgeMs),
       });
-    } catch {
+    } catch (error) {
+      if (isTimeout(error)) {
+        throw new ProxyError(504, 'nudge_timeout');
+      }
       throw new ProxyError(502, 'nudge_unavailable');
     }
     return new Response(upstream.body, {

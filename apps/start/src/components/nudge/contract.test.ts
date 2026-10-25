@@ -18,17 +18,21 @@ const SERVICE_SCHEMA_SOURCE = readFileSync(
   'utf8'
 );
 
-function serviceConstant(name: string): number {
-  const match = new RegExp(`const ${name} = ([0-9_ *]+);`).exec(
-    SERVICE_SCHEMA_SOURCE
-  );
-  if (!match?.[1]) {
-    throw new Error(`${name} not found in the service schema`);
+const CONTRACT_SOURCE = readFileSync(
+  new URL('./contract.ts', import.meta.url),
+  'utf8'
+);
+const BLOCK_START = 'const MAX_SUBJECT_LENGTH';
+const BLOCK_END =
+  'export type RuleDefinition = z.infer<typeof zRuleDefinition>;';
+
+function schemaBlock(source: string): string {
+  const start = source.indexOf(BLOCK_START);
+  const end = source.indexOf(BLOCK_END);
+  if (start === -1 || end === -1) {
+    throw new Error('schema block markers not found');
   }
-  return match[1]
-    .split('*')
-    .map((factor) => Number(factor.trim().replaceAll('_', '')))
-    .reduce((product, factor) => product * factor, 1);
+  return source.slice(start, end + BLOCK_END.length).replace(/s+/g, ' ');
 }
 
 function validRule(): RuleDefinition {
@@ -72,10 +76,10 @@ describe('contract', () => {
     expect(zRuleDefinition.safeParse(rule).success).toBe(false);
   });
 
-  test('contract limits match the service schema', () => {
-    expect(MAX_DELAY_SECONDS).toBe(serviceConstant('MAX_DELAY_SECONDS'));
-    expect(MAX_SUBJECT_LENGTH).toBe(serviceConstant('MAX_SUBJECT_LENGTH'));
-    expect(MAX_BODY_LENGTH).toBe(serviceConstant('MAX_BODY_LENGTH'));
+  test('contract schema is a verbatim copy of the service schema', () => {
+    expect(schemaBlock(CONTRACT_SOURCE)).toBe(
+      schemaBlock(SERVICE_SCHEMA_SOURCE)
+    );
   });
 
   test('contract enforces the limits at their boundaries', () => {
