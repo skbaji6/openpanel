@@ -101,6 +101,7 @@ function tick(cfg: NudgeConfig = CFG, overrides: Partial<TickDeps> = {}) {
     cfg,
     renderUnsubscribeUrl: (projectId, profileId, channel) =>
       `https://nudge.test/u/${projectId}/${profileId}/${channel}`,
+    logger: { warn: () => undefined },
     ...overrides,
   });
 }

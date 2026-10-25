@@ -481,7 +481,7 @@ These supersede the text above where they differ.
 - **Future events.** Events more than 24 h in the future are dropped (a forged time could push inactivity timers out indefinitely).
 - **Reference-set key.** With `matchOn`, a set goal's reference set is looked up by the match value (one set per item); otherwise by the rule's `setKey`.
 - **Push opt-out.** Not provided; unsubscribe links cover email only.
-- **Event purge.** Daily, chunked (10,000 rows, bounded per run), and it keeps events at or after an active enrollment's trigger for that profile.
+- **Event purge.** Hourly, in chunks of 10,000 rows until done or a 10 minute budget is spent, through an `event_time` index (migration 0006); it keeps events at or after an active enrollment's trigger for that profile.
 
 ## Known limitations / follow-ups
 
@@ -492,6 +492,8 @@ These supersede the text above where they differ.
 - Batch GOAL_CANDIDATES and DEBOUNCE per consumer batch instead of per event (the keep-all case runs at about 350 events/s).
 - Restrict SMTP hosts (today any admin-configured host is dialled from inside the network).
 - Take the rules lock per project instead of globally.
+- The ticker's heal sweep scans every active enrollment once a minute (about 8 s at 100,000 in the local load run, delaying that tick) and heals at most 200 enrollments per run. Restrict it to one replica (`pg_try_advisory_lock`) or to recently finished steps.
+- Results: inactivity rules always end `exhausted`, so the dashboard shows no conversion for them; enrollments that ended before migration 0005 have a null end reason and count as not converted.
 
 ## Left to the builder
 

@@ -33,7 +33,7 @@ function schemaBlock(source: string): string {
   if (start === -1 || end === -1) {
     throw new Error('schema block markers not found');
   }
-  return source.slice(start, end + BLOCK_END.length).replace(/s+/g, ' ');
+  return source.slice(start, end + BLOCK_END.length).replace(/\s+/g, ' ');
 }
 
 function validRule(): RuleDefinition {

@@ -19,14 +19,15 @@ const percent = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
-const COLUMNS: { key: keyof RuleResult; label: string }[] = [
-  { key: 'enrolled', label: 'Enrolled' },
-  { key: 'nudged', label: 'Nudged' },
-  { key: 'sent', label: 'Sent' },
-  { key: 'completedAfterSend', label: 'Completed after send' },
-  { key: 'skipped', label: 'Skipped' },
-  { key: 'failed', label: 'Failed' },
-];
+const COLUMNS: { key: Exclude<keyof RuleResult, 'goalKind'>; label: string }[] =
+  [
+    { key: 'enrolled', label: 'Enrolled' },
+    { key: 'nudged', label: 'Nudged' },
+    { key: 'sent', label: 'Sent' },
+    { key: 'completedAfterSend', label: 'Completed after send' },
+    { key: 'skipped', label: 'Skipped' },
+    { key: 'failed', label: 'Failed' },
+  ];
 
 export function ResultsPage() {
   const nudgeFetch = useNudgeFetch();
@@ -64,7 +65,10 @@ export function ResultsPage() {
           "Completed after send" counts journeys that reached the goal while
           they were running, after at least one nudge was sent. A goal reached
           after the final step, or by a journey still running, is not counted,
-          and a count does not prove the nudge caused the goal.
+          and a count does not prove the nudge caused the goal. Rules with an
+          inactivity goal have no goal event, so their conversion shows a dash.
+          Journeys that ended before the plugin recorded end reasons count as
+          not converted.
         </TableCaption>
         <TableHeader>
           <TableRow>
@@ -87,7 +91,9 @@ export function ResultsPage() {
                 </TableCell>
               ))}
               <TableCell className="text-right tabular-nums">
-                {percent.format(result.conversionRate)}
+                {result.goalKind === 'inactivity'
+                  ? '—'
+                  : percent.format(result.conversionRate)}
               </TableCell>
             </TableRow>
           ))}

@@ -161,7 +161,7 @@ const CANCEL_SQL = `
 // their steps from the steps primary key; cost is linear in the project's enrollments.
 // Only a goal counts as a conversion: a sequence that ran out of steps also ends 'completed'.
 const RESULTS_SQL = `
-  SELECT r.id::text AS rule_id, r.name,
+  SELECT r.id::text AS rule_id, r.name, r.definition->'goal'->>'kind' AS goal_kind,
     count(e.id)::int AS enrolled,
     count(e.id) FILTER (WHERE s.sent > 0)::int AS nudged,
     count(e.id) FILTER (WHERE s.sent > 0 AND e.end_reason = 'goal')::int AS completed_after_send,
@@ -183,6 +183,7 @@ const RESULTS_SQL = `
 interface ResultRow {
   rule_id: string;
   name: string;
+  goal_kind: string | null;
   enrolled: number;
   nudged: number;
   completed_after_send: number;
@@ -593,6 +594,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
           results: rows.map((row) => ({
             ruleId: row.rule_id,
             name: row.name,
+            goalKind: row.goal_kind,
             enrolled: row.enrolled,
             nudged: row.nudged,
             sent: row.sent,

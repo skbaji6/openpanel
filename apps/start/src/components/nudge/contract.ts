@@ -102,6 +102,8 @@ export interface ChannelConfigResponse {
 export interface RuleResult {
   ruleId: string;
   name: string;
+  // Inactivity rules end only by running out of steps, so conversion is not measured for them.
+  goalKind: string | null;
   enrolled: number;
   nudged: number;
   sent: number;

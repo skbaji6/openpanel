@@ -906,6 +906,7 @@ describe('dashboard routes', () => {
     expect(byRule.get(ruleId)).toEqual({
       ruleId,
       name: 'r',
+      goalKind: 'event',
       enrolled: 5,
       nudged: 3,
       sent: 4,
@@ -917,6 +918,7 @@ describe('dashboard routes', () => {
     expect(byRule.get(idle)).toEqual({
       ruleId: idle,
       name: 'r',
+      goalKind: 'event',
       enrolled: 0,
       nudged: 0,
       sent: 0,

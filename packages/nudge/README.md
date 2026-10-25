@@ -101,6 +101,11 @@ The plugin only adds files (see `AGENTS.md`, "Fork discipline"), so an upstream 
 
 Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --name-status <upstream>..HEAD` shows only added files besides those.
 
+### Plugin upgrade notes
+
+- Migration 0005 adds `nudge.enrollments.end_reason`. Journeys that ended before it have no end reason, so after the upgrade they count as not converted: "Completed after send" and conversion start low and only count journeys that end afterwards.
+- Migration 0006 builds an index on `nudge.events (event_time)` inside the startup migration. It locks writes to `nudge.events` while it builds, so on a large table expect the first start to take longer.
+
 ## End-to-end check
 
 `scripts/e2e.ts` proves the whole path on a running stack: it creates an active rule through the worker's dashboard API (trigger `add_to_cart`, goal `purchase`, one webhook step at +10 s), points the project's webhook channel at a local receiver, sends `add_to_cart` for a fresh profile through `POST $API_URL/track`, and expects exactly one delivery whose `x-nudge-signature` verifies against the channel secret. Then it sends `add_to_cart` and, a second later, `purchase` for another profile and expects no delivery. It prints `PASS delivered once`, `PASS signature verifies` and `PASS cancelled by goal`, and exits non-zero on any failure.
@@ -132,18 +137,25 @@ NUDGE_URL=http://localhost:4100 NUDGE_PROXY_SECRET=... API_URL=$API_URL \
 - **Capacity.** One local run of `scripts/load.ts` (Postgres 14 and Redis 7 in Docker on a Windows laptop) measured about 2,000 events/s per replica when 95% of events are pre-filtered out, and about 350 events/s for a project with an active inactivity rule, where every identified event is written (see "Event pre-filter trade-off"). The numbers are indicative, not guarantees. Plan replicas >= topic events/s / 2,000, or / 350 for the share of traffic from projects with an inactivity rule, and never more replicas than the topic has partitions (extra replicas idle on the consumer side). One replica's ticker sends a 200-step batch per tick; see `scripts/load.ts` output for the current per-tick time.
 - **Lag gate.** Every 10 s the worker writes the group's total lag to `nudge.consumer_state`. The ticker sends nothing while that lag is above `NUDGE_MAX_LAG` or the value is older than 60 s, so a backlog never produces nudges whose goal events are still unread. The gate pauses sending; it does not shed or drop work: due steps wait and go out once the consumer catches up. While it is closed the worker logs `sending paused` at most once a minute with the lag, the threshold and the state's age.
 - **Outage longer than topic retention.** If the worker is down longer than the topic keeps messages, the consumer group's offsets point at deleted data and it restarts at the latest offset, so lag drops to 0 and the gate reopens, although the goal events of that window were never read. Steps that come due then can nudge people who already reached the goal. Before restarting after such an outage, pause the affected rules (or accept that goal events from the gap were lost).
-- **Event retention.** Once a day each replica deletes `nudge.events` rows older than `NUDGE_EVENT_RETENTION_DAYS`, in chunks of 10,000, except events a live enrollment may still read (at or after an active enrollment's trigger for that profile).
-- **History retention is not implemented.** `nudge.enrollments` (with each rule snapshot) and `nudge.steps` grow without bound. Purge finished journeys by hand when needed, for example older than 180 days:
+- **Event retention.** Every hour each replica deletes `nudge.events` rows older than `NUDGE_EVENT_RETENTION_DAYS`, in chunks of 10,000 with a short pause between them, until nothing old is left or the run has used 10 minutes; the next hourly run continues where it stopped. Events a live enrollment may still read (at or after an active enrollment's trigger for that profile) are kept until that enrollment ends. Old rows are found through `events_event_time_idx` (migration 0006).
+- **Heal sweep.** Once a minute each replica's ticker looks for enrollments whose last step is final but whose completion write failed, and completes up to 200 of them. Its cost grows with the number of active enrollments: about 7-8 s at 100,000 in the local load run, which delays that one tick. Follow-ups: run it on one replica only (`pg_try_advisory_lock`), or look only at recently finished steps.
+- **History retention is not implemented.** `nudge.enrollments` (with each rule snapshot) and `nudge.steps` grow without bound. Purge finished journeys by hand when needed, for example older than 180 days, with this one statement (add `AND e.project_id = '...'` to limit it to one project):
 
   ```sql
-  DELETE FROM nudge.steps s USING nudge.enrollments e
-  WHERE s.enrollment_id = e.id AND e.status IN ('completed', 'cancelled')
-    AND e.created_at < now() - interval '180 days';
-  DELETE FROM nudge.enrollments
-  WHERE status IN ('completed', 'cancelled') AND created_at < now() - interval '180 days';
+  WITH gone AS (
+    DELETE FROM nudge.enrollments e
+    WHERE e.status IN ('completed', 'cancelled')
+      AND e.created_at < now() - interval '180 days'
+      AND (e.status = 'cancelled'
+           OR NOT EXISTS (SELECT 1 FROM nudge.rules r
+                          WHERE r.id = e.rule_id
+                            AND (r.definition->'reentry'->>'enabled')::boolean IS NOT TRUE))
+    RETURNING e.id
+  )
+  DELETE FROM nudge.steps WHERE enrollment_id IN (SELECT id FROM gone);
   ```
 
-  This also removes them from the Results screen.
+  Completed journeys of rules with re-entry disabled are kept on purpose: that completed row is what stops the rule from enrolling the same person again, so deleting it would nudge them a second time. Keep the age above 90 days, the longest re-entry cooldown, so a purge never shortens a cooldown. If you later turn re-entry off on a rule, completions purged while it was on no longer block re-enrollment. Purged journeys also disappear from the Results screen. `src/engine/history-purge.test.ts` runs this exact block.
 - **Revoking an API key.** There is no revoke endpoint yet: `DELETE FROM nudge.api_keys WHERE id = '<key id>';` (the id is the part of the key before the dot). Each replica caches a valid key for up to 5 minutes, so a revoked key keeps working for at most that long; restart the replicas to cut it off at once.
 - **Push opt-out.** Unsubscribe links exist for email only; push has no opt-out path in the plugin. Suppress push for a user in your own backend, or delete their device tokens (`DELETE /nudge/devices`).
 - **SMTP host.** The email channel's host is set by organization admins in the dashboard, and the worker connects to it from inside your network, so treat that setting as trusted-admin-only (an admin could point it at an internal address). With `secure: false` the connection starts in plain text and upgrades only if the server offers STARTTLS; against a server without STARTTLS the SMTP credentials go over the wire unencrypted.
