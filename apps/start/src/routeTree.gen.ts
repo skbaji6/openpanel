@@ -20,6 +20,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as WidgetRealtimeRouteImport } from './routes/widget/realtime'
 import { Route as WidgetCounterRouteImport } from './routes/widget/counter'
 import { Route as WidgetBadgeRouteImport } from './routes/widget/badge'
+import { Route as NudgeUnsubscribeRouteImport } from './routes/nudge.unsubscribe'
+import { Route as NudgeApiSplatRouteImport } from './routes/nudge-api.$'
 import { Route as ApiHealthcheckRouteImport } from './routes/api/healthcheck'
 import { Route as ApiConfigRouteImport } from './routes/api/config'
 import { Route as PublicOnboardingRouteImport } from './routes/_public.onboarding'
@@ -32,7 +34,6 @@ import { Route as AppOrganizationIdIndexRouteImport } from './routes/_app.$organ
 import { Route as ShareReportShareIdRouteImport } from './routes/share.report.$shareId'
 import { Route as ShareOverviewShareIdRouteImport } from './routes/share.overview.$shareId'
 import { Route as ShareDashboardShareIdRouteImport } from './routes/share.dashboard.$shareId'
-import { Route as ApiNudgeSplatRouteImport } from './routes/api/nudge.$'
 import { Route as StepsOnboardingProjectRouteImport } from './routes/_steps.onboarding.project'
 import { Route as AppOrganizationIdSettingsRouteImport } from './routes/_app.$organizationId.settings'
 import { Route as AppOrganizationIdBillingRouteImport } from './routes/_app.$organizationId.billing'
@@ -182,6 +183,16 @@ const WidgetBadgeRoute = WidgetBadgeRouteImport.update({
   path: '/widget/badge',
   getParentRoute: () => rootRouteImport,
 } as any)
+const NudgeUnsubscribeRoute = NudgeUnsubscribeRouteImport.update({
+  id: '/nudge/unsubscribe',
+  path: '/nudge/unsubscribe',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NudgeApiSplatRoute = NudgeApiSplatRouteImport.update({
+  id: '/nudge-api/$',
+  path: '/nudge-api/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiHealthcheckRoute = ApiHealthcheckRouteImport.update({
   id: '/api/healthcheck',
   path: '/api/healthcheck',
@@ -252,11 +263,6 @@ const ShareOverviewShareIdRoute = ShareOverviewShareIdRouteImport.update({
 const ShareDashboardShareIdRoute = ShareDashboardShareIdRouteImport.update({
   id: '/share/dashboard/$shareId',
   path: '/share/dashboard/$shareId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiNudgeSplatRoute = ApiNudgeSplatRouteImport.update({
-  id: '/api/nudge/$',
-  path: '/api/nudge/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StepsOnboardingProjectRoute = StepsOnboardingProjectRouteImport.update({
@@ -751,6 +757,8 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof PublicOnboardingRoute
   '/api/config': typeof ApiConfigRoute
   '/api/healthcheck': typeof ApiHealthcheckRoute
+  '/nudge-api/$': typeof NudgeApiSplatRoute
+  '/nudge/unsubscribe': typeof NudgeUnsubscribeRoute
   '/widget/badge': typeof WidgetBadgeRoute
   '/widget/counter': typeof WidgetCounterRoute
   '/widget/realtime': typeof WidgetRealtimeRoute
@@ -758,7 +766,6 @@ export interface FileRoutesByFullPath {
   '/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/$organizationId/settings': typeof AppOrganizationIdSettingsRoute
   '/onboarding/project': typeof StepsOnboardingProjectRoute
-  '/api/nudge/$': typeof ApiNudgeSplatRoute
   '/share/dashboard/$shareId': typeof ShareDashboardShareIdRoute
   '/share/overview/$shareId': typeof ShareOverviewShareIdRoute
   '/share/report/$shareId': typeof ShareReportShareIdRoute
@@ -843,13 +850,14 @@ export interface FileRoutesByTo {
   '/onboarding': typeof PublicOnboardingRoute
   '/api/config': typeof ApiConfigRoute
   '/api/healthcheck': typeof ApiHealthcheckRoute
+  '/nudge-api/$': typeof NudgeApiSplatRoute
+  '/nudge/unsubscribe': typeof NudgeUnsubscribeRoute
   '/widget/badge': typeof WidgetBadgeRoute
   '/widget/counter': typeof WidgetCounterRoute
   '/widget/realtime': typeof WidgetRealtimeRoute
   '/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/$organizationId/settings': typeof AppOrganizationIdSettingsRoute
   '/onboarding/project': typeof StepsOnboardingProjectRoute
-  '/api/nudge/$': typeof ApiNudgeSplatRoute
   '/share/dashboard/$shareId': typeof ShareDashboardShareIdRoute
   '/share/overview/$shareId': typeof ShareOverviewShareIdRoute
   '/share/report/$shareId': typeof ShareReportShareIdRoute
@@ -929,6 +937,8 @@ export interface FileRoutesById {
   '/_public/onboarding': typeof PublicOnboardingRoute
   '/api/config': typeof ApiConfigRoute
   '/api/healthcheck': typeof ApiHealthcheckRoute
+  '/nudge-api/$': typeof NudgeApiSplatRoute
+  '/nudge/unsubscribe': typeof NudgeUnsubscribeRoute
   '/widget/badge': typeof WidgetBadgeRoute
   '/widget/counter': typeof WidgetCounterRoute
   '/widget/realtime': typeof WidgetRealtimeRoute
@@ -936,7 +946,6 @@ export interface FileRoutesById {
   '/_app/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/_app/$organizationId/settings': typeof AppOrganizationIdSettingsRoute
   '/_steps/onboarding/project': typeof StepsOnboardingProjectRoute
-  '/api/nudge/$': typeof ApiNudgeSplatRoute
   '/share/dashboard/$shareId': typeof ShareDashboardShareIdRoute
   '/share/overview/$shareId': typeof ShareOverviewShareIdRoute
   '/share/report/$shareId': typeof ShareReportShareIdRoute
@@ -1035,6 +1044,8 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/api/config'
     | '/api/healthcheck'
+    | '/nudge-api/$'
+    | '/nudge/unsubscribe'
     | '/widget/badge'
     | '/widget/counter'
     | '/widget/realtime'
@@ -1042,7 +1053,6 @@ export interface FileRouteTypes {
     | '/$organizationId/billing'
     | '/$organizationId/settings'
     | '/onboarding/project'
-    | '/api/nudge/$'
     | '/share/dashboard/$shareId'
     | '/share/overview/$shareId'
     | '/share/report/$shareId'
@@ -1127,13 +1137,14 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/api/config'
     | '/api/healthcheck'
+    | '/nudge-api/$'
+    | '/nudge/unsubscribe'
     | '/widget/badge'
     | '/widget/counter'
     | '/widget/realtime'
     | '/$organizationId/billing'
     | '/$organizationId/settings'
     | '/onboarding/project'
-    | '/api/nudge/$'
     | '/share/dashboard/$shareId'
     | '/share/overview/$shareId'
     | '/share/report/$shareId'
@@ -1212,6 +1223,8 @@ export interface FileRouteTypes {
     | '/_public/onboarding'
     | '/api/config'
     | '/api/healthcheck'
+    | '/nudge-api/$'
+    | '/nudge/unsubscribe'
     | '/widget/badge'
     | '/widget/counter'
     | '/widget/realtime'
@@ -1219,7 +1232,6 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/billing'
     | '/_app/$organizationId/settings'
     | '/_steps/onboarding/project'
-    | '/api/nudge/$'
     | '/share/dashboard/$shareId'
     | '/share/overview/$shareId'
     | '/share/report/$shareId'
@@ -1315,10 +1327,11 @@ export interface RootRouteChildren {
   UnsubscribeRoute: typeof UnsubscribeRoute
   ApiConfigRoute: typeof ApiConfigRoute
   ApiHealthcheckRoute: typeof ApiHealthcheckRoute
+  NudgeApiSplatRoute: typeof NudgeApiSplatRoute
+  NudgeUnsubscribeRoute: typeof NudgeUnsubscribeRoute
   WidgetBadgeRoute: typeof WidgetBadgeRoute
   WidgetCounterRoute: typeof WidgetCounterRoute
   WidgetRealtimeRoute: typeof WidgetRealtimeRoute
-  ApiNudgeSplatRoute: typeof ApiNudgeSplatRoute
   ShareDashboardShareIdRoute: typeof ShareDashboardShareIdRoute
   ShareOverviewShareIdRoute: typeof ShareOverviewShareIdRoute
   ShareReportShareIdRoute: typeof ShareReportShareIdRoute
@@ -1387,6 +1400,20 @@ declare module '@tanstack/react-router' {
       path: '/widget/badge'
       fullPath: '/widget/badge'
       preLoaderRoute: typeof WidgetBadgeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/nudge/unsubscribe': {
+      id: '/nudge/unsubscribe'
+      path: '/nudge/unsubscribe'
+      fullPath: '/nudge/unsubscribe'
+      preLoaderRoute: typeof NudgeUnsubscribeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/nudge-api/$': {
+      id: '/nudge-api/$'
+      path: '/nudge-api/$'
+      fullPath: '/nudge-api/$'
+      preLoaderRoute: typeof NudgeApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/healthcheck': {
@@ -1485,13 +1512,6 @@ declare module '@tanstack/react-router' {
       path: '/share/dashboard/$shareId'
       fullPath: '/share/dashboard/$shareId'
       preLoaderRoute: typeof ShareDashboardShareIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/nudge/$': {
-      id: '/api/nudge/$'
-      path: '/api/nudge/$'
-      fullPath: '/api/nudge/$'
-      preLoaderRoute: typeof ApiNudgeSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_steps/onboarding/project': {
@@ -2652,10 +2672,11 @@ const rootRouteChildren: RootRouteChildren = {
   UnsubscribeRoute: UnsubscribeRoute,
   ApiConfigRoute: ApiConfigRoute,
   ApiHealthcheckRoute: ApiHealthcheckRoute,
+  NudgeApiSplatRoute: NudgeApiSplatRoute,
+  NudgeUnsubscribeRoute: NudgeUnsubscribeRoute,
   WidgetBadgeRoute: WidgetBadgeRoute,
   WidgetCounterRoute: WidgetCounterRoute,
   WidgetRealtimeRoute: WidgetRealtimeRoute,
-  ApiNudgeSplatRoute: ApiNudgeSplatRoute,
   ShareDashboardShareIdRoute: ShareDashboardShareIdRoute,
   ShareOverviewShareIdRoute: ShareOverviewShareIdRoute,
   ShareReportShareIdRoute: ShareReportShareIdRoute,

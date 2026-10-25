@@ -37,14 +37,19 @@ Failed API-key attempts and invalid unsubscribe tokens are limited to 30 per min
 
 ### Dashboard variables
 
-The dashboard's `/api/nudge/*` proxy is off (404) until both are set on the dashboard process:
+The dashboard serves two nudge paths, both outside `/api` because the stock Caddy and Coolify setups send every `/api*` request to op-api:
+
+- `/nudge-api/*`: the authenticated proxy the nudge pages call.
+- `/nudge/unsubscribe` (GET and POST): a public pass-through to the worker's unsubscribe page, so email links work on the dashboard's own origin.
+
+Both answer 404 until these are set on the dashboard process (the proxy needs both, the unsubscribe route needs `NUDGE_URL`):
 
 | Variable | Meaning |
 |---|---|
 | `NUDGE_URL` | Where the dashboard reaches the worker, e.g. `http://op-nudge:4100` |
 | `NUDGE_PROXY_SECRET` | Same value as the worker's |
 
-Roles: every dashboard call is checked against core first. Organization owners and admins can change rules, channels, settings, reference sets and API keys, and read channel configuration; members can read rules, starter rules, settings, results and reference sets, and preview templates. Unsubscribe, contact and device sync are never reachable through the dashboard.
+Roles: every `/nudge-api/*` call is checked against core first. Organization owners and admins can change rules, channels, settings, reference sets and API keys, and read channel configuration; members can read rules, starter rules, settings, results and reference sets, and preview templates. Contact and device sync are never reachable through the dashboard. The unsubscribe route forwards only the query string, a POST body of at most 64 KiB, `content-type` and `x-forwarded-for` (verbatim), never the proxy secret, and returns only the worker's status, body, `content-type`, `content-security-policy` and `cache-control`.
 
 ## Deploy
 
@@ -54,33 +59,38 @@ The worker image is `packages/nudge/Dockerfile`, built from the repository root:
 docker build -f packages/nudge/Dockerfile -t openpanel-nudge:local .
 ```
 
-It runs `bun src/worker.ts` as the non-root `bun` user, applies the plugin's own migrations (schema `nudge`) at start, serves `/nudge/*` on `NUDGE_PORT` and has a `HEALTHCHECK` on `GET /nudge/health`. No secret is baked in; Prisma's client is generated with a placeholder URL. Build from a clean checkout: the root `.dockerignore` (which the plugin may not edit) does not exclude `.worktrees/`, so building from a main checkout that has worktrees sends all of them as build context.
+It runs `bun src/worker.ts` as the non-root `bun` user, applies the plugin's own migrations (schema `nudge`, under a Postgres advisory lock so replicas can boot together) at start, serves `/nudge/*` on `NUDGE_PORT` and has a `HEALTHCHECK` on `GET /nudge/health`. No secret is baked in; Prisma's client is generated with a placeholder URL. Build from a clean checkout: the root `.dockerignore` (which the plugin may not edit) does not exclude `.worktrees/`, so building from a main checkout that has worktrees sends all of them as build context.
 
 `docker-compose.nudge.yml` (repository root) is an override for the self-hosted stack, the `docker-compose.yml` that `openpanel init` renders from `self-hosting/docker-compose.template.yml`:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.nudge.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.nudge.yml up -d --build
 ```
 
-`openpanel init` does not know about it: copy the file next to your `docker-compose.yml` and add `-f docker-compose.nudge.yml` to every compose command, upgrades included. It adds the `op-nudge` service (port 4100 on the compose network only, not published; waits for healthy `op-db`, `op-kv` and `op-rp`) and merges `NUDGE_URL=http://op-nudge:4100` and `NUDGE_PROXY_SECRET` into `op-dashboard`. The service name `op-dashboard` is the self-hosting one; the repository's development `docker-compose.yml` has no dashboard service and no healthchecks, so in development run `bun run --filter @openpanel/nudge start` instead of the override.
+`openpanel init` does not know about it: copy the file next to your `docker-compose.yml` and add `-f docker-compose.nudge.yml` to every compose command, upgrades included. It:
 
-Values come from the install's `.env`, which already has `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` and `KAFKA_BROKERS`. Add `NUDGE_PROXY_SECRET` (`openssl rand -hex 32`) and `NUDGE_PUBLIC_URL`; compose refuses to start without them. Optional: `NUDGE_IMAGE` (default `openpanel-nudge:local`) and `NUDGE_BUILD_CONTEXT` (default `.`, set it to a checkout of this repository when building from an install directory).
+- adds `op-nudge` (port 4100 on the compose network only, not published; waits for healthy `op-db`, `op-kv` and `op-rp`);
+- **replaces the dashboard image with one built from this fork** (`apps/start/Dockerfile`). The stock `lindesvard/openpanel-dashboard` image has no nudge pages, no `/nudge-api/*` proxy and no `/nudge/unsubscribe` route, so with it the feature is invisible and every unsubscribe link 404s. Build the dashboard from the same upstream release your `op-api` image runs, so the two stay compatible;
+- merges `NUDGE_URL=http://op-nudge:4100` and `NUDGE_PROXY_SECRET` into `op-dashboard`.
 
-The shipped Caddyfile needs two additions, which the plugin cannot make for you (`self-hosting/caddy/` is upstream's):
+Both built services use `pull_policy: build`, so compose builds them instead of trying to pull a local tag. The service names are the `openpanel init` ones. `self-hosting/coolify.yml` names its services differently (`opdashboard`, `opdb`, ...), so on Coolify add the equivalent service and dashboard variables by hand. The repository's development `docker-compose.yml` has no dashboard service and no healthchecks, so in development run `bun run --filter @openpanel/nudge start` instead of the override.
+
+Values come from the install's `.env`, which already has `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` and `KAFKA_BROKERS`. Add:
+
+- `NUDGE_PROXY_SECRET` (`openssl rand -hex 32`); compose refuses to start without it.
+- `NUDGE_PUBLIC_URL`: the public dashboard origin (the same as `DASHBOARD_URL`), so links in emails hit the dashboard's `/nudge/unsubscribe`; compose refuses to start without it.
+- Optional: `NUDGE_IMAGE` (default `openpanel-nudge:local`), `NUDGE_DASHBOARD_IMAGE` (default `openpanel-dashboard-nudge:local`), `NUDGE_BUILD_CONTEXT` (default `.`; set it to a checkout of this repository when running compose from an install directory).
+
+No change to the stock Caddy (or Coolify) configuration is needed: both nudge paths are served by the dashboard. Unsubscribe requests travel client -> edge proxy -> dashboard -> worker. The edge proxy sets `X-Forwarded-For` to the client address and the dashboard passes it on unchanged, so the override sets `NUDGE_TRUST_PROXY=true` and the worker rate-limits by the real client. That is only sound while `op-nudge` stays unpublished and the dashboard is reached through the edge proxy: a client that can reach the dashboard (or the worker) directly can choose its own `X-Forwarded-For` and so its own rate-limit bucket. With `false`, every unsubscribe caller shares the dashboard's address and therefore one limit for invalid tokens (valid links are never limited).
+
+Optional, direct to the worker instead of through the dashboard: only if you want the worker's sync endpoints (`/nudge/contacts/*`, `/nudge/devices`) reachable from outside the compose network, route them in Caddy yourself, before `handle_path /api*`:
 
 ```caddyfile
-# Before `handle_path /api*`, which would otherwise send the dashboard's proxy to op-api.
-handle /api/nudge/* {
-    reverse_proxy op-dashboard:3000
-}
-# Unsubscribe links (<NUDGE_PUBLIC_URL>/nudge/unsubscribe); add /nudge/contacts* and /nudge/devices*
-# too if your backend syncs contacts or devices from outside the compose network.
-handle /nudge/unsubscribe* {
+@nudge_sync path /nudge/contacts/* /nudge/devices
+handle @nudge_sync {
     reverse_proxy op-nudge:4100
 }
 ```
-
-With `NUDGE_PUBLIC_URL` set to your dashboard domain and Caddy as the only way in, set `NUDGE_TRUST_PROXY=true` (Caddy sets `X-Forwarded-For` to the client address).
 
 ## Upgrading from upstream
 
@@ -109,8 +119,10 @@ NUDGE_URL=http://localhost:4100 NUDGE_PROXY_SECRET=... API_URL=$API_URL \
 - Project and client ids come from `.seed.json` (a project whose client may send `profileId`, e.g. `acme-shop`).
 - `NUDGE_GRACE_SECONDS` must be at least 1 (the config rejects 0).
 - The receiver's host (`E2E_RECEIVER_HOST`, default `localhost`) must be in the worker's `NUDGE_WEBHOOK_ALLOW_HOSTS`, because plain http is only allowed for listed hosts.
+- It assumes the project has no quiet hours and no frequency caps in its nudge settings; either can hold the delivery back past the timeout.
 - The script refuses a project that already has a webhook channel, because there is no API to restore it; use a dedicated project or set `E2E_ALLOW_WEBHOOK_OVERWRITE=true`. Afterwards the channel stays configured, pointing at the stopped receiver.
 - It deletes its rule through the API and, when `DATABASE_URL` is set, the rule's enrollments and steps and the e2e profiles' rows in `nudge.events`. The two `nudge-e2e-*` profiles stay in core's ClickHouse.
+- A failed cleanup step is reported and makes the run exit non-zero, but never hides an earlier `FAIL`.
 - It never prints the proxy secret, client secret or webhook secret.
 
 ## Operations

@@ -1,4 +1,4 @@
-const PROXY_PREFIX = '/api/nudge/';
+const PROXY_PREFIX = '/nudge-api/';
 const MAX_BODY_BYTES = 1024 * 1024;
 const ACCESS_CACHE_TTL_MS = 30_000;
 const ACCESS_CACHE_MAX = 1000;
@@ -54,14 +54,14 @@ type CoreAnswer =
   | { status: 'denied' }
   | { status: 'error' };
 
-function isTimeout(error: unknown): boolean {
+export function isTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
     (error.name === 'TimeoutError' || error.name === 'AbortError')
   );
 }
 
-class ProxyError extends Error {
+export class ProxyError extends Error {
   readonly status: number;
 
   constructor(status: number, code: string) {
@@ -70,7 +70,7 @@ class ProxyError extends Error {
   }
 }
 
-function errorResponse(status: number, code: string): Response {
+export function errorResponse(status: number, code: string): Response {
   return Response.json(
     { error: code },
     { status, headers: { 'cache-control': 'no-store' } }
@@ -144,11 +144,14 @@ function assertSameOrigin(request: Request, env: ProxyEnv): void {
   }
 }
 
-async function readCappedBody(request: Request): Promise<ArrayBuffer | null> {
+export async function readCappedBody(
+  request: Request,
+  maxBytes = MAX_BODY_BYTES
+): Promise<ArrayBuffer | null> {
   if (!request.body) {
     return null;
   }
-  if (Number(request.headers.get('content-length')) > MAX_BODY_BYTES) {
+  if (Number(request.headers.get('content-length')) > maxBytes) {
     throw new ProxyError(413, 'payload_too_large');
   }
   const reader = request.body.getReader();
@@ -160,7 +163,7 @@ async function readCappedBody(request: Request): Promise<ArrayBuffer | null> {
       break;
     }
     total += value.byteLength;
-    if (total > MAX_BODY_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel();
       throw new ProxyError(413, 'payload_too_large');
     }

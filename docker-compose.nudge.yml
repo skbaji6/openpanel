@@ -22,6 +22,8 @@ services:
     build:
       context: ${NUDGE_BUILD_CONTEXT:-.}
       dockerfile: packages/nudge/Dockerfile
+    # Never pull: this image only exists where it was built.
+    pull_policy: build
     restart: always
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
@@ -29,14 +31,14 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       # Shared with op-dashboard below; generate with `openssl rand -hex 32`.
       NUDGE_PROXY_SECRET: ${NUDGE_PROXY_SECRET:?NUDGE_PROXY_SECRET is required}
-      # Public base URL for unsubscribe links (<NUDGE_PUBLIC_URL>/nudge/unsubscribe); your reverse proxy
-      # must route /nudge/unsubscribe to op-nudge:4100 (README, "Deploy").
+      # The public dashboard origin (DASHBOARD_URL): links go to <origin>/nudge/unsubscribe, which the
+      # dashboard forwards to op-nudge.
       NUDGE_PUBLIC_URL: ${NUDGE_PUBLIC_URL:?NUDGE_PUBLIC_URL is required}
       NUDGE_PORT: 4100
-      # Set to true only when op-nudge is reachable solely through ONE trusted reverse proxy that appends
-      # the client address to X-Forwarded-For (for example Caddy routing /nudge/unsubscribe). Otherwise
-      # every caller could pick its own IP for the per-IP rate limits.
-      NUDGE_TRUST_PROXY: ${NUDGE_TRUST_PROXY:-false}
+      # true: the client IP is the rightmost X-Forwarded-For entry, which the edge proxy (op-proxy) sets and the
+      # dashboard passes on verbatim. Correct only while op-nudge stays unpublished and the dashboard is reached
+      # through that proxy; with false every unsubscribe caller shares the dashboard's address for rate limits.
+      NUDGE_TRUST_PROXY: ${NUDGE_TRUST_PROXY:-true}
       NUDGE_GRACE_SECONDS: ${NUDGE_GRACE_SECONDS:-300}
       NUDGE_MAX_LAG: ${NUDGE_MAX_LAG:-1000}
       NUDGE_TICK_MS: ${NUDGE_TICK_MS:-5000}
@@ -73,8 +75,14 @@ services:
         max-size: "20m"
         max-file: "3"
 
-  # Merged into the existing dashboard service: turns on its /api/nudge/* proxy.
+  # Merged into the existing dashboard service. The stock lindesvard/openpanel-dashboard image has no nudge
+  # pages, proxy (/nudge-api/*) or unsubscribe route (/nudge/unsubscribe), so the dashboard is built from this fork.
   op-dashboard:
+    image: ${NUDGE_DASHBOARD_IMAGE:-openpanel-dashboard-nudge:local}
+    build:
+      context: ${NUDGE_BUILD_CONTEXT:-.}
+      dockerfile: apps/start/Dockerfile
+    pull_policy: build
     environment:
       NUDGE_URL: http://op-nudge:4100
       NUDGE_PROXY_SECRET: ${NUDGE_PROXY_SECRET:?NUDGE_PROXY_SECRET is required}

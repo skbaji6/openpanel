@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import type { ApiIssue } from './contract';
 import { useAppParams } from '@/hooks/use-app-params';
 
-const NUDGE_PROXY_PATH = '/api/nudge';
+const NUDGE_PROXY_PATH = '/nudge-api';
 
 export class NudgeApiError extends Error {
   readonly status: number;

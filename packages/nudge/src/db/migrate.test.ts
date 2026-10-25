@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { sql } from './client';
 import { migrate } from './migrate';
 import { resetNudgeTables } from './test-helpers';
@@ -21,6 +23,7 @@ const TABLES = [
 const PENDING_DUE_INDEX = 'steps_pending_due_idx';
 const EVENTS_LOOKUP_INDEX = 'events_lookup_idx';
 const RULE_ID = '00000000-0000-0000-0000-000000000001';
+const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', 'migrations');
 
 async function insertEnrollment(status: string) {
   await sql.$executeRawUnsafe(
@@ -109,5 +112,20 @@ describe('nudge schema', () => {
       return rows.map((r) => r['QUERY PLAN']).join('\n');
     });
     expect(plan).toContain(EVENTS_LOOKUP_INDEX);
+  });
+});
+
+describe('nudge migrations under concurrency', () => {
+  it('two replicas migrating a fresh schema at once apply every file exactly once', async () => {
+    await sql.$executeRawUnsafe('DROP SCHEMA IF EXISTS nudge CASCADE');
+    const runs = await Promise.all([migrate(), migrate()]);
+    const files = (await readdir(MIGRATIONS_DIR))
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
+    expect(runs.flat().sort()).toEqual(files);
+    const [row] = await sql.$queryRawUnsafe<{ count: number }[]>(
+      'SELECT count(*)::int AS count FROM nudge.schema_migrations'
+    );
+    expect(row?.count).toBe(files.length);
   });
 });

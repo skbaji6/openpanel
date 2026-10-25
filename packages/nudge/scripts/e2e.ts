@@ -96,14 +96,29 @@ async function track(name: string, profileId: string) {
   }
 }
 
-function startReceiver(deliveries: Delivery[]) {
+function parseObject(rawBody: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(rawBody);
+    const isObject =
+      typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+    return isObject ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function startReceiver(deliveries: Delivery[], malformed: string[]) {
   const isLocal = env.receiverHost === 'localhost';
   return Bun.serve({
     port: 0,
     hostname: isLocal ? '127.0.0.1' : '0.0.0.0',
     async fetch(req) {
       const rawBody = await req.text();
-      const parsed = JSON.parse(rawBody) as Record<string, unknown>;
+      const parsed = parseObject(rawBody);
+      if (!parsed) {
+        malformed.push(`${req.method} ${new URL(req.url).pathname}`);
+        return new Response('body is not a JSON object', { status: 400 });
+      }
       deliveries.push({
         timestamp: req.headers.get('x-nudge-timestamp') ?? '',
         signature: req.headers.get('x-nudge-signature') ?? '',
@@ -162,6 +177,39 @@ async function deleteNudgeRows(ruleId: string, profileIds: string[]) {
   }
 }
 
+function redact(message: string): string {
+  const secrets = [env.databaseUrl, env.proxySecret, env.clientSecret];
+  let redacted = message;
+  for (const secret of secrets) {
+    if (secret) {
+      redacted = redacted.replaceAll(secret, '[redacted]');
+    }
+  }
+  return redacted;
+}
+
+function messageOf(error: unknown): string {
+  return redact(error instanceof Error ? error.message : String(error));
+}
+
+// Never throws: every step runs even if an earlier one failed, and a failed assertion stays the reported error.
+async function cleanUp(ruleId: string, profileIds: string[]): Promise<boolean> {
+  const steps: [string, () => Promise<unknown>][] = [
+    ['delete rule', () => nudge('DELETE', `rules/${ruleId}`)],
+    ['delete nudge rows', () => deleteNudgeRows(ruleId, profileIds)],
+  ];
+  let clean = true;
+  for (const [label, step] of steps) {
+    try {
+      await step();
+    } catch (error) {
+      clean = false;
+      console.error(`cleanup: ${label} failed: ${messageOf(error)}`);
+    }
+  }
+  return clean;
+}
+
 async function main() {
   const existing = await nudge('GET', 'channels/webhook');
   if (existing.configured === true && !env.allowWebhookOverwrite) {
@@ -171,12 +219,19 @@ async function main() {
   }
 
   const deliveries: Delivery[] = [];
-  const receiver = startReceiver(deliveries);
+  const malformed: string[] = [];
+  const receiver = startReceiver(deliveries, malformed);
+  const assertWellFormed = () =>
+    assert(
+      malformed.length === 0,
+      `receiver got bodies that are not JSON objects: ${malformed.join(', ')}`
+    );
   const webhookSecret = randomBytes(24).toString('hex');
   const runId = randomUUID().slice(0, 8);
   const deliveredProfile = `nudge-e2e-${runId}-a`;
   const cancelledProfile = `nudge-e2e-${runId}-b`;
   let ruleId: string | undefined;
+  let cleanedUp = true;
 
   try {
     await nudge('PUT', 'channels/webhook', {
@@ -211,6 +266,7 @@ async function main() {
       () => forProfile(deliveredProfile).length > 0,
       DELIVERY_TIMEOUT_MS
     );
+    assertWellFormed();
     assert(delivered, `no delivery within ${DELIVERY_TIMEOUT_MS} ms`);
     await sleep(DUPLICATE_WINDOW_MS);
     const [delivery, ...duplicates] = forProfile(deliveredProfile);
@@ -237,6 +293,7 @@ async function main() {
       ruleResult?.enrolled === 2,
       `expected 2 enrollments, got ${ruleResult?.enrolled}`
     );
+    assertWellFormed();
     const cancelledDeliveries = forProfile(cancelledProfile).length;
     assert(
       cancelledDeliveries === 0,
@@ -246,9 +303,11 @@ async function main() {
   } finally {
     receiver.stop(true);
     if (ruleId) {
-      await nudge('DELETE', `rules/${ruleId}`);
-      await deleteNudgeRows(ruleId, [deliveredProfile, cancelledProfile]);
+      cleanedUp = await cleanUp(ruleId, [deliveredProfile, cancelledProfile]);
     }
+  }
+  if (!cleanedUp) {
+    throw new Error('cleanup failed; see the messages above');
   }
 }
 
@@ -256,6 +315,6 @@ try {
   await main();
   process.exit(0);
 } catch (error) {
-  console.error(error instanceof Error ? error.message : 'e2e failed');
+  console.error(messageOf(error));
   process.exit(1);
 }

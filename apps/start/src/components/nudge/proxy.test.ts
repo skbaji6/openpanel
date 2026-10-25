@@ -99,7 +99,7 @@ function request(
   }: { method?: string; headers?: Record<string, string>; body?: string } = {}
 ) {
   const mutating = method !== 'GET';
-  return new Request(`${DASHBOARD}/api/nudge/${path}`, {
+  return new Request(`${DASHBOARD}/nudge-api/${path}`, {
     method,
     body,
     headers: {

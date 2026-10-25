@@ -5,7 +5,8 @@ on:
     paths:
       - "packages/nudge/**"
       - "apps/start/src/components/nudge/**"
-      - "apps/start/src/routes/api/nudge.$.tsx"
+      - "apps/start/src/routes/**nudge**"
+      - "apps/start/src/components/sidebar-project-menu.tsx"
       - "docker-compose.nudge.yml"
       - ".github/workflows/nudge.yml"
 

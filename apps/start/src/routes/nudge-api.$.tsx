@@ -15,7 +15,7 @@ function handle({ request }: { request: Request }) {
   return proxy.handle(request);
 }
 
-export const Route = createFileRoute('/api/nudge/$')({
+export const Route = createFileRoute('/nudge-api/$')({
   server: {
     handlers: {
       GET: handle,
