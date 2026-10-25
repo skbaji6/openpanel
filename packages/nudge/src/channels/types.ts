@@ -22,8 +22,8 @@ export interface RenderedMessage {
 }
 
 export type SendResult =
-  | { ok: true }
-  | { ok: false; retryable: boolean; reason: string };
+  | { ok: true; invalidTokens?: string[] }
+  | { ok: false; retryable: boolean; reason: string; invalidTokens?: string[] };
 
 export interface SendOptions {
   idempotencyKey: string;
