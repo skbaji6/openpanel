@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import type SMTPTransport from 'nodemailer/lib/smtp-transport';
 import { z } from 'zod';
 import { SEND_TIMEOUT_MS, withSendTimeout } from './timeouts';
 import type { ChannelAdapter, SendResult } from './types';
@@ -33,9 +34,7 @@ export interface MailTransport {
 }
 
 interface EmailAdapterOptions {
-  createTransport?: (
-    options: Parameters<typeof nodemailer.createTransport>[0]
-  ) => MailTransport;
+  createTransport?: (options: SMTPTransport.Options) => MailTransport;
   timeoutMs?: number;
 }
 

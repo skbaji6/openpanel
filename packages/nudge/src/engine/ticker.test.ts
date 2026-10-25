@@ -497,6 +497,68 @@ describe('runTick', () => {
     expect(calls[0]?.msg.body).toBe('<Ada> & co');
   });
 
+  it('invalid tokens returned by the push adapter are deleted from devices', async () => {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+       VALUES ('t1', $1, $2, 'ios'), ('t2', $1, $2, 'android'),
+              ('t3', $1, 'other', 'ios'), ('t4', 'project-b', $2, 'ios')`,
+      PROJECT,
+      PROFILE
+    );
+    const { enrollmentId } = await enrollOne(
+      rule({
+        steps: [
+          { delaySeconds: HOUR, channel: 'push', template: { body: 'one' } },
+        ],
+      })
+    );
+    // t3 and t4 belong to another profile and project: a hostile adapter result must not reach them.
+    respond = async () => ({ ok: true, invalidTokens: ['t1', 't3', 't4'] });
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    const remaining = await sql.$queryRawUnsafe<{ token: string }[]>(
+      'SELECT token FROM nudge.devices ORDER BY token'
+    );
+    expect(remaining.map((row) => row.token)).toEqual(['t2', 't3', 't4']);
+    expect((await steps(enrollmentId))[0]?.status).toBe('sent');
+  });
+
+  it('a failing invalid-token deletion neither fails nor requeues a sent step', async () => {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+       VALUES ('t1', $1, $2, 'ios')`,
+      PROJECT,
+      PROFILE
+    );
+    const { enrollmentId } = await enrollOne(
+      rule({
+        steps: [
+          { delaySeconds: HOUR, channel: 'push', template: { body: 'one' } },
+        ],
+      })
+    );
+    respond = async () => ({ ok: true, invalidTokens: ['t1'] });
+    const failingDelete = new Proxy(sql, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (typeof value !== 'function') {
+          return value;
+        }
+        return (...args: unknown[]) =>
+          prop === '$executeRawUnsafe' &&
+          String(args[0]).includes('DELETE FROM nudge.devices')
+            ? Promise.reject(new Error('injected database failure'))
+            : value.apply(target, args);
+      },
+    });
+    expect(await tick(CFG, { sql: failingDelete })).toEqual({
+      ...ZERO,
+      sent: 1,
+    });
+    const [step] = await steps(enrollmentId);
+    expect(step?.status).toBe('sent');
+    expect(step?.attempt).toBe(1);
+  });
+
   it('quiet hours postpone instead of send', async () => {
     await setSettings(null, { start: '11:00', end: '13:00', timezone: 'UTC' });
     const { enrollmentId } = await enrollOne();

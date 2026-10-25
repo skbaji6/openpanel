@@ -1,4 +1,7 @@
+import { createEmailAdapter } from './email';
+import { createPushAdapter } from './push';
 import type { ChannelAdapter } from './types';
+import { createWebhookAdapter } from './webhook';
 
 const adapters = new Map<string, ChannelAdapter<unknown>>();
 
@@ -13,4 +16,15 @@ export function getAdapter(id: string): ChannelAdapter<unknown> {
     throw new Error(`no adapter registered for channel ${id}`);
   }
   return adapter;
+}
+
+// Called by the worker at startup; nothing registers at import time.
+export function registerDefaultAdapters(options: {
+  webhookAllowHosts: string[];
+}): void {
+  registerAdapter(
+    createWebhookAdapter({ allowHosts: options.webhookAllowHosts })
+  );
+  registerAdapter(createEmailAdapter());
+  registerAdapter(createPushAdapter());
 }

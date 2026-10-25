@@ -228,6 +228,11 @@ const UNFINISHED_COMPLETIONS_SQL = `
                     WHERE s.enrollment_id = e.id AND s.status IN ('pending', 'sending'))
   LIMIT $1::int`;
 
+// Params: project, profile, tokens. Scoped to the recipient so an adapter result cannot touch other profiles.
+const DELETE_INVALID_TOKENS_SQL = `
+  DELETE FROM nudge.devices
+  WHERE project_id = $1 AND profile_id = $2 AND token = ANY($3::text[])`;
+
 const CAP_LOCK_SQL = 'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))';
 
 // Params: project, profile, channel, window start, enrollment, step.
@@ -690,7 +695,40 @@ async function deliver(
       retryable: true,
       reason: error instanceof Error ? error.message : String(error),
     }));
-  return await recordSendResult(claim, step, sendResult, loaded.secrets);
+  // Marked first: pruning must not eat into the lease budget between the send and its mark.
+  const outcome = await recordSendResult(
+    claim,
+    step,
+    sendResult,
+    loaded.secrets
+  );
+  await pruneInvalidTokens(deps.sql, context, sendResult.invalidTokens);
+  return outcome;
+}
+
+// Best effort and never thrown: a throw would reach processClaim, which retries the already sent step.
+async function pruneInvalidTokens(
+  sql: Sql,
+  context: StepContext,
+  tokens: string[] | undefined
+): Promise<void> {
+  if (!tokens?.length) {
+    return;
+  }
+  try {
+    await sql.$executeRawUnsafe(
+      DELETE_INVALID_TOKENS_SQL,
+      context.project_id,
+      context.profile_id,
+      tokens
+    );
+  } catch (error) {
+    console.error(
+      LOG_PREFIX,
+      'pruning invalid device tokens:',
+      redactSecrets(error, tokens)
+    );
+  }
 }
 
 // After the adapter was called the step is never requeued because a mark failed: it stays
