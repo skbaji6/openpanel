@@ -7,11 +7,11 @@ import {
   it,
 } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { getRedisCache } from '@openpanel/redis';
+import { getRedisCache, type Redis } from '@openpanel/redis';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetNudgeTables } from '../db/test-helpers';
-import { createEngine } from '../engine/engine';
+import { createEngine, type Queryable } from '../engine/engine';
 import type { NormalizedEvent } from '../events/normalize';
 import type { RuleDefinition } from '../rules/rule.schema';
 import {
@@ -24,6 +24,7 @@ const NOW = new Date('2026-10-22T12:00:00.000Z');
 const PROJECT = 'project-a';
 const PROFILE = 'u1';
 const HOUR = 3600;
+const STALE_GAP_MS = 5;
 
 const engine = createEngine({ sql, now: () => NOW });
 
@@ -126,10 +127,88 @@ describe('redis interest set', () => {
     await insertRule(rule());
     const interest = createRedisInterestSet(getRedisCache(), { engine, sql });
     await interest.add([{ projectId: PROJECT, profileId: 'stale' }]);
+    // Adds in the same millisecond as the refresh start are kept on purpose.
+    await Bun.sleep(STALE_GAP_MS);
     await engine.handleEvents([event('purchase', 0)]);
     await interest.refresh();
     expect(await interest.has(PROJECT, 'page_view', PROFILE)).toBe(true);
     expect(await interest.has(PROJECT, 'page_view', 'stale')).toBe(false);
     expect(await interest.has(PROJECT, 'purchase', 'anyone')).toBe(true);
+  });
+});
+
+// The engine's profile query is the one refresh runs between taking its start time and pruning.
+function sqlAddingDuringSelect(addFresh: () => Promise<void>): Queryable {
+  return {
+    $queryRawUnsafe: async (query: string, ...values: unknown[]) => {
+      const rows = await sql.$queryRawUnsafe(query, ...values);
+      if (query.includes('FROM nudge.enrollments')) {
+        await addFresh();
+      }
+      return rows;
+    },
+    $executeRawUnsafe: sql.$executeRawUnsafe.bind(sql),
+  } as unknown as Queryable;
+}
+
+describe('refresh racing a fresh add', () => {
+  it('redis: a profile added by another replica while a refresh runs survives the prune', async () => {
+    const other = createRedisInterestSet(getRedisCache(), { engine, sql });
+    const refreshing = createRedisInterestSet(getRedisCache(), {
+      engine,
+      sql: sqlAddingDuringSelect(() =>
+        other.add([{ projectId: PROJECT, profileId: 'fresh' }])
+      ),
+    });
+    await refreshing.refresh();
+    expect(await refreshing.has(PROJECT, 'page_view', 'fresh')).toBe(true);
+    expect(await getRedisCache().keys(`${INTEREST_PROFILES_KEY}*`)).toEqual([
+      INTEREST_PROFILES_KEY,
+    ]);
+  });
+
+  it('memory: a profile added while a refresh runs survives the prune', async () => {
+    let interest = createMemoryInterestSet({ engine, sql });
+    interest = createMemoryInterestSet({
+      engine,
+      sql: sqlAddingDuringSelect(() =>
+        interest.add([{ projectId: PROJECT, profileId: 'fresh' }])
+      ),
+    });
+    await interest.refresh();
+    expect(await interest.has(PROJECT, 'page_view', 'fresh')).toBe(true);
+  });
+});
+
+describe('projects with an inactivity rule', () => {
+  it('keep every identified event; other projects keep the name/profile filter', async () => {
+    await insertRule(rule({ goal: { kind: 'inactivity', excludeEvents: [] } }));
+    const interest = createMemoryInterestSet({ engine, sql });
+    await interest.refresh();
+    expect(
+      await interest.hasMany([
+        { projectId: PROJECT, name: 'page_view', profileId: 'stranger' },
+        { projectId: 'project-b', name: 'page_view', profileId: 'stranger' },
+        { projectId: 'project-b', name: 'purchase', profileId: 'stranger' },
+      ])
+    ).toEqual([true, false, true]);
+  });
+});
+
+describe('redis failures', () => {
+  it('fail open: a Redis error lets the events through', async () => {
+    const brokenRedis = {
+      pipeline: () => ({
+        zscore: () => undefined,
+        exec: () => Promise.reject(new Error('redis down')),
+      }),
+    } as unknown as Redis;
+    const interest = createRedisInterestSet(brokenRedis, { engine, sql });
+    expect(
+      await interest.hasMany([
+        { projectId: PROJECT, name: 'page_view', profileId: 'a' },
+        { projectId: PROJECT, name: 'page_view', profileId: 'b' },
+      ])
+    ).toEqual([true, true]);
   });
 });

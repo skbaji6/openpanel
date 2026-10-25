@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config';
 import { sql } from './db/client';
@@ -43,7 +43,13 @@ describe('startWorker', () => {
           },
         });
       });
+      const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
       const worker = await startWorker(cfg, { startHttp });
+      expect(warn).toHaveBeenCalledWith(
+        'nudge worker:',
+        'no unsubscribe link renderer; sending is off'
+      );
+      warn.mockRestore();
       expect(startHttp).toHaveBeenCalledTimes(1);
       const [context] = startHttp.mock.calls[0] as unknown as [
         Record<string, unknown>,

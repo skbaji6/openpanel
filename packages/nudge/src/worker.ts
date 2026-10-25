@@ -22,6 +22,8 @@ export interface WorkerDeps {
   startHttp?: (context: WorkerContext) => Promise<Stoppable>;
   // Without a signed unsubscribe link no step may be sent, so the ticker only runs once this is wired.
   renderUnsubscribeUrl?: TickDeps['renderUnsubscribeUrl'];
+  // Runs after the worker stopped itself because the consumer died for good.
+  onFatal?: () => void;
 }
 
 function secretsOf(cfg: NudgeConfig): string[] {
@@ -136,7 +138,16 @@ export async function startWorker(
     );
 
     started.push(
-      await startConsumer(cfg.kafka, createBatchHandler({ engine, interest }))
+      await startConsumer(
+        cfg.kafka,
+        createBatchHandler({ engine, interest, secrets }),
+        {
+          secrets,
+          onFatal: () => {
+            stopAll().finally(() => deps.onFatal?.());
+          },
+        }
+      )
     );
 
     const { renderUnsubscribeUrl } = deps;
@@ -174,7 +185,9 @@ export async function startWorker(
 
 if (import.meta.main) {
   const cfg = loadConfig(process.env);
-  const worker = await startWorker(cfg);
+  const worker = await startWorker(cfg, {
+    onFatal: () => process.exit(1),
+  });
   const shutdown = async () => {
     await worker.stop();
     process.exit(0);

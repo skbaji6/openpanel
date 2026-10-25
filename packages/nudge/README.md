@@ -35,3 +35,7 @@ A blank value counts as unset.
 Installs created with `openpanel init` do not get the nudge service automatically: add the `docker-compose.nudge.yml` override to your compose invocation by hand and set the variables above.
 
 Fork rules and touchpoints: see `AGENTS.md` and `TOUCHPOINTS.md`.
+
+## Event pre-filter trade-off
+
+The consumer drops most events before touching Postgres: it keeps an event when its name is a trigger or goal event of a live rule, or when its profile has an active enrollment. In a project with at least one active rule whose goal is `inactivity`, it keeps every event that carries a profile id instead. Events for one profile arrive on different Kafka partitions, so an activity event can reach a replica before the trigger that enrolls the profile. Without this rule that activity would be dropped and the inactivity nudge would go out anyway. The cost is that those projects store all identified events in `nudge.events` (bounded by `NUDGE_EVENT_RETENTION_DAYS`), and the pre-filter saves nothing for them. Anonymous events (no profile id) are always ignored.

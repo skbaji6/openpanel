@@ -72,28 +72,44 @@ function isTransient(error: unknown): boolean {
   );
 }
 
-function parse(value: Buffer | null): unknown {
-  if (value === null) {
-    return null;
-  }
-  try {
-    return JSON.parse(value.toString('utf8'));
-  } catch (error) {
-    console.error(
-      LOG_PREFIX,
-      'dropping unparseable message',
-      redactSecrets(error, [])
-    );
-    return null;
-  }
+export interface ConsumerLogDeps {
+  // Every logged error is redacted against these (the worker passes its config secrets).
+  secrets?: string[];
+  logger?: Pick<Console, 'warn' | 'error'>;
 }
 
-export function createBatchHandler(deps: {
-  engine: Pick<ReturnType<typeof createEngine>, 'handleEvents'>;
-  interest: InterestSet;
-  retryDelaysMs?: number[];
-}): HandleBatch {
+function createLog(deps: ConsumerLogDeps) {
+  const logger = deps.logger ?? console;
+  const secrets = deps.secrets ?? [];
+  return {
+    warn: (message: string, error: unknown) =>
+      logger.warn(LOG_PREFIX, message, redactSecrets(error, secrets)),
+    error: (message: string, error: unknown) =>
+      logger.error(LOG_PREFIX, message, redactSecrets(error, secrets)),
+  };
+}
+
+export function createBatchHandler(
+  deps: ConsumerLogDeps & {
+    engine: Pick<ReturnType<typeof createEngine>, 'handleEvents'>;
+    interest: InterestSet;
+    retryDelaysMs?: number[];
+  }
+): HandleBatch {
   const retryDelaysMs = deps.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const log = createLog(deps);
+
+  function parse(value: Buffer | null): unknown {
+    if (value === null) {
+      return null;
+    }
+    try {
+      return JSON.parse(value.toString('utf8'));
+    } catch (error) {
+      log.error('dropping unparseable message', error);
+      return null;
+    }
+  }
 
   async function write(events: NormalizedEvent[]): Promise<void> {
     for (const delay of [...retryDelaysMs, null]) {
@@ -103,7 +119,7 @@ export function createBatchHandler(deps: {
         if (delay === null || !isTransient(error)) {
           throw error;
         }
-        console.warn(LOG_PREFIX, 'retrying batch', redactSecrets(error, []));
+        log.warn('retrying batch', error);
         await Bun.sleep(delay);
       }
     }
@@ -114,11 +130,7 @@ export function createBatchHandler(deps: {
     const candidates = values
       .map((value) => normalizeEvent(parse(value)))
       .filter((event): event is NormalizedEvent => event !== null);
-    const interesting = await Promise.all(
-      candidates.map((event) =>
-        deps.interest.has(event.projectId, event.name, event.profileId)
-      )
-    );
+    const interesting = await deps.interest.hasMany(candidates);
     const kept = candidates.filter((_event, index) => interesting[index]);
     if (kept.length === 0) {
       return;
@@ -132,16 +144,15 @@ export function createBatchHandler(deps: {
       await deps.interest.add(profiles);
     } catch (error) {
       // The periodic refresh rebuilds the set; failing here must not replay a batch that is already written.
-      console.error(
-        LOG_PREFIX,
-        'interest add failed',
-        redactSecrets(error, [])
-      );
+      log.error('interest add failed', error);
     }
   };
 }
 
-export function createEachBatch(handleBatch: HandleBatch): EachBatchHandler {
+export function createEachBatch(
+  handleBatch: HandleBatch,
+  heartbeatIntervalMs = HEARTBEAT_INTERVAL_MS
+): EachBatchHandler {
   return async ({
     batch,
     resolveOffset,
@@ -150,7 +161,7 @@ export function createEachBatch(handleBatch: HandleBatch): EachBatchHandler {
   }) => {
     const beat = setInterval(() => {
       heartbeat().catch(() => undefined);
-    }, HEARTBEAT_INTERVAL_MS);
+    }, heartbeatIntervalMs);
     try {
       await handleBatch(batch.messages.map((message) => message.value));
     } finally {
@@ -166,9 +177,23 @@ export function createEachBatch(handleBatch: HandleBatch): EachBatchHandler {
 
 export async function startConsumer(
   cfg: KafkaConfig,
-  handleBatch: HandleBatch
+  handleBatch: HandleBatch,
+  deps: ConsumerLogDeps & {
+    // Called when kafkajs gives up on the consumer; the worker then stops so a process manager restarts it.
+    onFatal?: () => void;
+  } = {}
 ): Promise<{ stop(): Promise<void> }> {
+  const log = createLog(deps);
   const consumer = createKafka(cfg).consumer({ groupId: cfg.groupId });
+  consumer.on(consumer.events.CRASH, ({ payload }) => {
+    log.error(
+      payload.restart ? 'crashed, restarting' : 'crashed, not restarting',
+      payload.error
+    );
+    if (!payload.restart) {
+      deps.onFatal?.();
+    }
+  });
   await consumer.connect();
   await consumer.subscribe({ topic: cfg.topic, fromBeginning: false });
   await consumer.run({

@@ -17,6 +17,7 @@ import { computeLag, createLagReporter } from './lag';
 const NOW = new Date('2026-10-22T12:00:00.000Z');
 const MESSAGES = 3;
 const COMMITTED = 1;
+const UNCONSUMED = 2;
 const BROKER_TEST_TIMEOUT_MS = 30_000;
 
 async function readState() {
@@ -39,7 +40,13 @@ afterAll(async () => {
 });
 
 describe('computeLag', () => {
-  it('sums end minus committed per partition and counts uncommitted partitions as caught up', () => {
+  it('sums end minus committed per partition; an uncommitted partition counts from its first-seen end offset', () => {
+    const baselines = new Map<number, number>();
+    const committed = [
+      { partition: 0, offset: '4' },
+      { partition: 1, offset: '5' },
+      { partition: 2, offset: '-1' },
+    ];
     expect(
       computeLag(
         [
@@ -47,13 +54,29 @@ describe('computeLag', () => {
           { partition: 1, offset: '5' },
           { partition: 2, offset: '7' },
         ],
-        [
-          { partition: 0, offset: '4' },
-          { partition: 1, offset: '5' },
-          { partition: 2, offset: '-1' },
-        ]
+        committed,
+        baselines
       )
     ).toBe(6);
+    expect(
+      computeLag(
+        [
+          { partition: 0, offset: '10' },
+          { partition: 1, offset: '5' },
+          { partition: 2, offset: '12' },
+        ],
+        committed,
+        baselines
+      )
+    ).toBe(11);
+    expect(
+      computeLag(
+        [{ partition: 2, offset: '12' }],
+        [{ partition: 2, offset: '9' }],
+        baselines
+      )
+    ).toBe(3);
+    expect(baselines.size).toBe(0);
   });
 });
 
@@ -92,17 +115,28 @@ describe('lag reporter', () => {
         });
         expect(await reporter.report()).toBe(0);
 
+        await producer.send({
+          topic: kafkaConfig.topic,
+          messages: Array.from({ length: UNCONSUMED }, (_, index) => ({
+            value: String(index),
+          })),
+        });
+        expect(await reporter.report()).toBe(UNCONSUMED);
+
         await admin.setOffsets({
           groupId: kafkaConfig.groupId,
           topic: kafkaConfig.topic,
           partitions: [{ partition: 0, offset: String(COMMITTED) }],
         });
-        expect(await reporter.report()).toBe(MESSAGES - COMMITTED);
+        expect(await reporter.report()).toBe(MESSAGES + UNCONSUMED - COMMITTED);
 
         const state = await readState();
-        expect(state).toEqual({ lag: MESSAGES - COMMITTED, updatedAt: NOW });
-        expect(lagAllowsSending(state, NOW, { maxLag: 1 })).toBe(false);
-        expect(lagAllowsSending(state, NOW, { maxLag: 2 })).toBe(true);
+        expect(state).toEqual({
+          lag: MESSAGES + UNCONSUMED - COMMITTED,
+          updatedAt: NOW,
+        });
+        expect(lagAllowsSending(state, NOW, { maxLag: 3 })).toBe(false);
+        expect(lagAllowsSending(state, NOW, { maxLag: 4 })).toBe(true);
       } finally {
         await reporter.stop();
         await producer.disconnect();
