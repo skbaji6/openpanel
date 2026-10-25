@@ -54,7 +54,12 @@ describe('startWorker', () => {
       const [context] = startHttp.mock.calls[0] as unknown as [
         Record<string, unknown>,
       ];
-      expect(Object.keys(context).sort()).toEqual(['cfg', 'engine', 'sql']);
+      expect(Object.keys(context).sort()).toEqual([
+        'cfg',
+        'engine',
+        'refreshInterest',
+        'sql',
+      ]);
 
       const deadline = Date.now() + LAG_WAIT_MS;
       let rows: { lag: bigint }[] = [];

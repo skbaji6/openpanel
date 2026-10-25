@@ -1,3 +1,4 @@
+import { createUnsubscribeUrlRenderer } from './api/unsubscribe';
 import { loadConfig, type NudgeConfig } from './config';
 import type { createEngine, Sql } from './engine/engine';
 import type { TickDeps } from './engine/ticker';
@@ -15,6 +16,7 @@ export interface WorkerContext {
   cfg: NudgeConfig;
   sql: Sql;
   engine: ReturnType<typeof createEngine>;
+  refreshInterest: () => Promise<void>;
 }
 
 export interface WorkerDeps {
@@ -174,7 +176,14 @@ export async function startWorker(
     );
 
     if (deps.startHttp) {
-      started.push(await deps.startHttp({ cfg, sql, engine }));
+      started.push(
+        await deps.startHttp({
+          cfg,
+          sql,
+          engine,
+          refreshInterest: () => interest.refresh(),
+        })
+      );
     }
   } catch (error) {
     await stopAll();
@@ -183,9 +192,22 @@ export async function startWorker(
   return { stop: stopAll };
 }
 
+// What the process runs in production: the HTTP API and signed unsubscribe links (which turn the ticker on).
+export function defaultWorkerDeps(cfg: NudgeConfig): WorkerDeps {
+  return {
+    renderUnsubscribeUrl: createUnsubscribeUrlRenderer(cfg),
+    // Imported lazily so @openpanel/db is first loaded after startWorker sets DATABASE_URL.
+    startHttp: async (context) => {
+      const { startHttpServer } = await import('./api/server');
+      return startHttpServer(context);
+    },
+  };
+}
+
 if (import.meta.main) {
   const cfg = loadConfig(process.env);
   const worker = await startWorker(cfg, {
+    ...defaultWorkerDeps(cfg),
     onFatal: () => process.exit(1),
   });
   const shutdown = async () => {
