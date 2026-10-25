@@ -20,6 +20,7 @@ describe('loadConfig', () => {
     expect(config.leaseSeconds).toBe(120);
     expect(config.retentionDays).toBe(30);
     expect(config.port).toBe(4100);
+    expect(config.trustProxy).toBe(false);
     expect(config.claimBatch).toBe(200);
     expect(config.sendConcurrency).toBe(10);
     expect(config.dbPool).toBe(10);
@@ -37,6 +38,15 @@ describe('loadConfig', () => {
     const url = new URL(config.databaseUrl);
     expect(url.searchParams.getAll('connection_limit')).toEqual(['3']);
     expect(url.searchParams.get('schema')).toBe('public');
+  });
+
+  it('NUDGE_TRUST_PROXY=true trusts x-forwarded-for; a typo throws', () => {
+    expect(
+      loadConfig({ ...required, NUDGE_TRUST_PROXY: 'true' }).trustProxy
+    ).toBe(true);
+    expect(() => loadConfig({ ...required, NUDGE_TRUST_PROXY: 'yes' })).toThrow(
+      /NUDGE_TRUST_PROXY/
+    );
   });
 
   it('missing KAFKA_EVENTS_TOPIC throws', () => {

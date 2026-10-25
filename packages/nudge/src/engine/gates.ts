@@ -2,7 +2,7 @@ const MAX_STATE_AGE_MS = 60_000;
 const MS_PER_MINUTE = 60_000;
 const MINUTES_PER_DAY = 1440;
 const HALF_DAY_MINUTES = 720;
-const HH_MM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+export const HH_MM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 export interface QuietHours {
   start: string;

@@ -53,6 +53,8 @@ const rawSchema = z
     NUDGE_PROXY_SECRET: requiredString,
     NUDGE_PUBLIC_URL: requiredString,
     NUDGE_PORT: positiveInt(4100),
+    // Only behind a reverse proxy that appends the client address to x-forwarded-for.
+    NUDGE_TRUST_PROXY: optionalBoolean,
     NUDGE_GRACE_SECONDS: positiveInt(300),
     NUDGE_MAX_LAG: positiveInt(1000),
     NUDGE_TICK_MS: positiveInt(5000),
@@ -116,6 +118,7 @@ export interface NudgeConfig {
   proxySecret: string;
   publicUrl: string;
   port: number;
+  trustProxy: boolean;
   graceSeconds: number;
   maxLag: number;
   tickMs: number;
@@ -166,6 +169,7 @@ export function loadConfig(
     proxySecret: raw.NUDGE_PROXY_SECRET,
     publicUrl: raw.NUDGE_PUBLIC_URL,
     port: raw.NUDGE_PORT,
+    trustProxy: raw.NUDGE_TRUST_PROXY ?? false,
     graceSeconds: raw.NUDGE_GRACE_SECONDS,
     maxLag: raw.NUDGE_MAX_LAG,
     tickMs: raw.NUDGE_TICK_MS,

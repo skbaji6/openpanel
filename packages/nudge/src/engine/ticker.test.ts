@@ -51,6 +51,7 @@ const CFG: NudgeConfig = {
   proxySecret: '',
   publicUrl: 'https://nudge.test',
   port: 4100,
+  trustProxy: false,
   graceSeconds: 300,
   maxLag: 1000,
   tickMs: 5000,

@@ -1,0 +1,613 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  decryptCredential,
+  encryptCredential,
+  hashPassword,
+} from '@openpanel/shared/server';
+import { z } from 'zod';
+import { getAdapter } from '../channels/registry';
+import type { NudgeConfig } from '../config';
+import { lockProfiles, type Queryable, type Sql } from '../engine/engine';
+import { HH_MM } from '../engine/gates';
+import {
+  MAX_DELAY_SECONDS,
+  zRuleDefinition,
+  zStep,
+} from '../rules/rule.schema';
+import { STARTER_RULES } from '../rules/starter-rules';
+import { renderTemplate } from '../template/render';
+import { HttpError, json, parseJsonBody, type Route } from './http';
+
+const MASK = '********';
+// Fields shown in clear on GET; everything else in a channel config is treated as a secret.
+const PUBLIC_CONFIG_FIELDS: Record<string, string[]> = {
+  email: ['host', 'port', 'secure', 'user', 'from'],
+  webhook: ['url'],
+  push: [],
+};
+const MAX_NAME_LENGTH = 200;
+const MAX_STEPS = 20;
+const MAX_FILTERS = 50;
+const MAX_PROPERTY_NAMES = 100;
+const MAX_LABEL_LENGTH = 100;
+const MAX_CAP = 10_000;
+const MAX_TIMEZONE_LENGTH = 64;
+const MAX_SAMPLE_MISSING = 1000;
+const API_KEY_SECRET_BYTES = 32;
+// Each chunk holds this many profile advisory locks at once; the lock table is shared and finite.
+const CANCEL_CHUNK_PROFILES = 1000;
+// A profile lock may be held by a consumer batch for up to 60 s.
+const LOCKED_TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const zBoundedRule = zRuleDefinition.refine(
+  (rule) =>
+    rule.name.length <= MAX_NAME_LENGTH &&
+    rule.steps.length <= MAX_STEPS &&
+    (rule.trigger.filters?.length ?? 0) <= MAX_FILTERS &&
+    rule.allowedEventProps.length <= MAX_PROPERTY_NAMES &&
+    (rule.goal.kind !== 'inactivity' ||
+      rule.goal.excludeEvents.length <= MAX_PROPERTY_NAMES),
+  {
+    message:
+      'rule exceeds the allowed name length, steps, filters or properties',
+  }
+);
+const zStatus = z.enum(['active', 'paused']);
+const zCreateRule = z.strictObject({
+  definition: zBoundedRule,
+  status: zStatus.default('paused'),
+});
+const zUpdateRule = z
+  .strictObject({
+    definition: zBoundedRule.optional(),
+    status: zStatus.optional(),
+  })
+  .refine(
+    (body) => body.definition !== undefined || body.status !== undefined,
+    {
+      message: 'definition or status is required',
+    }
+  );
+
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The ticker trusts stored settings, so anything it could not evaluate is rejected here.
+const zSettings = z.strictObject({
+  caps: z
+    .strictObject({
+      max: z.number().int().min(0).max(MAX_CAP),
+      periodSeconds: z.number().int().positive().max(MAX_DELAY_SECONDS),
+    })
+    .nullable(),
+  quietHours: z
+    .strictObject({
+      start: z.string().regex(HH_MM),
+      end: z.string().regex(HH_MM),
+      timezone: z
+        .string()
+        .max(MAX_TIMEZONE_LENGTH)
+        .refine(isTimeZone, { message: 'unknown timezone' }),
+    })
+    .nullable(),
+});
+
+const zRecord = z.record(z.string(), z.unknown());
+const zPreview = z.strictObject({
+  channel: zStep.shape.channel,
+  template: zStep.shape.template,
+  sample: z
+    .strictObject({
+      profile: zRecord.optional(),
+      event: zRecord.optional(),
+      missing: z.array(z.string()).max(MAX_SAMPLE_MISSING).optional(),
+    })
+    .optional(),
+  allowedEventProps: z.array(z.string()).max(MAX_PROPERTY_NAMES).optional(),
+});
+
+const RULE_COLUMNS =
+  'id::text, name, status, definition, version, created_at, updated_at';
+
+interface RuleRow {
+  id: string;
+  name: string;
+  status: string;
+  definition: unknown;
+  version: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
+function toRule(row: RuleRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    version: row.version,
+    definition: row.definition,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+const ACTIVE_PROFILES_SQL = `
+  SELECT DISTINCT profile_id FROM nudge.enrollments
+  WHERE project_id = $1 AND rule_id = $2::uuid AND status = 'active'
+  ORDER BY profile_id LIMIT ${CANCEL_CHUNK_PROFILES}`;
+
+const CANCEL_SQL = `
+  WITH cancelled AS (
+    UPDATE nudge.enrollments SET status = 'cancelled'
+    WHERE project_id = $1 AND rule_id = $2::uuid AND status = 'active'
+      AND profile_id IN (SELECT jsonb_array_elements_text($3::jsonb))
+    RETURNING id
+  )
+  UPDATE nudge.steps SET status = 'cancelled', outcome = '{"reason":"rule_stopped"}'
+  WHERE status = 'pending' AND enrollment_id IN (SELECT id FROM cancelled)`;
+
+// One row per rule of the project. Enrollments come from enrollments_rule_idx (project_id, rule_id),
+// their steps from the steps primary key; cost is linear in the project's enrollments.
+const RESULTS_SQL = `
+  SELECT r.id::text AS rule_id, r.name,
+    count(e.id)::int AS enrolled,
+    count(e.id) FILTER (WHERE s.sent > 0)::int AS nudged,
+    count(e.id) FILTER (WHERE s.sent > 0 AND e.status = 'completed')::int AS completed_after_send,
+    COALESCE(sum(s.sent), 0)::int AS sent,
+    COALESCE(sum(s.skipped), 0)::int AS skipped,
+    COALESCE(sum(s.failed), 0)::int AS failed
+  FROM nudge.rules r
+  LEFT JOIN nudge.enrollments e ON e.project_id = r.project_id AND e.rule_id = r.id
+  LEFT JOIN LATERAL (
+    SELECT count(*) FILTER (WHERE status = 'sent') AS sent,
+      count(*) FILTER (WHERE status = 'skipped') AS skipped,
+      count(*) FILTER (WHERE status = 'failed') AS failed
+    FROM nudge.steps WHERE enrollment_id = e.id
+  ) s ON true
+  WHERE r.project_id = $1 AND ($2::uuid IS NULL OR r.id = $2::uuid)
+  GROUP BY r.id, r.name, r.created_at
+  ORDER BY r.created_at`;
+
+interface ResultRow {
+  rule_id: string;
+  name: string;
+  enrolled: number;
+  nudged: number;
+  completed_after_send: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+}
+
+function ruleIdParam(params: string[]): string {
+  const id = params[0] ?? '';
+  if (!UUID_PATTERN.test(id)) {
+    throw new HttpError(404, 'not_found');
+  }
+  return id;
+}
+
+function maskValue(value: unknown): unknown {
+  return Array.isArray(value) ? value.map(() => MASK) : MASK;
+}
+
+function maskConfig(channel: string, config: Record<string, unknown>) {
+  const visible = new Set(PUBLIC_CONFIG_FIELDS[channel] ?? []);
+  return Object.fromEntries(
+    Object.entries(config).map(([field, value]) => [
+      field,
+      visible.has(field) ? value : maskValue(value),
+    ])
+  );
+}
+
+// A field sent back exactly as GET masked it keeps its stored value, so editing does not require retyping secrets.
+function unmask(
+  incoming: Record<string, unknown>,
+  stored: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(incoming).map(([field, value]) => {
+      const echoesMask =
+        field in stored &&
+        JSON.stringify(value) === JSON.stringify(maskValue(stored[field]));
+      return [field, echoesMask ? stored[field] : value];
+    })
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export interface DashboardDeps {
+  cfg: NudgeConfig;
+  sql: Sql;
+  onRulesChanged: () => Promise<void>;
+}
+
+export function dashboardRoutes(deps: DashboardDeps): Route[] {
+  const { cfg, sql } = deps;
+
+  async function cancelChunk(
+    tx: Queryable,
+    projectId: string,
+    ruleId: string
+  ): Promise<number> {
+    const rows = await tx.$queryRawUnsafe<{ profile_id: string }[]>(
+      ACTIVE_PROFILES_SQL,
+      projectId,
+      ruleId
+    );
+    if (rows.length === 0) {
+      return 0;
+    }
+    const profileIds = rows.map((row) => row.profile_id);
+    // Same lock order as the engine and ticker, so a concurrent step write cannot resurrect a cancelled step.
+    await lockProfiles(
+      tx,
+      profileIds.map((profileId) => ({ projectId, profileId }))
+    );
+    await tx.$executeRawUnsafe(
+      CANCEL_SQL,
+      projectId,
+      ruleId,
+      JSON.stringify(profileIds)
+    );
+    return rows.length;
+  }
+
+  // Applies `change` and cancels the rule's work in one transaction; only a rule with more than
+  // CANCEL_CHUNK_PROFILES enrolled profiles continues in further transactions.
+  async function stopRule<T>(
+    projectId: string,
+    ruleId: string,
+    change: (tx: Queryable) => Promise<T | undefined>
+  ): Promise<T | undefined> {
+    let more = false;
+    const result = await sql.$transaction(async (tx) => {
+      const changed = await change(tx);
+      if (changed !== undefined) {
+        more =
+          (await cancelChunk(tx, projectId, ruleId)) === CANCEL_CHUNK_PROFILES;
+      }
+      return changed;
+    }, LOCKED_TRANSACTION);
+    while (more) {
+      const cancelled = await sql.$transaction(
+        (tx) => cancelChunk(tx, projectId, ruleId),
+        LOCKED_TRANSACTION
+      );
+      more = cancelled === CANCEL_CHUNK_PROFILES;
+    }
+    return result;
+  }
+
+  async function rulesChanged(): Promise<void> {
+    await deps.onRulesChanged();
+  }
+
+  async function storedChannelConfig(projectId: string, channel: string) {
+    const [row] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
+      'SELECT config_encrypted FROM nudge.channel_configs WHERE project_id = $1 AND channel = $2',
+      projectId,
+      channel
+    );
+    if (!row) {
+      return null;
+    }
+    // Unreadable (e.g. after an ENCRYPTION_KEY change) counts as not configured, so PUT can replace it.
+    try {
+      const parsed: unknown = JSON.parse(
+        decryptCredential(cfg.encryptionKey, row.config_encrypted)
+      );
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return [
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/rules$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const rows = await sql.$queryRawUnsafe<RuleRow[]>(
+          `SELECT ${RULE_COLUMNS} FROM nudge.rules WHERE project_id = $1 ORDER BY created_at`,
+          ctx.projectId
+        );
+        return json({ rules: rows.map(toRule) });
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/nudge\/rules$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const body = await parseJsonBody(ctx.req, zCreateRule);
+        const [row] = await sql.$queryRawUnsafe<RuleRow[]>(
+          `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+           VALUES ($1::uuid, $2, $3, $4, $5::jsonb) RETURNING ${RULE_COLUMNS}`,
+          randomUUID(),
+          ctx.projectId,
+          body.definition.name,
+          body.status,
+          JSON.stringify(body.definition)
+        );
+        await rulesChanged();
+        return json(row ? toRule(row) : null, 201);
+      },
+    },
+    {
+      method: 'PATCH',
+      pattern: /^\/nudge\/rules\/([^/]+)$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const ruleId = ruleIdParam(ctx.params);
+        const body = await parseJsonBody(ctx.req, zUpdateRule);
+        const definition = body.definition
+          ? JSON.stringify(body.definition)
+          : null;
+        // Editing bumps the version; running enrollments keep their rule_snapshot.
+        const update = (tx: Queryable) =>
+          tx
+            .$queryRawUnsafe<RuleRow[]>(
+              `UPDATE nudge.rules SET
+                 definition = COALESCE($3::jsonb, definition),
+                 name = COALESCE($4, name),
+                 version = version + CASE WHEN $3::jsonb IS NULL THEN 0 ELSE 1 END,
+                 status = COALESCE($5, status),
+                 updated_at = now()
+               WHERE id = $1::uuid AND project_id = $2
+               RETURNING ${RULE_COLUMNS}`,
+              ruleId,
+              ctx.projectId,
+              definition,
+              body.definition?.name ?? null,
+              body.status ?? null
+            )
+            .then(([row]) => row);
+        const row =
+          body.status === 'paused'
+            ? await stopRule(ctx.projectId, ruleId, update)
+            : await update(sql);
+        if (!row) {
+          throw new HttpError(404, 'not_found');
+        }
+        await rulesChanged();
+        return json(toRule(row));
+      },
+    },
+    {
+      method: 'DELETE',
+      pattern: /^\/nudge\/rules\/([^/]+)$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const ruleId = ruleIdParam(ctx.params);
+        const deleted = await stopRule(ctx.projectId, ruleId, (tx) =>
+          tx
+            .$queryRawUnsafe<{ id: string }[]>(
+              'DELETE FROM nudge.rules WHERE id = $1::uuid AND project_id = $2 RETURNING id::text',
+              ruleId,
+              ctx.projectId
+            )
+            .then(([row]) => row)
+        );
+        if (!deleted) {
+          throw new HttpError(404, 'not_found');
+        }
+        await rulesChanged();
+        return json({ ok: true });
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/starter-rules$/,
+      auth: 'dashboard',
+      handle() {
+        return json({
+          starterRules: Object.entries(STARTER_RULES).map(
+            ([key, definition]) => ({
+              key,
+              definition,
+            })
+          ),
+        });
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/channels\/(email|webhook|push)$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const channel = ctx.params[0] ?? '';
+        const stored = await storedChannelConfig(ctx.projectId, channel);
+        return json({
+          channel,
+          configured: stored !== null,
+          config: stored ? maskConfig(channel, stored) : null,
+        });
+      },
+    },
+    {
+      method: 'PUT',
+      pattern: /^\/nudge\/channels\/(email|webhook|push)$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const channel = ctx.params[0] ?? '';
+        const { config } = await parseJsonBody(
+          ctx.req,
+          z.strictObject({ config: zRecord })
+        );
+        const stored =
+          (await storedChannelConfig(ctx.projectId, channel)) ?? {};
+        const parsed = getAdapter(channel).configSchema.safeParse(
+          unmask(config, stored)
+        );
+        if (!(parsed.success && isRecord(parsed.data))) {
+          throw new HttpError(
+            400,
+            'invalid_body',
+            parsed.error?.issues.map((issue) => ({
+              path: ['config', ...issue.path.map(String)].join('.'),
+              message: issue.message,
+            }))
+          );
+        }
+        await sql.$executeRawUnsafe(
+          `INSERT INTO nudge.channel_configs (project_id, channel, config_encrypted)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (project_id, channel) DO UPDATE SET config_encrypted = EXCLUDED.config_encrypted`,
+          ctx.projectId,
+          channel,
+          encryptCredential(cfg.encryptionKey, JSON.stringify(parsed.data))
+        );
+        return json({
+          channel,
+          configured: true,
+          config: maskConfig(channel, parsed.data),
+        });
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/settings$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const [row] = await sql.$queryRawUnsafe<
+          { caps: unknown; quiet_hours: unknown }[]
+        >(
+          'SELECT caps, quiet_hours FROM nudge.project_settings WHERE project_id = $1',
+          ctx.projectId
+        );
+        return json({
+          caps: row?.caps ?? null,
+          quietHours: row?.quiet_hours ?? null,
+        });
+      },
+    },
+    {
+      method: 'PUT',
+      pattern: /^\/nudge\/settings$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const settings = await parseJsonBody(ctx.req, zSettings);
+        await sql.$executeRawUnsafe(
+          `INSERT INTO nudge.project_settings (project_id, caps, quiet_hours)
+           VALUES ($1, $2::jsonb, $3::jsonb)
+           ON CONFLICT (project_id) DO UPDATE SET caps = EXCLUDED.caps, quiet_hours = EXCLUDED.quiet_hours`,
+          ctx.projectId,
+          settings.caps ? JSON.stringify(settings.caps) : null,
+          settings.quietHours ? JSON.stringify(settings.quietHours) : null
+        );
+        return json(settings);
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/results$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const ruleIdFilter = ctx.url.searchParams.get('ruleId');
+        const ruleId =
+          ruleIdFilter === null ? null : ruleIdParam([ruleIdFilter]);
+        const rows = await sql.$queryRawUnsafe<ResultRow[]>(
+          RESULTS_SQL,
+          ctx.projectId,
+          ruleId
+        );
+        if (ruleId && rows.length === 0) {
+          throw new HttpError(404, 'not_found');
+        }
+        return json({
+          results: rows.map((row) => ({
+            ruleId: row.rule_id,
+            name: row.name,
+            enrolled: row.enrolled,
+            nudged: row.nudged,
+            sent: row.sent,
+            completedAfterSend: row.completed_after_send,
+            // Share of nudged enrollments that later reached the goal.
+            conversionRate:
+              row.nudged === 0 ? 0 : row.completed_after_send / row.nudged,
+            skipped: row.skipped,
+            failed: row.failed,
+          })),
+        });
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/nudge\/api-keys$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const { label } = await parseJsonBody(
+          ctx.req,
+          z.strictObject({ label: z.string().min(1).max(MAX_LABEL_LENGTH) })
+        );
+        const id = randomUUID();
+        const secret = randomBytes(API_KEY_SECRET_BYTES).toString('base64url');
+        await sql.$executeRawUnsafe(
+          'INSERT INTO nudge.api_keys (id, project_id, key_hash, label) VALUES ($1::uuid, $2, $3, $4)',
+          id,
+          ctx.projectId,
+          await hashPassword(secret),
+          label
+        );
+        return json({ id, label, key: `${id}.${secret}` }, 201);
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/nudge\/preview$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const body = await parseJsonBody(ctx.req, zPreview);
+        const vars = {
+          profile: body.sample?.profile ?? {},
+          event: body.sample?.event ?? {},
+          missing: body.sample?.missing ?? [],
+          allowedEventProps: body.allowedEventProps ?? [],
+        };
+        const { subject } = body.template;
+        return json({
+          subject:
+            subject === undefined
+              ? undefined
+              : renderTemplate(subject, vars, { mode: 'text' }),
+          body: renderTemplate(body.template.body, vars, {
+            mode: body.channel === 'email' ? 'html' : 'text',
+          }),
+        });
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/nudge\/reference-sets$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const rows = await sql.$queryRawUnsafe<
+          { set_key: string; values: unknown }[]
+        >(
+          'SELECT set_key, values FROM nudge.reference_sets WHERE project_id = $1 ORDER BY set_key',
+          ctx.projectId
+        );
+        return json({
+          referenceSets: rows.map((row) => ({
+            setKey: row.set_key,
+            values: row.values,
+          })),
+        });
+      },
+    },
+  ];
+}
