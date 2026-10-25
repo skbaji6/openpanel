@@ -190,7 +190,7 @@ const GOAL_MET_SQL = `
     UPDATE nudge.steps SET status = 'cancelled'
     WHERE enrollment_id = $1::uuid AND status = 'pending' RETURNING 1
   ), done AS (
-    UPDATE nudge.enrollments SET status = 'completed'
+    UPDATE nudge.enrollments SET status = 'completed', end_reason = 'goal'
     WHERE id = $1::uuid AND status = 'active' RETURNING 1
   )
   SELECT count(*)::int AS updated FROM step`;
@@ -214,7 +214,7 @@ const PROFILE_OF_SQL = `
   FROM nudge.enrollments WHERE id = $1::uuid`;
 
 const COMPLETE_IF_DONE_SQL = `
-  UPDATE nudge.enrollments e SET status = 'completed'
+  UPDATE nudge.enrollments e SET status = 'completed', end_reason = 'exhausted'
   WHERE e.id = $1::uuid AND e.status = 'active'
     AND NOT EXISTS (SELECT 1 FROM nudge.steps s
                     WHERE s.enrollment_id = e.id AND s.status IN ('pending', 'sending'))`;

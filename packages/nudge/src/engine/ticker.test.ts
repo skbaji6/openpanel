@@ -308,6 +308,14 @@ async function enrollmentStatus(enrollmentId: string): Promise<string> {
   return row?.status ?? 'missing';
 }
 
+async function endReason(enrollmentId: string): Promise<string | null> {
+  const [row] = await sql.$queryRawUnsafe<{ end_reason: string | null }[]>(
+    'SELECT end_reason FROM nudge.enrollments WHERE id = $1::uuid',
+    enrollmentId
+  );
+  return row?.end_reason ?? null;
+}
+
 const ZERO = { sent: 0, skipped: 0, postponed: 0, failed: 0 };
 
 describe('runTick', () => {
@@ -406,6 +414,7 @@ describe('runTick', () => {
       reason: 'goal_met',
     });
     expect(await enrollmentStatus(enrollmentId)).toBe('completed');
+    expect(await endReason(enrollmentId)).toBe('goal');
   });
 
   it("REVIEW FOCUS opted out: email step is skipped, enrollment's next step is still pending and later sent", async () => {
@@ -440,6 +449,7 @@ describe('runTick', () => {
     expect(rows[1]?.status).toBe('sent');
     expect(calls).toHaveLength(1);
     expect(await enrollmentStatus(enrollmentId)).toBe('completed');
+    expect(await endReason(enrollmentId)).toBe('exhausted');
   });
 
   it('email step with no synced email is skipped', async () => {

@@ -120,18 +120,20 @@ async function insertEnrollment(
   profileId: string,
   status: string,
   stepStatuses: string[],
-  projectId = 'proj-a'
+  projectId = 'proj-a',
+  endReason: string | null = null
 ) {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
-     VALUES ($1::uuid, $2, $3::uuid, $4::jsonb, $5, $6, now())`,
+    `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time, end_reason)
+     VALUES ($1::uuid, $2, $3::uuid, $4::jsonb, $5, $6, now(), $7)`,
     id,
     projectId,
     ruleId,
     JSON.stringify(ruleDefinition()),
     profileId,
-    status
+    status,
+    endReason
   );
   for (const [index, stepStatus] of stepStatuses.entries()) {
     await sql.$executeRawUnsafe(
@@ -836,10 +838,33 @@ describe('dashboard routes', () => {
   it('results counts match seeded steps', async () => {
     const ruleId = await insertRule('proj-a');
     const idle = await insertRule('proj-a');
-    await insertEnrollment(ruleId, 'u1', 'completed', ['sent', 'cancelled']);
+    await insertEnrollment(
+      ruleId,
+      'u1',
+      'completed',
+      ['sent', 'cancelled'],
+      'proj-a',
+      'goal'
+    );
     await insertEnrollment(ruleId, 'u2', 'active', ['sent', 'skipped']);
     await insertEnrollment(ruleId, 'u3', 'active', ['failed']);
-    await insertEnrollment(ruleId, 'u4', 'completed', ['cancelled']);
+    await insertEnrollment(
+      ruleId,
+      'u4',
+      'completed',
+      ['cancelled'],
+      'proj-a',
+      'goal'
+    );
+    // Sent every step and ran out: not a conversion.
+    await insertEnrollment(
+      ruleId,
+      'u5',
+      'completed',
+      ['sent', 'sent'],
+      'proj-a',
+      'exhausted'
+    );
     const otherProjectRule = await insertRule('proj-b');
     await insertEnrollment(
       otherProjectRule,
@@ -858,11 +883,11 @@ describe('dashboard routes', () => {
     expect(byRule.get(ruleId)).toEqual({
       ruleId,
       name: 'r',
-      enrolled: 4,
-      nudged: 2,
-      sent: 2,
+      enrolled: 5,
+      nudged: 3,
+      sent: 4,
       completedAfterSend: 1,
-      conversionRate: 0.5,
+      conversionRate: 1 / 3,
       skipped: 1,
       failed: 1,
     });

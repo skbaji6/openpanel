@@ -14,6 +14,8 @@ const BATCH_TRANSACTION_MAX_WAIT_MS = 30_000;
 const MS_PER_DAY = 86_400_000;
 // Events can be forged; a far-future time would push inactivity timers out indefinitely.
 export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
+// The daily purge works in short chunks so it never holds a long lock or a long transaction.
+const PURGE_DEFAULTS = { chunkSize: 10_000, pauseMs: 100, maxChunks: 100 };
 
 export type Sql = typeof nudgeSql;
 export type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;
@@ -121,7 +123,7 @@ export const ENROLL_SQL = `
 
 const COMPLETE_SQL = `
   WITH done AS (
-    UPDATE nudge.enrollments SET status = 'completed'
+    UPDATE nudge.enrollments SET status = 'completed', end_reason = 'goal'
     WHERE id = $1::uuid AND status = 'active' RETURNING id
   )
   UPDATE nudge.steps SET status = 'cancelled'
@@ -181,6 +183,17 @@ const LOCK_PROFILES_SQL = `
   ) ordered_keys`;
 
 const RULES_LOCK_KEY = 'nudge:rules';
+
+// Params: cutoff, chunk size. An event at or after an active enrollment's trigger can still decide
+// its goal or debounce, so it outlives the retention window until that enrollment ends.
+export const PURGE_CHUNK_SQL = `
+  DELETE FROM nudge.events WHERE ctid IN (
+    SELECT ev.ctid FROM nudge.events ev
+    WHERE ev.event_time < $1::timestamptz
+      AND NOT EXISTS (SELECT 1 FROM nudge.enrollments e
+        WHERE e.project_id = ev.project_id AND e.profile_id = ev.profile_id
+          AND e.status = 'active' AND e.trigger_time <= ev.event_time)
+    LIMIT $2::int)`;
 
 // Batches hold it shared while they read rules and enroll; stopping a rule takes it exclusively first,
 // so no batch that saw the rule active commits after the stop. Always taken before profile locks.
@@ -449,12 +462,29 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
     handleEvent: (event: NormalizedEvent) => handleEvents([event]),
     evaluateEnrollment: (enrollmentId: string) =>
       evaluate(deps.sql, enrollmentId),
-    async purgeOldEvents(retentionDays: number): Promise<number> {
+    async purgeOldEvents(
+      retentionDays: number,
+      options: Partial<typeof PURGE_DEFAULTS> = {}
+    ): Promise<number> {
+      const { chunkSize, pauseMs, maxChunks } = {
+        ...PURGE_DEFAULTS,
+        ...options,
+      };
       const cutoff = new Date(now().getTime() - retentionDays * MS_PER_DAY);
-      return await deps.sql.$executeRawUnsafe(
-        'DELETE FROM nudge.events WHERE event_time < $1::timestamptz',
-        cutoff.toISOString()
-      );
+      let total = 0;
+      for (let chunk = 0; chunk < maxChunks; chunk++) {
+        const deleted = await deps.sql.$executeRawUnsafe(
+          PURGE_CHUNK_SQL,
+          cutoff.toISOString(),
+          chunkSize
+        );
+        total += deleted;
+        if (deleted < chunkSize) {
+          break;
+        }
+        await Bun.sleep(pauseMs);
+      }
+      return total;
     },
     async interestNames(projectId?: string): Promise<Set<string>> {
       const rows = await deps.sql.$queryRawUnsafe<{ name: string }[]>(

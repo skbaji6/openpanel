@@ -152,7 +152,7 @@ const ACTIVE_PROFILES_SQL = `
 
 const CANCEL_SQL = `
   WITH cancelled AS (
-    UPDATE nudge.enrollments SET status = 'cancelled'
+    UPDATE nudge.enrollments SET status = 'cancelled', end_reason = 'rule_stopped'
     WHERE project_id = $1 AND rule_id = $2::uuid AND status = 'active'
       AND profile_id IN (SELECT jsonb_array_elements_text($3::jsonb))
     RETURNING id
@@ -162,11 +162,12 @@ const CANCEL_SQL = `
 
 // One row per rule of the project. Enrollments come from enrollments_rule_idx (project_id, rule_id),
 // their steps from the steps primary key; cost is linear in the project's enrollments.
+// Only a goal counts as a conversion: a sequence that ran out of steps also ends 'completed'.
 const RESULTS_SQL = `
   SELECT r.id::text AS rule_id, r.name,
     count(e.id)::int AS enrolled,
     count(e.id) FILTER (WHERE s.sent > 0)::int AS nudged,
-    count(e.id) FILTER (WHERE s.sent > 0 AND e.status = 'completed')::int AS completed_after_send,
+    count(e.id) FILTER (WHERE s.sent > 0 AND e.end_reason = 'goal')::int AS completed_after_send,
     COALESCE(sum(s.sent), 0)::int AS sent,
     COALESCE(sum(s.skipped), 0)::int AS skipped,
     COALESCE(sum(s.failed), 0)::int AS failed

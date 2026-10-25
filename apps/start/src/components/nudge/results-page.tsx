@@ -61,9 +61,10 @@ export function ResultsPage() {
     <div className="card">
       <Table>
         <TableCaption className="p-4 text-left">
-          "Completed after send" counts journeys that reached the goal after at
-          least one nudge was sent. It is approximate: it does not prove the
-          nudge caused the goal, and journeys still running are not counted.
+          "Completed after send" counts journeys that reached the goal while
+          they were running, after at least one nudge was sent. A goal reached
+          after the final step, or by a journey still running, is not counted,
+          and a count does not prove the nudge caused the goal.
         </TableCaption>
         <TableHeader>
           <TableRow>

@@ -19,6 +19,7 @@ import {
   GOAL_FACTS_SQL,
   MAX_FUTURE_SKEW_MS,
   matchesTrigger,
+  PURGE_CHUNK_SQL,
 } from './engine';
 
 const NOW = new Date('2026-10-22T12:00:00.000Z');
@@ -93,13 +94,14 @@ interface EnrollmentRow {
   project_id: string;
   match_value: string;
   status: string;
+  end_reason: string | null;
   trigger_time: Date;
   rule_snapshot: RuleDefinition;
 }
 
 function enrollments(): Promise<EnrollmentRow[]> {
   return sql.$queryRawUnsafe<EnrollmentRow[]>(
-    `SELECT id::text, project_id, match_value, status, trigger_time, rule_snapshot
+    `SELECT id::text, project_id, match_value, status, end_reason, trigger_time, rule_snapshot
      FROM nudge.enrollments ORDER BY match_value, created_at, trigger_time`
   );
 }
@@ -323,6 +325,7 @@ describe('engine', () => {
 
     const enrollment = await onlyEnrollment();
     expect(enrollment.status).toBe('completed');
+    expect(enrollment.end_reason).toBe('goal');
     expect((await steps()).map((s) => s.status)).toEqual([
       'cancelled',
       'cancelled',
@@ -866,6 +869,62 @@ describe('engine', () => {
     ]);
     expect(await engine.purgeOldEvents(30)).toBe(1);
     expect(await count('events')).toBe(2);
+  });
+
+  it('purgeOldEvents keeps an old event an active enrollment may still need and deletes one no enrollment needs', async () => {
+    await insertRule(rule());
+    const old = new Date(secondsAfter(NOW, -40 * DAY));
+    await engine.handleEvents([
+      event('purchase', old),
+      event('page_view', new Date(secondsAfter(NOW, -31 * DAY))),
+      event('page_view', old, {}, { profileId: 'no-enrollment' }),
+    ]);
+    expect((await onlyEnrollment()).status).toBe('active');
+    expect(await engine.purgeOldEvents(30)).toBe(1);
+    const left = await sql.$queryRawUnsafe<{ profile_id: string }[]>(
+      'SELECT profile_id FROM nudge.events'
+    );
+    expect(left.map((row) => row.profile_id)).toEqual([PROFILE, PROFILE]);
+  });
+
+  it('purgeOldEvents deletes in chunks until done, bounded per run', async () => {
+    const old = new Date(secondsAfter(NOW, -31 * DAY));
+    const oldEvents = Array.from({ length: 5 }, () => event('page_view', old));
+    await engine.handleEvents(oldEvents);
+    expect(
+      await engine.purgeOldEvents(30, {
+        chunkSize: 2,
+        pauseMs: 0,
+        maxChunks: 2,
+      })
+    ).toBe(4);
+    expect(await engine.purgeOldEvents(30, { chunkSize: 2, pauseMs: 0 })).toBe(
+      1
+    );
+    expect(await count('events')).toBe(0);
+  });
+
+  it('PERF the purge enrollment check can use an enrollments index', async () => {
+    const ruleId = await insertRule(rule());
+    await sql.$executeRawUnsafe(
+      `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+       SELECT gen_random_uuid(), $1, $2::uuid, '{}'::jsonb, 'p' || g,
+         CASE WHEN g % 2 = 0 THEN 'active' ELSE 'completed' END, now()
+       FROM generate_series(1, 5000) g`,
+      PROJECT_A,
+      ruleId
+    );
+    await sql.$executeRawUnsafe('ANALYZE nudge.enrollments, nudge.events');
+    const plan = await sql.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
+      const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
+        `EXPLAIN ${PURGE_CHUNK_SQL}`,
+        NOW.toISOString(),
+        1
+      );
+      return rows.map((row) => Object.values(row).join(' ')).join('\n');
+    });
+    expect(plan).toContain('enrollments_reentry_idx');
   });
 
   it("SECURITY cross-project isolation: an event for project B never enrolls, completes or debounces project A's enrollment even with the same profile id and event names", async () => {
