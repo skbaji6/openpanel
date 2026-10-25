@@ -83,6 +83,12 @@ export default function SidebarProjectMenu({
         icon={WorkflowIcon}
         label="Integrations"
       />
+      <SidebarLink
+        exact={false}
+        href={'/nudge'}
+        icon={WorkflowIcon}
+        label="Nudges"
+      />
       <SidebarLink href={'..'} icon={UndoDotIcon} label="Back to workspace" />
     </>
   );
