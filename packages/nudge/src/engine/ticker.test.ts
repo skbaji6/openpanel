@@ -557,6 +557,39 @@ describe('runTick', () => {
     const [step] = await steps(enrollmentId);
     expect(step?.status).toBe('sent');
     expect(step?.attempt).toBe(1);
+    expect(errorLog).toHaveBeenCalledWith(
+      'nudge ticker:',
+      'pruning invalid device tokens:',
+      expect.stringContaining('injected database failure')
+    );
+  });
+
+  it('invalid tokens on a failed push result are deleted too', async () => {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+       VALUES ('t1', $1, $2, 'ios'), ('t2', $1, $2, 'android')`,
+      PROJECT,
+      PROFILE
+    );
+    const { enrollmentId } = await enrollOne(
+      rule({
+        steps: [
+          { delaySeconds: HOUR, channel: 'push', template: { body: 'one' } },
+        ],
+      })
+    );
+    respond = async () => ({
+      ok: false,
+      retryable: false,
+      reason: 'fcm messaging/registration-token-not-registered',
+      invalidTokens: ['t1', 't2'],
+    });
+    expect(await tick()).toEqual({ ...ZERO, failed: 1 });
+    const remaining = await sql.$queryRawUnsafe<{ token: string }[]>(
+      'SELECT token FROM nudge.devices'
+    );
+    expect(remaining).toEqual([]);
+    expect((await steps(enrollmentId))[0]?.status).toBe('failed');
   });
 
   it('quiet hours postpone instead of send', async () => {

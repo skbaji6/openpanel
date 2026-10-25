@@ -9,17 +9,20 @@ export const TIMEOUT_RESULT: SendResult = {
   reason: 'timeout',
 };
 
-// Resolves to TIMEOUT_RESULT after `timeoutMs`; the signal lets work that supports it (fetch) abort too.
+// A total deadline: at `timeoutMs` the signal aborts and `onTimeout` decides the result.
+// Work must honour the signal (stop, destroy its sockets), because a 'timeout' result is retried
+// and anything it still delivers afterwards would reach the user twice.
 export async function withSendTimeout(
   timeoutMs: number,
-  work: (signal: AbortSignal) => Promise<SendResult>
+  work: (signal: AbortSignal) => Promise<SendResult>,
+  onTimeout: () => SendResult = () => TIMEOUT_RESULT
 ): Promise<SendResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<SendResult>((resolve) => {
     timer = setTimeout(() => {
       controller.abort();
-      resolve(TIMEOUT_RESULT);
+      resolve(onTimeout());
     }, timeoutMs);
   });
   try {

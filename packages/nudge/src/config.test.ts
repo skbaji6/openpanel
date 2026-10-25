@@ -78,4 +78,20 @@ describe('loadConfig', () => {
     });
     expect(config.webhookAllowHosts).toEqual(['a.internal', 'b.internal']);
   });
+
+  it('NUDGE_WEBHOOK_ALLOW_HOSTS rejects entries with a scheme, port, path or IPv6 literal', () => {
+    for (const entry of [
+      'https://a.internal',
+      'a.internal:8080',
+      'a.internal/hook',
+      '::1',
+    ]) {
+      expect(() =>
+        loadConfig({
+          ...required,
+          NUDGE_WEBHOOK_ALLOW_HOSTS: `ok.internal,${entry}`,
+        })
+      ).toThrow(/NUDGE_WEBHOOK_ALLOW_HOSTS/);
+    }
+  });
 });

@@ -75,15 +75,20 @@ export function createWebhookAdapter(
   const timeoutMs = options.timeoutMs ?? SEND_TIMEOUT_MS;
   const isAllowlisted = (url: URL) =>
     allowHosts.has(url.hostname.toLowerCase());
-  const isPermittedUrl = (url: URL) =>
-    url.protocol === 'https:' ||
-    (url.protocol === 'http:' && isAllowlisted(url));
+  // Parses without throwing: zod still runs refinements after .url() has failed.
+  const permittedUrl = (value: string): URL | null => {
+    const url = URL.parse(value);
+    const permitted =
+      url?.protocol === 'https:' ||
+      (url?.protocol === 'http:' && isAllowlisted(url));
+    return permitted ? url : null;
+  };
 
   const configSchema = z.object({
     url: z
       .string()
       .url()
-      .refine((value) => isPermittedUrl(new URL(value)), {
+      .refine((value) => permittedUrl(value) !== null, {
         message: 'url must be https (http only for allowlisted hosts)',
       }),
     secrets: z.array(z.string().min(MIN_SECRET_LENGTH)).min(1).max(2),
@@ -93,8 +98,8 @@ export function createWebhookAdapter(
     id: 'webhook',
     configSchema,
     send(msg, to, config, opts) {
-      const url = new URL(config.url);
-      if (!isPermittedUrl(url)) {
+      const url = permittedUrl(config.url);
+      if (!url) {
         return Promise.resolve({
           ok: false,
           retryable: false,

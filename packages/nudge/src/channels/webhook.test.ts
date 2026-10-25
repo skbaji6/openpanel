@@ -179,6 +179,14 @@ describe('webhook adapter', () => {
     });
   });
 
+  it('config schema rejects malformed urls without throwing', () => {
+    for (const url of ['not a url', '', 'https://', 'http://[::1']) {
+      expect(
+        allowlisted.configSchema.safeParse({ url, secrets: [SECRET] }).success
+      ).toBe(false);
+    }
+  });
+
   it('config schema requires https, or http only for allowlisted hosts, and 1-2 secrets of 16+ chars', () => {
     const parse = (config: unknown) =>
       allowlisted.configSchema.safeParse(config).success;

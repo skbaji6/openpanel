@@ -9,6 +9,8 @@ import type { Recipient, RenderedMessage, SendOptions } from './types';
 
 const UNSUBSCRIBE_URL = 'https://nudge.test/unsubscribe?t=abc';
 const HANG_MS = 5000;
+const SLOW_REPLY_MS = 40;
+const SLOW_TIMEOUT_MS = 100;
 
 const message: RenderedMessage = {
   subject: 'Your cart misses you',
@@ -27,19 +29,33 @@ const opts: SendOptions = {
 };
 
 // A minimal SMTP server: enough of the protocol for nodemailer to deliver one message.
+// `data` is set once the server has the whole message, i.e. it was delivered.
 interface Session {
   recipients: string[];
   data: string;
+  closed: boolean;
 }
 let sessions: Session[] = [];
 let mailFromReply = '250 ok';
+let replyDelayMs = 0;
 
 function handle(socket: Socket) {
-  const session: Session = { recipients: [], data: '' };
+  const session: Session = { recipients: [], data: '', closed: false };
   sessions.push(session);
+  socket.on('close', () => {
+    session.closed = true;
+  });
+  socket.on('error', () => undefined);
+  const reply = (line: string) => {
+    setTimeout(() => {
+      if (socket.writable) {
+        socket.write(`${line}\r\n`);
+      }
+    }, replyDelayMs);
+  };
   let buffer = '';
   let inData = false;
-  socket.write('220 fake smtp\r\n');
+  reply('220 fake smtp');
   socket.on('data', (chunk) => {
     buffer += chunk.toString('utf8');
     if (inData) {
@@ -50,7 +66,7 @@ function handle(socket: Socket) {
       session.data = buffer.slice(0, end);
       buffer = buffer.slice(end + 5);
       inData = false;
-      socket.write('250 queued\r\n');
+      reply('250 queued');
     }
     let lineEnd = buffer.indexOf('\r\n');
     while (lineEnd !== -1 && !inData) {
@@ -58,19 +74,19 @@ function handle(socket: Socket) {
       buffer = buffer.slice(lineEnd + 2);
       const verb = line.slice(0, 4).toUpperCase();
       if (verb === 'EHLO' || verb === 'HELO') {
-        socket.write('250 fake\r\n');
+        reply('250 fake');
       } else if (verb === 'MAIL') {
-        socket.write(`${mailFromReply}\r\n`);
+        reply(mailFromReply);
       } else if (verb === 'RCPT') {
         session.recipients.push(line);
-        socket.write('250 ok\r\n');
+        reply('250 ok');
       } else if (verb === 'DATA') {
         inData = true;
-        socket.write('354 go\r\n');
+        reply('354 go');
       } else if (verb === 'QUIT') {
         socket.end('221 bye\r\n');
       } else {
-        socket.write('250 ok\r\n');
+        reply('250 ok');
       }
       lineEnd = buffer.indexOf('\r\n');
     }
@@ -107,6 +123,7 @@ describe('email adapter', () => {
   beforeEach(() => {
     sessions = [];
     mailFromReply = '250 ok';
+    replyDelayMs = 0;
   });
   afterAll(() => {
     smtp.close();
@@ -148,10 +165,8 @@ describe('email adapter', () => {
         return {};
       }),
     });
-    await recording.send(hostile, recipient, realConfig, {
-      ...opts,
-      unsubscribeUrl: `${UNSUBSCRIBE_URL}\r\nBcc: x@evil.test`,
-    });
+    await recording.send(hostile, recipient, realConfig, opts);
+    expect(sent).toHaveLength(1);
     const headerValues = [
       sent[0]?.subject,
       ...Object.values(sent[0]?.headers ?? {}),
@@ -256,6 +271,91 @@ describe('email adapter', () => {
       retryable: true,
       reason: 'timeout',
     });
+  });
+
+  it('after a timeout the message is never delivered and the connection is closed', async () => {
+    replyDelayMs = SLOW_REPLY_MS;
+    const adapter = createEmailAdapter({ timeoutMs: SLOW_TIMEOUT_MS });
+    expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
+      ok: false,
+      retryable: true,
+      reason: 'timeout',
+    });
+    await Bun.sleep(SLOW_REPLY_MS * 10 * 3);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.data).toBe('');
+    expect(sessions[0]?.closed).toBe(true);
+  });
+
+  it('a slow but timely server still delivers', async () => {
+    replyDelayMs = 5;
+    const adapter = createEmailAdapter({ timeoutMs: 5000 });
+    expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
+      ok: true,
+    });
+    expect(sessions[0]?.data).toContain('Come back');
+  });
+
+  it('rejects a List-Unsubscribe url that could break out of its angle brackets', async () => {
+    const sent: SentMail[] = [];
+    const adapter = createEmailAdapter({
+      createTransport: fakeTransport(async (mail) => {
+        sent.push(mail);
+        return {};
+      }),
+    });
+    for (const unsubscribeUrl of [
+      'https://x.test/u>, <mailto:evil@x.test',
+      'https://x.test/u\r\nBcc: x@evil.test',
+      'https://x.test/a b',
+      'https://x.test/a,b',
+      'not a url',
+    ]) {
+      expect(
+        await adapter.send(message, recipient, realConfig, {
+          ...opts,
+          unsubscribeUrl,
+        })
+      ).toEqual({
+        ok: false,
+        retryable: false,
+        reason: 'invalid unsubscribe url',
+      });
+    }
+    expect(sent).toHaveLength(0);
+  });
+
+  it('classifies errors without an SMTP response code', async () => {
+    const cases: [Record<string, unknown>, boolean][] = [
+      [{ code: 'ECONNREFUSED' }, true],
+      [{ code: 'ECONNRESET' }, true],
+      [{ code: 'ETIMEDOUT' }, true],
+      [{ code: 'ESOCKET' }, true],
+      [{ code: 'EDNS' }, true],
+      [
+        { code: 'ECONNECTION', message: 'Connection closed unexpectedly' },
+        true,
+      ],
+      [{ code: 'ETLS' }, false],
+      [{ code: 'ESOCKET', message: 'self-signed certificate' }, false],
+      [{ code: 'CERT_HAS_EXPIRED' }, false],
+      [{ code: 'ERR_TLS_CERT_ALTNAME_INVALID' }, false],
+      [{ code: 'EENVELOPE' }, false],
+      [{ code: 'EAUTH' }, false],
+      [{ code: 'EMESSAGE' }, false],
+    ];
+    for (const [fields, retryable] of cases) {
+      const adapter = createEmailAdapter({
+        createTransport: fakeTransport(() =>
+          Promise.reject(Object.assign(new Error('failed'), fields))
+        ),
+      });
+      expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
+        ok: false,
+        retryable,
+        reason: `smtp ${String(fields.code)}`,
+      });
+    }
   });
 
   it('config schema bounds the port and requires a sender', () => {

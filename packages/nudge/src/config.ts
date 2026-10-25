@@ -61,7 +61,11 @@ const rawSchema = z
     NUDGE_CLAIM_BATCH: positiveInt(200),
     NUDGE_SEND_CONCURRENCY: positiveInt(10),
     NUDGE_DB_POOL: positiveInt(10),
-    NUDGE_WEBHOOK_ALLOW_HOSTS: list,
+    // Hostnames only, any port; IPv6 literals are unsupported because they contain ':'.
+    NUDGE_WEBHOOK_ALLOW_HOSTS: list.refine(
+      (hosts) => hosts.every((host) => !/[:/]/.test(host)),
+      { message: 'entries must be bare hostnames (no scheme, port or path)' }
+    ),
     NUDGE_KAFKA_GROUP: stringWithDefault('nudge'),
     KAFKA_BROKERS: list.refine((brokers) => brokers.length > 0, {
       message: 'at least one broker is required',
