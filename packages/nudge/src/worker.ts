@@ -6,7 +6,8 @@ import { redactSecrets } from './redact';
 
 const LOG_PREFIX = 'nudge worker:';
 const INTEREST_REFRESH_MS = 10_000;
-const PURGE_INTERVAL_MS = 86_400_000;
+// Hourly with a time budget per run, so a project that stores every event still keeps up.
+const PURGE_INTERVAL_MS = 3_600_000;
 
 export interface Stoppable {
   stop(): Promise<void>;

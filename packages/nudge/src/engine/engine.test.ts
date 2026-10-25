@@ -888,24 +888,37 @@ describe('engine', () => {
     expect(left.map((row) => row.profile_id)).toEqual([PROFILE, PROFILE]);
   });
 
-  it('purgeOldEvents deletes in chunks until done, bounded per run', async () => {
+  it('purgeOldEvents clears several chunks of old rows in one run', async () => {
     const old = new Date(secondsAfter(NOW, -31 * DAY));
-    const oldEvents = Array.from({ length: 5 }, () => event('page_view', old));
-    await engine.handleEvents(oldEvents);
-    expect(
-      await engine.purgeOldEvents(30, {
-        chunkSize: 2,
-        pauseMs: 0,
-        maxChunks: 2,
-      })
-    ).toBe(4);
+    await engine.handleEvents(
+      Array.from({ length: 7 }, () => event('page_view', old))
+    );
     expect(await engine.purgeOldEvents(30, { chunkSize: 2, pauseMs: 0 })).toBe(
-      1
+      7
     );
     expect(await count('events')).toBe(0);
   });
 
-  it('PERF the purge enrollment check can use an enrollments index', async () => {
+  it('purgeOldEvents stops when its time budget is spent and the next run continues', async () => {
+    const old = new Date(secondsAfter(NOW, -31 * DAY));
+    await engine.handleEvents(
+      Array.from({ length: 5 }, () => event('page_view', old))
+    );
+    let ticks = 0;
+    // Every clock read moves a minute on, so the budget runs out after two chunks.
+    const slowClock = createEngine({
+      sql,
+      now: () => new Date(NOW.getTime() + ticks++ * MINUTE_MS),
+    });
+    const options = { chunkSize: 1, pauseMs: 0, budgetMs: 2 * MINUTE_MS };
+    expect(await slowClock.purgeOldEvents(30, options)).toBe(2);
+    expect(await count('events')).toBe(3);
+    expect(await engine.purgeOldEvents(30, { chunkSize: 1, pauseMs: 0 })).toBe(
+      3
+    );
+  });
+
+  it('PERF a purge chunk checks enrollments through an index and old events have an event_time index', async () => {
     const ruleId = await insertRule(rule());
     await sql.$executeRawUnsafe(
       `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
@@ -926,6 +939,14 @@ describe('engine', () => {
       return rows.map((row) => Object.values(row).join(' ')).join('\n');
     });
     expect(plan).toContain('enrollments_reentry_idx');
+    // On test-sized tables the planner may prefer another index; the purge needs this one at scale.
+    const indexes = await sql.$queryRawUnsafe<{ indexdef: string }[]>(
+      `SELECT indexdef FROM pg_indexes
+       WHERE schemaname = 'nudge' AND indexname = 'events_event_time_idx'`
+    );
+    expect(indexes.map((row) => row.indexdef)).toEqual([
+      'CREATE INDEX events_event_time_idx ON nudge.events USING btree (event_time)',
+    ]);
   });
 
   it("SECURITY cross-project isolation: an event for project B never enrolls, completes or debounces project A's enrollment even with the same profile id and event names", async () => {

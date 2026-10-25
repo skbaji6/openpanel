@@ -14,8 +14,9 @@ const BATCH_TRANSACTION_MAX_WAIT_MS = 30_000;
 const MS_PER_DAY = 86_400_000;
 // Events can be forged; a far-future time would push inactivity timers out indefinitely.
 export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
-// The daily purge works in short chunks so it never holds a long lock or a long transaction.
-const PURGE_DEFAULTS = { chunkSize: 10_000, pauseMs: 100, maxChunks: 100 };
+// The purge works in short chunks so it never holds a long lock or a long transaction, and stops
+// after a time budget so one run cannot occupy the database; the next hourly run continues.
+const PURGE_DEFAULTS = { chunkSize: 10_000, pauseMs: 100, budgetMs: 600_000 };
 
 export type Sql = typeof nudgeSql;
 export type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;
@@ -466,25 +467,27 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
       retentionDays: number,
       options: Partial<typeof PURGE_DEFAULTS> = {}
     ): Promise<number> {
-      const { chunkSize, pauseMs, maxChunks } = {
+      const { chunkSize, pauseMs, budgetMs } = {
         ...PURGE_DEFAULTS,
         ...options,
       };
-      const cutoff = new Date(now().getTime() - retentionDays * MS_PER_DAY);
+      const started = now().getTime();
+      const cutoff = new Date(started - retentionDays * MS_PER_DAY);
       let total = 0;
-      for (let chunk = 0; chunk < maxChunks; chunk++) {
+      for (;;) {
         const deleted = await deps.sql.$executeRawUnsafe(
           PURGE_CHUNK_SQL,
           cutoff.toISOString(),
           chunkSize
         );
         total += deleted;
-        if (deleted < chunkSize) {
-          break;
+        const done = deleted < chunkSize;
+        const outOfBudget = now().getTime() - started >= budgetMs;
+        if (done || outOfBudget) {
+          return total;
         }
         await Bun.sleep(pauseMs);
       }
-      return total;
     },
     async interestNames(projectId?: string): Promise<Set<string>> {
       const rows = await deps.sql.$queryRawUnsafe<{ name: string }[]>(
