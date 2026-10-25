@@ -295,6 +295,7 @@ describe('engine', () => {
     await resetNudgeTables();
   });
   afterAll(async () => {
+    await resetNudgeTables();
     await sql.$disconnect();
   });
 

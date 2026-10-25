@@ -30,6 +30,8 @@ const INTEREST_EVERY = 20;
 const KAFKA_BATCH = 1000;
 const KEEP_ALL_PROFILES = 5000;
 const P95 = 0.95;
+const TIMING_LABEL_LENGTH = 70;
+const TIMING_TOP_STATEMENTS = 6;
 
 const CLAIM_TARGET_MS = 50;
 const THROUGHPUT_TARGET = 2000;
@@ -79,7 +81,7 @@ const [
   { sql },
   { migrate },
   { createEngine },
-  { CLAIM_SQL, runTick },
+  { CLAIM_SQL, createTickState, runTick },
   { registerAdapter },
   { createBatchHandler },
   { createMemoryInterestSet, createRedisInterestSet, INTEREST_PROFILES_KEY },
@@ -263,6 +265,49 @@ async function measureClaim() {
   return { median, p95 };
 }
 
+interface QueryTimings {
+  totals: Map<string, { calls: number; ms: number }>;
+  claimStart: number;
+  claimEnd: number;
+}
+
+function statementLabel(prop: string | symbol, args: unknown[]): string {
+  if (prop === '$transaction') {
+    return 'transaction (profile-locked writes)';
+  }
+  const text = typeof args[0] === 'string' ? args[0] : String(prop);
+  return text.trim().split('\n')[0]?.slice(0, TIMING_LABEL_LENGTH) ?? '';
+}
+
+// Times every top-level statement runTick sends; statements inside a transaction count toward it.
+function timedSql(timings: QueryTimings): typeof sql {
+  return new Proxy(sql, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== 'function') {
+        return value;
+      }
+      return async (...args: unknown[]) => {
+        const started = performance.now();
+        try {
+          return await value.apply(target, args);
+        } finally {
+          const ended = performance.now();
+          const label = statementLabel(prop, args);
+          const total = timings.totals.get(label) ?? { calls: 0, ms: 0 };
+          total.calls += 1;
+          total.ms += ended - started;
+          timings.totals.set(label, total);
+          if (args[0] === CLAIM_SQL) {
+            timings.claimStart = started;
+            timings.claimEnd = ended;
+          }
+        }
+      };
+    },
+  });
+}
+
 async function measureTick() {
   registerAdapter({
     id: 'webhook',
@@ -270,30 +315,53 @@ async function measureTick() {
     send: () => Promise.resolve({ ok: true }),
   });
   const engine = createEngine({ sql });
+  const healSweep = createTickState();
   const samples: number[] = [];
-  const results: string[] = [];
+  const lines: string[] = [];
   for (let run = 0; run < TICK_RUNS; run++) {
     await sql.$executeRawUnsafe(
       `INSERT INTO nudge.consumer_state (id, lag, updated_at) VALUES (1, 0, $1::timestamptz)
        ON CONFLICT (id) DO UPDATE SET lag = 0, updated_at = EXCLUDED.updated_at`,
       new Date().toISOString()
     );
+    const timings: QueryTimings = {
+      totals: new Map(),
+      claimStart: 0,
+      claimEnd: 0,
+    };
     const started = performance.now();
     const result = await runTick({
-      sql,
+      sql: timedSql(timings),
       engine,
       cfg: CFG,
       now: () => new Date(),
       renderUnsubscribeUrl: () => 'https://nudge.load/u',
+      state: healSweep,
     });
-    samples.push(performance.now() - started);
-    results.push(JSON.stringify(result));
+    const ended = performance.now();
+    samples.push(ended - started);
+    lines.push(
+      `    tick ${run + 1}: ${ms(ended - started)} = before claim (lag gate, sweep) ${ms(timings.claimStart - started)}, claim ${ms(timings.claimEnd - timings.claimStart)}, send pool ${ms(ended - timings.claimEnd)}; ${JSON.stringify(result)}`
+    );
+    const top = [...timings.totals.entries()]
+      .sort((a, b) => b[1].ms - a[1].ms)
+      .slice(0, TIMING_TOP_STATEMENTS);
+    for (const [label, total] of top) {
+      lines.push(
+        `      ${String(total.calls).padStart(4)} x ${ms(total.ms).padStart(10)}  ${label}`
+      );
+    }
   }
   const { median } = stats(samples);
   console.log(
     `\n(c) runTick, ${CFG.claimBatch}-step batch, no-op adapter, concurrency ${CFG.sendConcurrency}: ${samples.map(ms).join(', ')} (median ${ms(median)})`
   );
-  console.log(`    results: ${results.join(' ')}`);
+  console.log(
+    '    summed statement time per kind (concurrent, so sums exceed wall time):'
+  );
+  for (const line of lines) {
+    console.log(line);
+  }
   return { median };
 }
 
@@ -413,9 +481,23 @@ async function cleanup() {
   await getRedisCache().del(INTEREST_PROFILES_KEY);
 }
 
+// Rows of other projects (e.g. left by a test run) would be claimed by the measured ticks.
+async function assertNoForeignRows() {
+  const [row] = await sql.$queryRawUnsafe<{ other_rows: number }[]>(
+    'SELECT count(*)::int AS other_rows FROM nudge.enrollments WHERE project_id NOT LIKE $1',
+    `${LOAD_PREFIX}%`
+  );
+  if (row?.other_rows) {
+    throw new Error(
+      `nudge.enrollments holds ${row.other_rows} rows of other projects; empty the test schema's tables before a load run`
+    );
+  }
+}
+
 async function main() {
   await migrate();
   await cleanup();
+  await assertNoForeignRows();
   const [consumerState] = await sql.$queryRawUnsafe<unknown[]>(
     'SELECT 1 FROM nudge.consumer_state WHERE id = 1'
   );

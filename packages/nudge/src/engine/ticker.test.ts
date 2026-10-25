@@ -6,6 +6,7 @@ import {
   expect,
   it,
   type Mock,
+  mock,
   spyOn,
 } from 'bun:test';
 import { randomUUID } from 'node:crypto';
@@ -28,6 +29,9 @@ import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine, lockProfiles } from './engine';
 import {
   CLAIM_SQL,
+  createTickState,
+  HEAL_SWEEP_INTERVAL_MS,
+  LAG_WARN_INTERVAL_MS,
   MARK_SQL,
   runTick,
   type TickDeps,
@@ -338,6 +342,8 @@ describe('runTick', () => {
   });
   afterAll(async () => {
     errorLog?.mockRestore();
+    // The index test leaves 20,000 enrollments behind, which would skew scripts/load.ts.
+    await resetNudgeTables();
     await sql.$disconnect();
   });
 
@@ -1150,6 +1156,70 @@ describe('runTick', () => {
     expect(await tick()).toEqual(ZERO);
     expect(await enrollmentStatus(enrollmentId)).toBe('completed');
     expect(calls).toHaveLength(1);
+  });
+
+  it('PERF a step that is not the last finishes without a completion transaction', async () => {
+    const definition = rule({
+      steps: [
+        { delaySeconds: HOUR, channel: 'email', template: { body: 'one' } },
+        { delaySeconds: DAY, channel: 'email', template: { body: 'two' } },
+      ],
+    });
+    const { enrollmentId } = await enrollOne(definition, [
+      { dueAt: DUE },
+      { dueAt: new Date(NOW.getTime() + DAY * 1000) },
+    ]);
+    let transactions = 0;
+    const counting = new Proxy(sql, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
+        if (prop !== '$transaction' || typeof value !== 'function') {
+          return value;
+        }
+        return (...args: unknown[]) => {
+          transactions++;
+          return value.apply(target, args);
+        };
+      },
+    });
+    expect(
+      await tick(CFG, { sql: counting, state: createTickState() })
+    ).toEqual({ ...ZERO, sent: 1 });
+    expect(transactions).toBe(0);
+    expect(await enrollmentStatus(enrollmentId)).toBe('active');
+  });
+
+  it('with shared tick state the heal sweep runs at most once per interval', async () => {
+    const state = createTickState();
+    const { enrollmentId } = await enrollOne();
+    const flaky = flakySql('$transaction', null, 1);
+    expect(await tick(CFG, { sql: flaky, state })).toEqual({
+      ...ZERO,
+      sent: 1,
+    });
+    expect(await tick(CFG, { state })).toEqual(ZERO);
+    expect(await enrollmentStatus(enrollmentId)).toBe('active');
+    clock = new Date(NOW.getTime() + HEAL_SWEEP_INTERVAL_MS);
+    await setConsumerState(0, clock);
+    expect(await tick(CFG, { state })).toEqual(ZERO);
+    expect(await enrollmentStatus(enrollmentId)).toBe('completed');
+  });
+
+  it('a closed lag gate warns at most once per interval with lag, threshold and state age', async () => {
+    const state = createTickState();
+    const logger = { warn: mock((..._args: unknown[]) => undefined) };
+    await setConsumerState(CFG.maxLag + 1);
+    await tick(CFG, { state, logger });
+    await tick(CFG, { state, logger });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const first = logger.warn.mock.calls[0]?.join(' ') ?? '';
+    expect(first).toContain(`consumer lag ${CFG.maxLag + 1}`);
+    expect(first).toContain(`threshold ${CFG.maxLag}`);
+    expect(first).toContain('state 0 s old');
+    clock = new Date(NOW.getTime() + LAG_WARN_INTERVAL_MS);
+    await tick(CFG, { state, logger });
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn.mock.calls[1]?.join(' ')).toContain('state 60 s old');
   });
 
   it('the claim query uses the pending and lease indexes', async () => {

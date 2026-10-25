@@ -36,6 +36,9 @@ const LOCKED_TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 const LOG_PREFIX = 'nudge ticker:';
 // Shorter config strings (flags, ports) would blank out unrelated words in the log.
 const MIN_SECRET_LENGTH = 4;
+// The sweep only heals completions whose best-effort write failed, so it need not run every tick.
+export const HEAL_SWEEP_INTERVAL_MS = 60_000;
+export const LAG_WARN_INTERVAL_MS = 60_000;
 
 type Engine = ReturnType<typeof createEngine>;
 
@@ -49,7 +52,19 @@ export interface TickDeps {
     profileId: string,
     channel: string
   ) => string;
+  // Shared across ticks by the worker; without it every tick sweeps and warns.
+  state?: TickState;
+  logger?: Pick<Console, 'warn'>;
 }
+
+export function createTickState() {
+  return {
+    lastSweepAt: Number.NEGATIVE_INFINITY,
+    lastLagWarnAt: Number.NEGATIVE_INFINITY,
+  };
+}
+
+export type TickState = ReturnType<typeof createTickState>;
 
 export interface TickResult {
   sent: number;
@@ -64,6 +79,7 @@ interface Claim {
   enrollment_id: string;
   step_index: number;
   attempt: number;
+  is_last: boolean;
 }
 
 interface StepContext {
@@ -131,7 +147,9 @@ export const CLAIM_SQL = `
   SET status = 'sending', lease_until = $4::timestamptz, attempt = s.attempt + 1
   FROM (SELECT * FROM picked LIMIT $3::int) chosen
   WHERE s.enrollment_id = chosen.enrollment_id AND s.step_index = chosen.step_index
-  RETURNING s.enrollment_id::text, s.step_index, s.attempt`;
+  RETURNING s.enrollment_id::text, s.step_index, s.attempt,
+    NOT EXISTS (SELECT 1 FROM nudge.steps later
+                WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last`;
 
 // Params: enrollment id, step index.
 const CONTEXT_SQL = `
@@ -327,17 +345,23 @@ async function completeIfDone(sql: Sql, enrollmentId: string): Promise<void> {
 export async function runTick(deps: TickDeps): Promise<TickResult> {
   const { sql, cfg } = deps;
   const result: TickResult = { sent: 0, skipped: 0, postponed: 0, failed: 0 };
+  const state = deps.state ?? createTickState();
   const tickStart = deps.now();
-  if (!lagAllowsSending(await readLagState(sql), tickStart, cfg)) {
+  const lagState = await readLagState(sql);
+  if (!lagAllowsSending(lagState, tickStart, cfg)) {
+    warnLagGateClosed(deps, state, lagState, tickStart);
     return result;
   }
   await sql.$executeRawUnsafe(CANCEL_ORPHANED_SQL, tickStart.toISOString());
-  const unfinished = await sql.$queryRawUnsafe<{ id: string }[]>(
-    UNFINISHED_COMPLETIONS_SQL,
-    cfg.claimBatch
-  );
-  for (const { id } of unfinished) {
-    await completeIfDone(sql, id);
+  if (tickStart.getTime() - state.lastSweepAt >= HEAL_SWEEP_INTERVAL_MS) {
+    state.lastSweepAt = tickStart.getTime();
+    const unfinished = await sql.$queryRawUnsafe<{ id: string }[]>(
+      UNFINISHED_COMPLETIONS_SQL,
+      cfg.claimBatch
+    );
+    for (const { id } of unfinished) {
+      await completeIfDone(sql, id);
+    }
   }
   const claims = await sql.$queryRawUnsafe<Claim[]>(
     CLAIM_SQL,
@@ -353,6 +377,24 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
     }
   });
   return result;
+}
+
+function warnLagGateClosed(
+  deps: TickDeps,
+  state: TickState,
+  lagState: Awaited<ReturnType<typeof readLagState>>,
+  now: Date
+): void {
+  // No state yet is normal for the first seconds after startup; the lag reporter logs its own failures.
+  if (!lagState || now.getTime() - state.lastLagWarnAt < LAG_WARN_INTERVAL_MS) {
+    return;
+  }
+  state.lastLagWarnAt = now.getTime();
+  const detail = `consumer lag ${lagState.lag} (threshold ${deps.cfg.maxLag}), state ${Math.round((now.getTime() - lagState.updatedAt.getTime()) / 1000)} s old`;
+  (deps.logger ?? console).warn(
+    LOG_PREFIX,
+    redactSecrets(`sending paused: ${detail}`, [])
+  );
 }
 
 function stepLabel(claim: Claim) {
@@ -414,7 +456,11 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
     if (!updated) {
       return 'lost';
     }
-    await completeIfDone(deps.sql, claim.enrollment_id);
+    // Later steps of an active enrollment stay pending until claimed in order, and every path that
+    // finalizes them early also ends the enrollment; the sweep heals anything else.
+    if (claim.is_last) {
+      await completeIfDone(deps.sql, claim.enrollment_id);
+    }
     return status;
   }
 
