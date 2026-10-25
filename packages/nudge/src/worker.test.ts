@@ -4,11 +4,29 @@ import { loadConfig } from './config';
 import { sql } from './db/client';
 import { migrate } from './db/migrate';
 import { createKafka } from './kafka/consumer';
-import { startWorker } from './worker';
+import { createStopAll, startWorker } from './worker';
 
 const WORKER_TEST_TIMEOUT_MS = 30_000;
 const LAG_WAIT_MS = 10_000;
 const POLL_MS = 100;
+
+describe('createStopAll', () => {
+  it('a concurrent second stop (fatal consumer plus SIGTERM) stops each part once, newest first', async () => {
+    const stopped: string[] = [];
+    const part = (name: string) => ({
+      async stop() {
+        await Bun.sleep(5);
+        stopped.push(name);
+      },
+    });
+    const started = [part('first'), part('second')];
+    const stopAll = createStopAll(started, []);
+    await Promise.all([stopAll(), stopAll()]);
+    await stopAll();
+    expect(stopped).toEqual(['second', 'first']);
+    expect(started).toHaveLength(0);
+  });
+});
 
 describe('startWorker', () => {
   it(

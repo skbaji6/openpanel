@@ -5,6 +5,7 @@ import { z } from 'zod';
 const MAX_SUBJECT_LENGTH = 300;
 const MAX_BODY_LENGTH = 20_000;
 export const MAX_DELAY_SECONDS = 90 * 24 * 60 * 60;
+export const MAX_STEPS = 20;
 
 export const zStep = z.object({
   delaySeconds: z.number().int().min(0).max(MAX_DELAY_SECONDS),
@@ -42,6 +43,7 @@ export const zRuleDefinition = z.object({
   steps: z
     .array(zStep)
     .min(1)
+    .max(MAX_STEPS)
     .refine(
       (steps) =>
         steps.every(

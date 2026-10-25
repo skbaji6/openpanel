@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { MAX_DELAY_SECONDS, zRuleDefinition } from './rule.schema';
+import { MAX_DELAY_SECONDS, MAX_STEPS, zRuleDefinition } from './rule.schema';
 import { STARTER_RULES } from './starter-rules';
 
 const valid = STARTER_RULES['cart-abandoned'];
@@ -28,6 +28,22 @@ describe('zRuleDefinition', () => {
         false
       );
     }
+  });
+
+  it('accepts MAX_STEPS steps and rejects one more', () => {
+    const step = valid.steps[0]!;
+    const steps = (count: number) =>
+      Array.from({ length: count }, (_unused, index) => ({
+        ...step,
+        delaySeconds: (index + 1) * 60,
+      }));
+    expect(
+      zRuleDefinition.safeParse({ ...valid, steps: steps(MAX_STEPS) }).success
+    ).toBe(true);
+    expect(
+      zRuleDefinition.safeParse({ ...valid, steps: steps(MAX_STEPS + 1) })
+        .success
+    ).toBe(false);
   });
 
   it('rejects a set goal without setKey', () => {

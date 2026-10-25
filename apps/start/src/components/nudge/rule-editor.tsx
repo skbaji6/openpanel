@@ -16,6 +16,7 @@ import {
   type GoalKind,
   MAX_BODY_LENGTH,
   MAX_DELAY_SECONDS,
+  MAX_STEPS,
   MAX_SUBJECT_LENGTH,
   type Preview,
   type ReferenceSetSummary,
@@ -815,6 +816,7 @@ export function RuleEditor({
         ))}
         <li className="pl-10">
           <Button
+            disabled={definition.steps.length >= MAX_STEPS}
             icon={PlusIcon}
             onClick={() => {
               stepKeys.add();

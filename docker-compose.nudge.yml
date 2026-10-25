@@ -47,7 +47,7 @@ services:
       NUDGE_CLAIM_BATCH: ${NUDGE_CLAIM_BATCH:-200}
       NUDGE_SEND_CONCURRENCY: ${NUDGE_SEND_CONCURRENCY:-10}
       # Connections per replica; the database is shared with op-api and op-worker.
-      NUDGE_DB_POOL: ${NUDGE_DB_POOL:-10}
+      NUDGE_DB_POOL: ${NUDGE_DB_POOL:-15}
       NUDGE_WEBHOOK_ALLOW_HOSTS: ${NUDGE_WEBHOOK_ALLOW_HOSTS:-}
       NUDGE_KAFKA_GROUP: ${NUDGE_KAFKA_GROUP:-nudge}
       KAFKA_BROKERS: ${KAFKA_BROKERS:-op-rp:9092}

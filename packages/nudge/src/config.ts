@@ -1,8 +1,15 @@
 import { z } from 'zod';
+import { SEND_TIMEOUT_MS } from './channels/timeouts';
 
 const SASL_MECHANISMS = ['plain', 'scram-sha-256', 'scram-sha-512'] as const;
 const TRUE_VALUES = new Set(['true', '1']);
 const FALSE_VALUES = new Set(['false', '0']);
+// Connections a replica needs besides one per concurrent send: consumer batch, tick sweep/claim, HTTP.
+const DB_POOL_HEADROOM = 3;
+// A lease must outlast the adapter's send timeout plus the ticker's mark retries (about 0.5 s).
+const MIN_LEASE_SECONDS = SEND_TIMEOUT_MS / 1000 + 1;
+const WEB_PROTOCOLS = new Set(['http:', 'https:']);
+const TRAILING_SLASHES = /\/+$/;
 
 const blankToUndefined = (value: unknown) => {
   if (typeof value !== 'string') {
@@ -62,7 +69,7 @@ const rawSchema = z
     NUDGE_EVENT_RETENTION_DAYS: positiveInt(30),
     NUDGE_CLAIM_BATCH: positiveInt(200),
     NUDGE_SEND_CONCURRENCY: positiveInt(10),
-    NUDGE_DB_POOL: positiveInt(10),
+    NUDGE_DB_POOL: positiveInt(15),
     // Hostnames only, any port; IPv6 literals are unsupported because they contain ':'.
     NUDGE_WEBHOOK_ALLOW_HOSTS: list.refine(
       (hosts) => hosts.every((host) => !/[:/]/.test(host)),
@@ -85,6 +92,33 @@ const rawSchema = z
     ),
   })
   .superRefine((raw, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    // The value is a secret, so the message never echoes it.
+    if (!URL.canParse(raw.DATABASE_URL)) {
+      issue(
+        'DATABASE_URL',
+        'must be a URL such as postgresql://user:password@host:5432/database'
+      );
+    }
+    const publicUrl = URL.canParse(raw.NUDGE_PUBLIC_URL)
+      ? new URL(raw.NUDGE_PUBLIC_URL)
+      : null;
+    if (!(publicUrl && WEB_PROTOCOLS.has(publicUrl.protocol))) {
+      issue('NUDGE_PUBLIC_URL', 'must be an http(s) URL');
+    }
+    if (raw.NUDGE_DB_POOL < raw.NUDGE_SEND_CONCURRENCY + DB_POOL_HEADROOM) {
+      issue(
+        'NUDGE_DB_POOL',
+        `must be at least NUDGE_SEND_CONCURRENCY + ${DB_POOL_HEADROOM} (${raw.NUDGE_SEND_CONCURRENCY + DB_POOL_HEADROOM})`
+      );
+    }
+    if (raw.NUDGE_LEASE_SECONDS <= MIN_LEASE_SECONDS) {
+      issue(
+        'NUDGE_LEASE_SECONDS',
+        `must be greater than ${MIN_LEASE_SECONDS} (the ${SEND_TIMEOUT_MS / 1000} s send timeout plus mark retries)`
+      );
+    }
     const hasUsername = raw.KAFKA_SASL_USERNAME !== undefined;
     const hasPassword = raw.KAFKA_SASL_PASSWORD !== undefined;
     if (hasUsername === hasPassword) {
@@ -167,7 +201,7 @@ export function loadConfig(
     redisUrl: raw.REDIS_URL,
     encryptionKey: raw.ENCRYPTION_KEY,
     proxySecret: raw.NUDGE_PROXY_SECRET,
-    publicUrl: raw.NUDGE_PUBLIC_URL,
+    publicUrl: raw.NUDGE_PUBLIC_URL.replace(TRAILING_SLASHES, ''),
     port: raw.NUDGE_PORT,
     trustProxy: raw.NUDGE_TRUST_PROXY ?? false,
     graceSeconds: raw.NUDGE_GRACE_SECONDS,

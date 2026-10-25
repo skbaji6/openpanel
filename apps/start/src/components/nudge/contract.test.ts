@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import {
   MAX_BODY_LENGTH,
   MAX_DELAY_SECONDS,
+  MAX_STEPS,
   MAX_SUBJECT_LENGTH,
   type RuleDefinition,
   zRuleDefinition,
@@ -105,6 +106,26 @@ describe('contract', () => {
       rule.steps[1] = { ...step, ...change };
       expect(zRuleDefinition.safeParse(rule).success).toBe(false);
     }
+  });
+
+  test('contract allows MAX_STEPS steps and rejects one more', () => {
+    const rule = validRule();
+    const [step] = rule.steps;
+    if (!step) {
+      throw new Error('fixture needs a step');
+    }
+    const steps = (count: number) =>
+      Array.from({ length: count }, (_unused, index) => ({
+        ...step,
+        delaySeconds: (index + 1) * 60,
+      }));
+    expect(
+      zRuleDefinition.safeParse({ ...rule, steps: steps(MAX_STEPS) }).success
+    ).toBe(true);
+    expect(
+      zRuleDefinition.safeParse({ ...rule, steps: steps(MAX_STEPS + 1) })
+        .success
+    ).toBe(false);
   });
 
   test('contract strips unknown keys like the service schema', () => {

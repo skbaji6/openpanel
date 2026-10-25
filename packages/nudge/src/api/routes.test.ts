@@ -313,6 +313,29 @@ describe('sync routes', () => {
     ]);
   });
 
+  it('SECURITY PUT devices never moves a token registered in another project', async () => {
+    const keyA = await createKey('proj-a');
+    const keyB = await createKey('proj-b');
+    await sync('PUT', '/nudge/devices', keyA, {
+      profileId: 'u1',
+      token: 'tok-1',
+      platform: 'android',
+    });
+    const taken = await sync('PUT', '/nudge/devices', keyB, {
+      profileId: 'attacker',
+      token: 'tok-1',
+      platform: 'ios',
+    });
+    expect(taken.status).toBe(409);
+    const text = await taken.text();
+    expect(text).not.toContain('proj-a');
+    expect(text).not.toContain('u1');
+    const rows = await sql.$queryRawUnsafe<
+      { project_id: string; profile_id: string }[]
+    >('SELECT project_id, profile_id FROM nudge.devices');
+    expect(rows).toEqual([{ project_id: 'proj-a', profile_id: 'u1' }]);
+  });
+
   it('DELETE devices removes it', async () => {
     const keyA = await createKey('proj-a');
     const keyB = await createKey('proj-b');

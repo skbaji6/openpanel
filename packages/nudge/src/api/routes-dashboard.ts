@@ -32,7 +32,6 @@ const PUBLIC_CONFIG_FIELDS: Record<string, string[]> = {
   push: [],
 };
 const MAX_NAME_LENGTH = 200;
-const MAX_STEPS = 20;
 const MAX_FILTERS = 50;
 const MAX_PROPERTY_NAMES = 100;
 const MAX_LABEL_LENGTH = 100;
@@ -50,14 +49,12 @@ const UUID_PATTERN =
 const zBoundedRule = zRuleDefinition.refine(
   (rule) =>
     rule.name.length <= MAX_NAME_LENGTH &&
-    rule.steps.length <= MAX_STEPS &&
     (rule.trigger.filters?.length ?? 0) <= MAX_FILTERS &&
     rule.allowedEventProps.length <= MAX_PROPERTY_NAMES &&
     (rule.goal.kind !== 'inactivity' ||
       rule.goal.excludeEvents.length <= MAX_PROPERTY_NAMES),
   {
-    message:
-      'rule exceeds the allowed name length, steps, filters or properties',
+    message: 'rule exceeds the allowed name length, filters or properties',
   }
 );
 const zStatus = z.enum(['active', 'paused']);

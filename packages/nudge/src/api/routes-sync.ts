@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Queryable } from '../engine/engine';
 import {
+  HttpError,
   json,
   parseJsonBody,
   type Route,
@@ -57,13 +58,14 @@ const UPSERT_CONTACT_SQL = `
     attributes = COALESCE($4::jsonb, nudge.contacts.attributes),
     updated_at = now()`;
 
-// The token is the primary key, so re-registering moves it to the new profile (and project).
+// The token is the primary key: re-registering moves it to the new profile, but never into
+// another project, or one project's API key could take over another project's devices.
 const UPSERT_DEVICE_SQL = `
   INSERT INTO nudge.devices (token, project_id, profile_id, platform)
   VALUES ($1, $2, $3, $4)
   ON CONFLICT (token) DO UPDATE SET
-    project_id = EXCLUDED.project_id, profile_id = EXCLUDED.profile_id,
-    platform = EXCLUDED.platform, updated_at = now()`;
+    profile_id = EXCLUDED.profile_id, platform = EXCLUDED.platform, updated_at = now()
+  WHERE nudge.devices.project_id = EXCLUDED.project_id`;
 
 const UPSERT_REFERENCE_SET_SQL = `
   INSERT INTO nudge.reference_sets (project_id, set_key, values)
@@ -121,13 +123,16 @@ export function syncRoutes(sql: Queryable): Route[] {
       auth: 'apiKey',
       async handle(ctx) {
         const device = await parseJsonBody(ctx.req, zDevice);
-        await sql.$executeRawUnsafe(
+        const written = await sql.$executeRawUnsafe(
           UPSERT_DEVICE_SQL,
           device.token,
           ctx.projectId,
           device.profileId,
           device.platform
         );
+        if (written === 0) {
+          throw new HttpError(409, 'token_in_use');
+        }
         return json({ ok: true });
       },
     },

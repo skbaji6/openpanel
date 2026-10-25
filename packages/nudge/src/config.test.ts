@@ -23,20 +23,20 @@ describe('loadConfig', () => {
     expect(config.trustProxy).toBe(false);
     expect(config.claimBatch).toBe(200);
     expect(config.sendConcurrency).toBe(10);
-    expect(config.dbPool).toBe(10);
-    expect(config.databaseUrl).toContain('connection_limit=10');
+    expect(config.dbPool).toBe(15);
+    expect(config.databaseUrl).toContain('connection_limit=15');
     expect(config.kafka.brokers).toEqual(['localhost:9092']);
     expect(config.kafka.sasl).toBeUndefined();
   });
 
-  it('NUDGE_DB_POOL=3 yields connection_limit=3 and replaces an existing connection_limit param', () => {
+  it('NUDGE_DB_POOL=13 yields connection_limit=13 and replaces an existing connection_limit param', () => {
     const config = loadConfig({
       ...required,
       DATABASE_URL: `${required.DATABASE_URL}?connection_limit=50&schema=public`,
-      NUDGE_DB_POOL: '3',
+      NUDGE_DB_POOL: '13',
     });
     const url = new URL(config.databaseUrl);
-    expect(url.searchParams.getAll('connection_limit')).toEqual(['3']);
+    expect(url.searchParams.getAll('connection_limit')).toEqual(['13']);
     expect(url.searchParams.get('schema')).toBe('public');
   });
 
@@ -47,6 +47,51 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, NUDGE_TRUST_PROXY: 'yes' })).toThrow(
       /NUDGE_TRUST_PROXY/
     );
+  });
+
+  it('NUDGE_PUBLIC_URL must be an http(s) URL and loses its trailing slash', () => {
+    expect(
+      loadConfig({ ...required, NUDGE_PUBLIC_URL: 'https://n.example.com/' })
+        .publicUrl
+    ).toBe('https://n.example.com');
+    for (const bad of [
+      'n.example.com',
+      'ftp://n.example.com',
+      'javascript:x',
+    ]) {
+      expect(() => loadConfig({ ...required, NUDGE_PUBLIC_URL: bad })).toThrow(
+        /NUDGE_PUBLIC_URL: must be an http\(s\) URL/
+      );
+    }
+  });
+
+  it('an unparseable DATABASE_URL fails with a clear message that does not echo it', () => {
+    const attempt = () =>
+      loadConfig({ ...required, DATABASE_URL: 'host=db password=hunter2' });
+    expect(attempt).toThrow(/DATABASE_URL: must be a URL/);
+    expect(attempt).not.toThrow(/hunter2/);
+  });
+
+  it('NUDGE_DB_POOL must leave room for every concurrent send plus 3', () => {
+    expect(() => loadConfig({ ...required, NUDGE_DB_POOL: '12' })).toThrow(
+      /NUDGE_DB_POOL: must be at least NUDGE_SEND_CONCURRENCY \+ 3 \(13\)/
+    );
+    expect(
+      loadConfig({
+        ...required,
+        NUDGE_DB_POOL: '6',
+        NUDGE_SEND_CONCURRENCY: '3',
+      }).dbPool
+    ).toBe(6);
+  });
+
+  it('NUDGE_LEASE_SECONDS must exceed the send timeout plus mark retries', () => {
+    expect(() =>
+      loadConfig({ ...required, NUDGE_LEASE_SECONDS: '31' })
+    ).toThrow(/NUDGE_LEASE_SECONDS: must be greater than 31/);
+    expect(
+      loadConfig({ ...required, NUDGE_LEASE_SECONDS: '32' }).leaseSeconds
+    ).toBe(32);
   });
 
   it('missing KAFKA_EVENTS_TOPIC throws', () => {

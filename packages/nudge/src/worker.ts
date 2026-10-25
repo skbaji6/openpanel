@@ -8,7 +8,7 @@ const LOG_PREFIX = 'nudge worker:';
 const INTEREST_REFRESH_MS = 10_000;
 const PURGE_INTERVAL_MS = 86_400_000;
 
-interface Stoppable {
+export interface Stoppable {
   stop(): Promise<void>;
 }
 
@@ -72,6 +72,31 @@ function every(
   };
 }
 
+// Stops the parts newest first, once: a fatal consumer and a SIGTERM can both ask at the same time.
+export function createStopAll(
+  started: Stoppable[],
+  secrets: string[]
+): () => Promise<void> {
+  let stopping: Promise<void> | undefined;
+  return () => {
+    stopping ??= (async () => {
+      for (const part of [...started].reverse()) {
+        try {
+          await part.stop();
+        } catch (error) {
+          console.error(
+            LOG_PREFIX,
+            'stop failed',
+            redactSecrets(error, secrets)
+          );
+        }
+      }
+      started.length = 0;
+    })();
+    return stopping;
+  };
+}
+
 export async function startWorker(
   cfg: NudgeConfig,
   deps: WorkerDeps = {}
@@ -82,7 +107,7 @@ export async function startWorker(
     { sql },
     { migrate },
     { createEngine: buildEngine },
-    { runTick },
+    { createTickState, runTick },
     { registerDefaultAdapters },
     { getRedisCache },
     { createBatchHandler, startConsumer },
@@ -101,16 +126,7 @@ export async function startWorker(
   ]);
   const secrets = secretsOf(cfg);
   const started: Stoppable[] = [];
-  const stopAll = async () => {
-    for (const part of started.reverse()) {
-      try {
-        await part.stop();
-      } catch (error) {
-        console.error(LOG_PREFIX, 'stop failed', redactSecrets(error, secrets));
-      }
-    }
-    started.length = 0;
-  };
+  const stopAll = createStopAll(started, secrets);
 
   try {
     started.push({ stop: () => sql.$disconnect() });
@@ -154,6 +170,7 @@ export async function startWorker(
 
     const { renderUnsubscribeUrl } = deps;
     if (renderUnsubscribeUrl) {
+      const tickState = createTickState();
       started.push(
         every(cfg.tickMs, 'tick', secrets, () =>
           runTick({
@@ -162,6 +179,7 @@ export async function startWorker(
             cfg,
             now: () => new Date(),
             renderUnsubscribeUrl,
+            state: tickState,
           })
         )
       );
