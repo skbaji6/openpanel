@@ -61,6 +61,13 @@ const GOAL_LABELS: Record<GoalKind, string> = {
   set: 'Every item of a set is reached',
   inactivity: 'The profile stays inactive',
 };
+const GOAL_HELP: Record<GoalKind, string> = {
+  event:
+    'The journey ends, and remaining nudges are cancelled, as soon as this event happens.',
+  set: 'The journey ends when the profile has reached every value in a list you register, for example every section of a book.',
+  inactivity:
+    'Nudge only if the profile does nothing at all after the trigger.',
+};
 const CHANNELS_WITH_SUBJECT = new Set<Channel>(['email', 'push']);
 const SAMPLE_PROFILE = { firstName: 'Ada', email: 'ada@example.com' };
 const SAMPLE_MISSING = ['Section 2', 'Section 5'];
@@ -513,6 +520,7 @@ function GoalFields({
         }))}
         value={goal.kind}
       />
+      <p className="text-muted-foreground text-sm">{GOAL_HELP[goal.kind]}</p>
       {goal.kind !== 'inactivity' && (
         <InputWithLabel
           label="Goal event"

@@ -169,7 +169,7 @@ export function RulesPage() {
   if (rules.data.rules.length === 0) {
     return (
       <FullPageEmptyState
-        description="A rule watches for an event, waits, and nudges the profile until it reaches the goal."
+        description="A rule watches for an event, waits, and nudges the profile until it reaches the goal. New here? Pick a template to start, or open the How it works tab."
         icon={WorkflowIcon}
         title="No rules yet"
       >

@@ -21,6 +21,7 @@ function Component() {
     { id: RULES_TAB, label: 'Rules' },
     { id: 'channels', label: 'Channels' },
     { id: 'results', label: 'Results' },
+    { id: 'guide', label: 'How it works' },
   ]);
 
   const handleTabChange = (tabId: string) => {

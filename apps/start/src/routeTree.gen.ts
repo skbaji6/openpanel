@@ -88,6 +88,7 @@ import { Route as AppOrganizationIdProjectIdProfilesTabsIdentifiedRouteImport } 
 import { Route as AppOrganizationIdProjectIdProfilesTabsAnonymousRouteImport } from './routes/_app.$organizationId.$projectId.profiles._tabs.anonymous'
 import { Route as AppOrganizationIdProjectIdProfilesProfileIdTabsRouteImport } from './routes/_app.$organizationId.$projectId.profiles.$profileId._tabs'
 import { Route as AppOrganizationIdProjectIdNudgeTabsResultsRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.results'
+import { Route as AppOrganizationIdProjectIdNudgeTabsGuideRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.guide'
 import { Route as AppOrganizationIdProjectIdNudgeTabsChannelsRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.channels'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsRulesRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.rules'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsNotificationsRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.notifications'
@@ -633,6 +634,12 @@ const AppOrganizationIdProjectIdNudgeTabsResultsRoute =
     path: '/results',
     getParentRoute: () => AppOrganizationIdProjectIdNudgeTabsRoute,
   } as any)
+const AppOrganizationIdProjectIdNudgeTabsGuideRoute =
+  AppOrganizationIdProjectIdNudgeTabsGuideRouteImport.update({
+    id: '/guide',
+    path: '/guide',
+    getParentRoute: () => AppOrganizationIdProjectIdNudgeTabsRoute,
+  } as any)
 const AppOrganizationIdProjectIdNudgeTabsChannelsRoute =
   AppOrganizationIdProjectIdNudgeTabsChannelsRouteImport.update({
     id: '/channels',
@@ -811,6 +818,7 @@ export interface FileRoutesByFullPath {
   '/$organizationId/$projectId/notifications/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/$organizationId/$projectId/notifications/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
   '/$organizationId/$projectId/nudge/channels': typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
+  '/$organizationId/$projectId/nudge/guide': typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
   '/$organizationId/$projectId/nudge/results': typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   '/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsRouteWithChildren
   '/$organizationId/$projectId/profiles/anonymous': typeof AppOrganizationIdProjectIdProfilesTabsAnonymousRoute
@@ -901,6 +909,7 @@ export interface FileRoutesByTo {
   '/$organizationId/$projectId/notifications/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/$organizationId/$projectId/notifications/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
   '/$organizationId/$projectId/nudge/channels': typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
+  '/$organizationId/$projectId/nudge/guide': typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
   '/$organizationId/$projectId/nudge/results': typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   '/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsIndexRoute
   '/$organizationId/$projectId/profiles/anonymous': typeof AppOrganizationIdProjectIdProfilesTabsAnonymousRoute
@@ -1001,6 +1010,7 @@ export interface FileRoutesById {
   '/_app/$organizationId/$projectId/notifications/_tabs/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/_app/$organizationId/$projectId/notifications/_tabs/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
   '/_app/$organizationId/$projectId/nudge/_tabs/channels': typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
+  '/_app/$organizationId/$projectId/nudge/_tabs/guide': typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
   '/_app/$organizationId/$projectId/nudge/_tabs/results': typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   '/_app/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdRouteWithChildren
   '/_app/$organizationId/$projectId/profiles/$profileId/_tabs': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsRouteWithChildren
@@ -1098,6 +1108,7 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/notifications/notifications'
     | '/$organizationId/$projectId/notifications/rules'
     | '/$organizationId/$projectId/nudge/channels'
+    | '/$organizationId/$projectId/nudge/guide'
     | '/$organizationId/$projectId/nudge/results'
     | '/$organizationId/$projectId/profiles/$profileId'
     | '/$organizationId/$projectId/profiles/anonymous'
@@ -1188,6 +1199,7 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/notifications/notifications'
     | '/$organizationId/$projectId/notifications/rules'
     | '/$organizationId/$projectId/nudge/channels'
+    | '/$organizationId/$projectId/nudge/guide'
     | '/$organizationId/$projectId/nudge/results'
     | '/$organizationId/$projectId/profiles/$profileId'
     | '/$organizationId/$projectId/profiles/anonymous'
@@ -1287,6 +1299,7 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/$projectId/notifications/_tabs/notifications'
     | '/_app/$organizationId/$projectId/notifications/_tabs/rules'
     | '/_app/$organizationId/$projectId/nudge/_tabs/channels'
+    | '/_app/$organizationId/$projectId/nudge/_tabs/guide'
     | '/_app/$organizationId/$projectId/nudge/_tabs/results'
     | '/_app/$organizationId/$projectId/profiles/$profileId'
     | '/_app/$organizationId/$projectId/profiles/$profileId/_tabs'
@@ -1955,6 +1968,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsResultsRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdNudgeTabsRoute
     }
+    '/_app/$organizationId/$projectId/nudge/_tabs/guide': {
+      id: '/_app/$organizationId/$projectId/nudge/_tabs/guide'
+      path: '/guide'
+      fullPath: '/$organizationId/$projectId/nudge/guide'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsGuideRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdNudgeTabsRoute
+    }
     '/_app/$organizationId/$projectId/nudge/_tabs/channels': {
       id: '/_app/$organizationId/$projectId/nudge/_tabs/channels'
       path: '/channels'
@@ -2204,6 +2224,7 @@ const AppOrganizationIdProjectIdNotificationsRouteWithChildren =
 
 interface AppOrganizationIdProjectIdNudgeTabsRouteChildren {
   AppOrganizationIdProjectIdNudgeTabsChannelsRoute: typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
+  AppOrganizationIdProjectIdNudgeTabsGuideRoute: typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
   AppOrganizationIdProjectIdNudgeTabsResultsRoute: typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   AppOrganizationIdProjectIdNudgeTabsIndexRoute: typeof AppOrganizationIdProjectIdNudgeTabsIndexRoute
 }
@@ -2212,6 +2233,8 @@ const AppOrganizationIdProjectIdNudgeTabsRouteChildren: AppOrganizationIdProject
   {
     AppOrganizationIdProjectIdNudgeTabsChannelsRoute:
       AppOrganizationIdProjectIdNudgeTabsChannelsRoute,
+    AppOrganizationIdProjectIdNudgeTabsGuideRoute:
+      AppOrganizationIdProjectIdNudgeTabsGuideRoute,
     AppOrganizationIdProjectIdNudgeTabsResultsRoute:
       AppOrganizationIdProjectIdNudgeTabsResultsRoute,
     AppOrganizationIdProjectIdNudgeTabsIndexRoute:
