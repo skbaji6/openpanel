@@ -2,6 +2,8 @@
 
 Journey nudges for OpenPanel: a separate worker that consumes the events Kafka topic and sends email, push and webhook nudges. Its tables live in the Postgres schema `nudge`.
 
+New here? Start with the [setup and integration guide](docs/GUIDE.md). This README is the reference.
+
 ## Environment
 
 | Variable | Default | Meaning |

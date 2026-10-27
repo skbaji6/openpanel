@@ -1,0 +1,263 @@
+# Journey Nudge: setup and integration guide
+
+This guide takes you from nothing to a working nudge. The reference for every environment variable, the operations notes and the upgrade notes are in [`../README.md`](../README.md). This guide does not repeat them.
+
+## 1. What it is
+
+Journey Nudge is an optional add-on for OpenPanel. It is a separate service (`op-nudge`) plus a few dashboard pages. It does not change OpenPanel's own code paths: it reads the same events topic as OpenPanel, with its own Kafka consumer group, and keeps its own tables in the Postgres schema `nudge`.
+
+A **rule** says: *when event A happens for a person, and goal G does not happen within time T, send a message*. A rule has one or more timed **steps**; each step sends one message over one **channel** (email, webhook or Firebase push).
+
+```
+ your apps ──SDK──▶ OpenPanel /track ──▶ Kafka "events" topic
+                                              │ (own consumer group "nudge")
+                                              ▼
+  your backend ──sync API──▶  op-nudge (consumer + ticker + HTTP API) ──▶ email (SMTP)
+  (contacts, devices,              │            │                      ├─▶ webhook (signed POST)
+   reference sets)                 │            └─ Postgres "nudge"    └─▶ Firebase push
+                                   ▲                Redis (interest set)
+  dashboard  ──/nudge-api/*────────┘
+  (Nudges pages, unsubscribe page)
+```
+
+Example: an ed-tech app. Rule "added a book to the cart, did not buy": trigger `add_to_cart`, goal `purchase`, matched on `item_id`, step 1 email after 1 hour, step 2 push after 1 day. If the person buys within the hour, nothing is sent.
+
+## 2. Concepts
+
+| Term | Meaning |
+|---|---|
+| Trigger | The event that starts a journey for a person (optionally filtered by event properties). |
+| Goal | What ends it. `event`: a named event happens. `set`: an event happens for every value in a reference set (for example every section of a book). `inactivity`: the person does nothing (other than listed excluded events) after the trigger. |
+| `matchOn` | A trigger property (for example `item_id`). The goal must carry the same value, so opening a section of *the same book* counts, but another book does not. |
+| Steps | Up to 20, each with a delay from the trigger (strictly increasing), a channel and a template. |
+| Re-entry | Whether the same person can be enrolled again, and after what cooldown. |
+| Reference set | A named list of values you register (for example the section ids of one book) that a `set` goal compares against. Snapshotted when a person is enrolled. |
+| Contact | A person's email and attributes, synced from your backend. Attributes feed `{{profile.*}}`. |
+| Device | A person's Firebase token, synced from your backend. |
+| Grace window | `NUDGE_GRACE_SECONDS` (default 300): a goal seen this late still cancels a pending step. |
+| Caps, quiet hours | Per project: at most N nudges per period per person, and no sends in a time window. |
+
+Only **identified** events (events that carry a `profileId`) take part. Anonymous events are ignored.
+
+## 3. Prerequisites
+
+- A running OpenPanel with Redpanda/Kafka, Postgres and Redis (the standard self-hosted stack has all of them).
+- Your apps already send events to OpenPanel with a stable `profileId` (the user id) set through `identify` or the event payload.
+- For email: an SMTP account. For push: a Firebase project and a service-account JSON. For webhooks: an HTTPS endpoint in your backend.
+- Docker, or Bun 1.4+ for running from source.
+
+## 4. Start it
+
+### 4a. Self-hosted stack (Docker Compose)
+
+1. Get this fork's checkout next to your install, or set `NUDGE_BUILD_CONTEXT` to it.
+2. Copy `docker-compose.nudge.yml` next to your `docker-compose.yml`.
+3. Add two values to your `.env`:
+   ```
+   NUDGE_PROXY_SECRET=<output of: openssl rand -hex 32>
+   NUDGE_PUBLIC_URL=https://analytics.example.com   # the public dashboard origin
+   ```
+   `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` and `KAFKA_BROKERS` are already in an OpenPanel `.env`. Do not change `ENCRYPTION_KEY` later: channel secrets and unsubscribe links depend on it.
+4. Start:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.nudge.yml up -d --build
+   ```
+5. Check it: `docker compose logs op-nudge` shows the migrations and the consumer joining, and `docker compose ps` shows `op-nudge` healthy.
+
+The override also replaces the dashboard image with one built from this fork. The stock dashboard image has no Nudge pages and would 404 every unsubscribe link. Details: README, "Deploy".
+
+Keep using `-f docker-compose.nudge.yml` on every later compose command, upgrades included (`openpanel init` does not know about it).
+
+### 4b. From source (development)
+
+```bash
+bun install
+bun run dock:up                       # Postgres, Redis, ClickHouse, Redpanda
+export DATABASE_URL=... REDIS_URL=... ENCRYPTION_KEY=... KAFKA_BROKERS=... KAFKA_EVENTS_TOPIC=events
+export NUDGE_PROXY_SECRET=$(openssl rand -hex 32) NUDGE_PUBLIC_URL=http://localhost:3000
+bun run --filter @openpanel/nudge start      # migrates, then serves on :4100
+```
+
+For the dashboard pages, give the dashboard process `NUDGE_URL=http://localhost:4100` and the same `NUDGE_PROXY_SECRET`. Without them `/nudge-api/*` and `/nudge/unsubscribe` answer 404.
+
+Run the tests with `cd packages/nudge && bun test --isolate` (needs Postgres, Redis and Kafka reachable; use a database whose name ends in `_test`).
+
+## 5. Connect it
+
+There are three connection points: events (already done by OpenPanel), the dashboard, and your backend.
+
+### 5a. Events
+
+Nothing to configure. The worker consumes the topic named by `KAFKA_EVENTS_TOPIC` with the consumer group `NUDGE_KAFKA_GROUP`. Make sure your SDK events carry the user's `profileId`, and use the same event names in your rules as you send (for example `add_to_cart`, `purchase`, `section_opened`).
+
+### 5b. Dashboard
+
+Open a project: the sidebar has **Nudges** with three tabs.
+
+- **Rules**: create from a starter or from scratch, as a vertical timeline with one form per step. Activate or pause. Preview templates with sample data.
+- **Channels**: email (SMTP), push (Firebase service account) and webhook (URL plus secret), plus the project's caps, quiet hours and API keys.
+- **Results**: per rule: enrolled, nudged, sent, completed after send, conversion, skipped, failed.
+
+Organization owners and admins can change things; members can read and preview.
+
+### 5c. Your backend (server to server)
+
+Your backend talks to the worker with a project **API key**. Device registration is server-to-server only; apps never call these endpoints.
+
+Create a key on the Nudges, Channels tab. It is shown once and looks like `<id>.<secret>`. Send it as the header `x-nudge-api-key`. The worker's URL is `NUDGE_URL` (inside the compose network `http://op-nudge:4100`). To call it from outside the network, route `/nudge/contacts/*`, `/nudge/devices` and `/nudge/reference-sets/*` to the worker (README, "Deploy").
+
+```bash
+H='x-nudge-api-key: <id>.<secret>'
+U=http://op-nudge:4100
+
+# Contact: email and attributes used by {{profile.*}} (re-send whenever they change)
+curl -X PUT $U/nudge/contacts/user_123 -H "$H" -H 'content-type: application/json' \
+  -d '{"email":"ada@example.com","attributes":{"firstName":"Ada","plan":"free"}}'
+
+# Device: Firebase token (platform: android | ios). Re-registering moves a token to the new person.
+curl -X PUT $U/nudge/devices -H "$H" -H 'content-type: application/json' \
+  -d '{"profileId":"user_123","token":"<fcm token>","platform":"android"}'
+
+# Remove a device (for example at logout)
+curl -X DELETE $U/nudge/devices -H "$H" -H 'content-type: application/json' -d '{"token":"<fcm token>"}'
+
+# Reference set: for "opened every section of this book" goals
+curl -X PUT $U/nudge/reference-sets/book-42-sections -H "$H" -H 'content-type: application/json' \
+  -d '{"values":["intro","ch1","ch2","ch3"]}'
+```
+
+Notes:
+- The token endpoint answers 409 if that token already belongs to another project.
+- A person with no contact email gets no email step; a person with no device gets no push. These steps are recorded as skipped, not failed.
+- You own consent. The plugin sends to whoever you sync and honours its own email unsubscribe links. Push has no opt-out inside the plugin: stop syncing the device, or delete it.
+- If your users live in two databases, sync contacts and devices from your own user service whenever a user registers, changes email or logs in on a new device.
+
+## 6. Configure the channels
+
+Open Nudges, Channels. Saved secrets are shown masked (`********`); leave a masked field unchanged to keep it.
+
+### Email
+
+SMTP `host`, `port`, `secure` (true for SMTPS on 465; false uses STARTTLS when the server offers it), `user`, `pass`, `from`. Every email carries an unsubscribe link and `List-Unsubscribe` headers, pointing at `NUDGE_PUBLIC_URL/nudge/unsubscribe`.
+
+### Push (Firebase)
+
+Paste the Firebase **service account JSON** (Firebase console, Project settings, Service accounts, Generate new private key). Tokens that Firebase reports as invalid are removed automatically.
+
+### Webhook (your backend delivers)
+
+Set the `url` (https only, or http for hosts in `NUDGE_WEBHOOK_ALLOW_HOSTS`) and one or two `secrets` (16+ characters; the first signs, a second is kept during rotation). The worker POSTs JSON:
+
+```json
+{ "projectId": "...", "profileId": "user_123", "channel": "webhook",
+  "subject": "...", "title": "...", "body": "...",
+  "ruleId": "...", "enrollmentId": "...", "stepIndex": 0 }
+```
+
+with headers `x-nudge-timestamp`, `x-nudge-signature` and `idempotency-key`. Verify like this before acting, and de-duplicate on `idempotency-key`:
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verify(rawBody: string, ts: string, sig: string, secret: string) {
+  const expected = `sha256=${createHmac('sha256', secret).update(`${ts}.${rawBody}`).digest('hex')}`;
+  const a = Buffer.from(expected), b = Buffer.from(sig);
+  const fresh = Math.abs(Date.now() / 1000 - Number(ts)) < 300;
+  return fresh && a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
+Answer 2xx to accept. 429 and 5xx are retried; other statuses count as failed. Your backend then sends the actual email or push in its own way.
+
+## 7. Create a rule
+
+In the dashboard, or by API (the dashboard proxy forwards to these; they need the dashboard's authorization). A rule definition:
+
+```json
+{
+  "name": "Added to cart, not bought",
+  "trigger": { "event": "add_to_cart" },
+  "matchOn": "item_id",
+  "goal": { "kind": "event", "event": "purchase" },
+  "steps": [
+    { "delaySeconds": 3600,  "channel": "email",
+      "template": { "subject": "You left something behind",
+                    "body": "<p>Hi {{profile.firstName}}, {{event.item_name}} is still in your cart.</p>" } },
+    { "delaySeconds": 86400, "channel": "push",
+      "template": { "subject": "Still interested?", "body": "{{event.item_name}} is waiting for you." } }
+  ],
+  "reentry": { "enabled": true, "cooldownSeconds": 604800 },
+  "allowedEventProps": ["item_name"]
+}
+```
+
+Goal variants:
+
+```json
+{ "kind": "event", "event": "purchase" }
+{ "kind": "set", "event": "section_opened", "property": "section_id", "setKey": "book-42-sections" }
+{ "kind": "inactivity", "excludeEvents": ["session_start"] }
+```
+
+For a `set` goal with `matchOn`, the set is looked up by the matched value (for example per book) and falls back to `setKey`. The set is snapshotted at enrollment; later edits apply to new enrollments only.
+
+**Templates.** `{{profile.<attribute>}}` reads the contact attributes you synced. `{{event.<property>}}` reads the trigger event's property, and only properties listed in `allowedEventProps` render; anything else renders empty. `{{missing}}` lists the set values not yet seen. Values are HTML-escaped in email bodies and plain in subject, push and webhook text. `{{event.*}}` renders only in plain text inside an email body, never inside tags, links, scripts or styles. Use the preview in the editor to check.
+
+**Rules** are created paused unless you set `status: "active"`. Pausing cancels the rule's running journeys. Editing a rule changes only new enrollments. Only a paused rule can be deleted.
+
+Starter rules ship for the four common cases: cart abandoned, registered but not bought, bought but never opened, opened but sections untouched. Their event names are placeholders; edit them to your own.
+
+## 8. Project settings
+
+Nudges, Channels tab (or `PUT /nudge/settings`):
+
+```json
+{ "caps": { "max": 3, "periodSeconds": 604800 },
+  "quietHours": { "start": "21:00", "end": "08:00", "timezone": "Asia/Kolkata" } }
+```
+
+`caps` limits nudges per person per period; `null` for none. Quiet hours hold messages until the window ends. A step that is held or capped is recorded as skipped (visible in Results).
+
+## 9. Try it end to end
+
+With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/track`, and checks that one signed webhook arrives and that a person who reaches the goal is not nudged. Setup and variables: README, "End-to-end check". A manual check:
+
+1. Configure a webhook channel pointing at a request-catcher URL (use `NUDGE_WEBHOOK_ALLOW_HOSTS` for a local receiver).
+2. Create an active rule with a first step at 10 seconds and set `NUDGE_GRACE_SECONDS=1`, `NUDGE_TICK_MS=1000` in a test environment.
+3. Send `add_to_cart` with `item_id=1` for an identified profile (an SDK call, or `POST /track` with a `profileId`; see `scripts/e2e.ts` for a working payload) and watch the request arrive. Send `purchase` with the same `item_id` before the step is due to see it cancelled.
+4. Open Nudges, Results to see the counts.
+
+## 10. Operate it
+
+- **Logs**: `docker compose logs -f op-nudge`. `sending paused` means the consumer is behind `NUDGE_MAX_LAG`; nothing is lost, and sending resumes when it catches up.
+- **Health**: `GET /nudge/health` on the worker.
+- **Scale**: run more replicas of `op-nudge`; they share the consumer group and the work. Sizing, retention, history purge and key revocation are in the README, "Operations".
+- **Backups**: the `nudge` schema is in the same Postgres as OpenPanel and is covered by your existing backups.
+- **Upgrade OpenPanel**: merge upstream. Only the files in `TOUCHPOINTS.md` can conflict (README, "Upgrading from upstream"). Rebuild both images from the same release.
+
+## 11. Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| No "Nudges" in the sidebar, or the pages 404 | The dashboard is the stock image, or `NUDGE_URL` / `NUDGE_PROXY_SECRET` are not set on it. |
+| Unsubscribe link 404s | The same, or `NUDGE_PUBLIC_URL` is not the dashboard's public origin. |
+| Rule is active but nobody is nudged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours or caps hold it back. Check Results (skipped / failed). |
+| Everyone is nudged though they reached the goal | A `matchOn` property is missing on the goal event, or the goal event name differs. For a `set` goal, the set does not contain the value the app sends. |
+| `401` from the sync API | Wrong or revoked key. After revoking, a replica may accept the old key for up to 5 minutes. |
+| `429` from the sync API | Too many failed key attempts from one IP (30 per minute). |
+| Email fails | SMTP settings or TLS mode; check the failure reason in Results. |
+| Push has no effect | Service account JSON for another Firebase project, or the device token belongs to a different Firebase app. |
+| Webhook shows `blocked url` | Not https and the host is not in `NUDGE_WEBHOOK_ALLOW_HOSTS`, or it resolves to a private address. |
+| Worker will not start | A required variable is missing (the log names it), or `NUDGE_DB_POOL` is below `NUDGE_SEND_CONCURRENCY` + 3, or `NUDGE_LEASE_SECONDS` is 31 or less. |
+
+## 12. Limits worth knowing
+
+- Delivery is at least once per step; webhook receivers must de-duplicate on `idempotency-key`.
+- Projects with an active inactivity rule store every identified event (see README, "Event pre-filter trade-off"); plan capacity for that.
+- Message text is a template with variables; AI-written messages are not part of this version.
+- History retention and API-key list/revoke endpoints are not built in; the README has the SQL recipes.
+- Full list: the spec's "Known limitations / follow-ups".
+
+## 13. Rules for changing the code
+
+This is a fork. Never edit OpenPanel's existing files for the plugin; see [`../AGENTS.md`](../AGENTS.md) and [`../TOUCHPOINTS.md`](../TOUCHPOINTS.md).
