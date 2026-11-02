@@ -148,6 +148,42 @@ describe('audience source routes', () => {
     expect(typeof ok.latencyMs).toBe('number');
   });
 
+  it('switching to http deletes the project contacts and devices but keeps opt-outs and dead tokens', async () => {
+    for (const projectId of ['proj-a', 'proj-b']) {
+      await sql.$executeRawUnsafe(
+        `INSERT INTO marketing.contacts (project_id, profile_id, email) VALUES ($1, 'u1', 'a@example.test')`,
+        projectId
+      );
+      await sql.$executeRawUnsafe(
+        `INSERT INTO marketing.devices (token, project_id, profile_id, platform) VALUES ($1, $2, 'u1', 'ios')`,
+        `tok-${projectId}`,
+        projectId
+      );
+    }
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.opt_outs (project_id, profile_id, channel) VALUES ('proj-a', 'u1', 'email')`
+    );
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.dead_tokens (project_id, token_hash) VALUES ('proj-a', '\\x01')`
+    );
+    expect((await call('PUT', URL_PATH, valid)).status).toBe(200);
+    const counts = await sql.$queryRawUnsafe<
+      { t: string; project_id: string }[]
+    >(
+      `SELECT 'contacts' AS t, project_id FROM marketing.contacts
+       UNION ALL SELECT 'devices', project_id FROM marketing.devices
+       UNION ALL SELECT 'opt_outs', project_id FROM marketing.opt_outs
+       UNION ALL SELECT 'dead_tokens', project_id FROM marketing.dead_tokens
+       ORDER BY 1, 2`
+    );
+    expect(counts).toEqual([
+      { t: 'contacts', project_id: 'proj-b' },
+      { t: 'dead_tokens', project_id: 'proj-a' },
+      { t: 'devices', project_id: 'proj-b' },
+      { t: 'opt_outs', project_id: 'proj-a' },
+    ]);
+  });
+
   it('the stored secret in the database is not the plaintext', async () => {
     await call('PUT', URL_PATH, valid);
     const [row] = await sql.$queryRawUnsafe<{ s: string }[]>(

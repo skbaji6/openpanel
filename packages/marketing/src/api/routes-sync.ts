@@ -50,9 +50,20 @@ const zReferenceSet = z.strictObject({
     .max(MAX_REFERENCE_VALUES),
 });
 
+// Param $1 is the project. Locking the source row makes a sync racing a switch to http wait for
+// it and then see kind = 'http', so the switch's purge cannot miss the row.
+// shortcut: a project's very first source row has nothing to lock yet; that race window is one statement long.
+const SOURCE_IS_STORED = `NOT EXISTS (
+  SELECT 1 FROM (SELECT kind FROM marketing.audience_sources WHERE project_id = $1 FOR SHARE) source
+  WHERE source.kind = 'http')`;
+
+const IS_HTTP_SOURCE_SQL = `
+  SELECT 1 FROM marketing.audience_sources WHERE project_id = $1 AND kind = 'http'`;
+
+// An http project keeps no contact data, so its contacts are never written.
 const UPSERT_CONTACT_SQL = `
   INSERT INTO marketing.contacts (project_id, profile_id, email, attributes)
-  VALUES ($1, $2, $3, COALESCE($4::jsonb, '{}'::jsonb))
+  SELECT $1, $2, $3, COALESCE($4::jsonb, '{}'::jsonb) WHERE ${SOURCE_IS_STORED}
   ON CONFLICT (project_id, profile_id) DO UPDATE SET
     email = COALESCE(EXCLUDED.email, marketing.contacts.email),
     attributes = COALESCE($4::jsonb, marketing.contacts.attributes),
@@ -61,8 +72,8 @@ const UPSERT_CONTACT_SQL = `
 // The token is the primary key: re-registering moves it to the new profile, but never into
 // another project, or one project's API key could take over another project's devices.
 const UPSERT_DEVICE_SQL = `
-  INSERT INTO marketing.devices (token, project_id, profile_id, platform)
-  VALUES ($1, $2, $3, $4)
+  INSERT INTO marketing.devices (project_id, token, profile_id, platform)
+  SELECT $1, $2, $3, $4 WHERE ${SOURCE_IS_STORED}
   ON CONFLICT (token) DO UPDATE SET
     profile_id = EXCLUDED.profile_id, platform = EXCLUDED.platform, updated_at = now()
   WHERE marketing.devices.project_id = EXCLUDED.project_id`;
@@ -73,6 +84,19 @@ const UPSERT_REFERENCE_SET_SQL = `
   ON CONFLICT (project_id, set_key) DO UPDATE SET values = EXCLUDED.values`;
 
 const PATH_SEGMENT = '([^/]+)';
+
+async function rejectIfHttpSource(
+  sql: Queryable,
+  projectId: string
+): Promise<void> {
+  const rows = await sql.$queryRawUnsafe<unknown[]>(
+    IS_HTTP_SOURCE_SQL,
+    projectId
+  );
+  if (rows.length > 0) {
+    throw new HttpError(409, 'source_is_http');
+  }
+}
 
 function identifierParam(ctx: RouteContext): string {
   return validate(zIdentifier, ctx.params[0]);
@@ -107,13 +131,16 @@ export function syncRoutes(sql: Queryable): Route[] {
       async handle(ctx) {
         const profileId = identifierParam(ctx);
         const contact = await parseJsonBody(ctx.req, zContact);
-        await sql.$executeRawUnsafe(
+        const written = await sql.$executeRawUnsafe(
           UPSERT_CONTACT_SQL,
           ctx.projectId,
           profileId,
           contact.email ?? null,
           contact.attributes ? JSON.stringify(contact.attributes) : null
         );
+        if (written === 0) {
+          await rejectIfHttpSource(sql, ctx.projectId);
+        }
         return json({ ok: true });
       },
     },
@@ -125,12 +152,13 @@ export function syncRoutes(sql: Queryable): Route[] {
         const device = await parseJsonBody(ctx.req, zDevice);
         const written = await sql.$executeRawUnsafe(
           UPSERT_DEVICE_SQL,
-          device.token,
           ctx.projectId,
+          device.token,
           device.profileId,
           device.platform
         );
         if (written === 0) {
+          await rejectIfHttpSource(sql, ctx.projectId);
           throw new HttpError(409, 'token_in_use');
         }
         return json({ ok: true });

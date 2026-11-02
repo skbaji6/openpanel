@@ -297,6 +297,31 @@ describe('sync routes', () => {
     expect(extra.status).toBe(400);
   });
 
+  it('PUT contacts and devices answer 409 for a project whose audience source is http, and store nothing', async () => {
+    const key = await createKey('proj-a');
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
+       VALUES ('proj-a', 'http', 'https://owner.test', 'k1', 'unused')`
+    );
+    const contact = await sync('PUT', '/marketing/contacts/u1', key, {
+      email: 'a@example.test',
+    });
+    const device = await sync('PUT', '/marketing/devices', key, {
+      profileId: 'u1',
+      token: 'tok-1',
+      platform: 'android',
+    });
+    for (const response of [contact, device]) {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: 'source_is_http' });
+    }
+    const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT (SELECT count(*) FROM marketing.contacts)::int
+            + (SELECT count(*) FROM marketing.devices)::int AS n`
+    );
+    expect(row?.n).toBe(0);
+  });
+
   it('PUT devices moves an existing token to the new profile', async () => {
     const key = await createKey('proj-a');
     await sync('PUT', '/marketing/devices', key, {

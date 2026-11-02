@@ -54,6 +54,23 @@ const zBody = z.strictObject({
   secret: z.string().max(MAX_FIELD_LENGTH).optional(),
 });
 
+// One statement, so the switch and the purge commit together. An http project keeps no contact
+// data; its opt-outs and dead-token hashes are ids only and keep working.
+const SAVE_SOURCE_SQL = `
+  WITH saved AS (
+    INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (project_id) DO UPDATE SET kind = EXCLUDED.kind, base_url = EXCLUDED.base_url,
+      key_id = EXCLUDED.key_id, secret_encrypted = EXCLUDED.secret_encrypted, updated_at = now(),
+      status = 'unknown', status_at = NULL
+    RETURNING 1
+  ), purged_contacts AS (
+    DELETE FROM marketing.contacts WHERE project_id = $1 AND $2::text = 'http' RETURNING 1
+  ), purged_devices AS (
+    DELETE FROM marketing.devices WHERE project_id = $1 AND $2::text = 'http' RETURNING 1
+  )
+  SELECT count(*)::int AS saved FROM saved`;
+
 function failureCode(error: unknown) {
   if (error instanceof SourceAuthError) {
     return 'source_auth_failed';
@@ -121,12 +138,8 @@ export function audienceSourceRoutes(deps: Deps): Route[] {
             throw new HttpError(400, 'invalid_body');
           }
         }
-        await sql.$executeRawUnsafe(
-          `INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (project_id) DO UPDATE SET kind = EXCLUDED.kind, base_url = EXCLUDED.base_url,
-             key_id = EXCLUDED.key_id, secret_encrypted = EXCLUDED.secret_encrypted, updated_at = now(),
-             status = 'unknown', status_at = NULL`,
+        await sql.$queryRawUnsafe(
+          SAVE_SOURCE_SQL,
           ctx.projectId,
           body.kind,
           baseUrl,

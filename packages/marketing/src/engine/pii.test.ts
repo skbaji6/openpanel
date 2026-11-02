@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
+import { audienceSourceRoutes } from '../api/routes-audience-source';
 import { createSourceResolver } from '../audience/resolver';
 import { getAdapter, registerAdapter } from '../channels/registry';
 import type {
@@ -411,6 +412,47 @@ describe('personal data from an http audience source', () => {
     );
     expect(row?.n).toBeGreaterThan(0);
 
+    expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
+  });
+
+  it('switching a stored project to http removes its stored contacts and devices', async () => {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.contacts (project_id, profile_id, email, attributes)
+       VALUES ($1, 'u-stored', $2, $3::jsonb)`,
+      PROJECT,
+      CANARY_EMAIL,
+      JSON.stringify({ name: CANARY_NAME, phone: CANARY_PHONE })
+    );
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.devices (token, project_id, profile_id, platform)
+       VALUES ($1, $2, 'u-stored', 'android')`,
+      CANARY_TOKEN,
+      PROJECT
+    );
+    expect(leaks((await scanTables()).text).length).toBeGreaterThan(0);
+    const put = audienceSourceRoutes({
+      cfg: CFG,
+      sql,
+      redis,
+      resolver: createSourceResolver({ sql, cfg: CFG, redis }),
+    }).find((route) => route.method === 'PUT');
+    const url = new URL('http://marketing.internal/marketing/audience-source');
+    const res = await put?.handle({
+      req: new Request(url, {
+        method: 'PUT',
+        body: JSON.stringify({
+          kind: 'http',
+          baseUrl: 'https://owner.test/internal/audience',
+          keyId: 'k1',
+          secret: SOURCE_SECRET,
+        }),
+      }),
+      url,
+      params: [],
+      projectId: PROJECT,
+      ip: '127.0.0.1',
+    });
+    expect(res?.status).toBe(200);
     expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
   });
 
