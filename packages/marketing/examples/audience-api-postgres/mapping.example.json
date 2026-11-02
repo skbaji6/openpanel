@@ -1,0 +1,74 @@
+{
+  "studentsTable": "reference_demo.students",
+  "idColumn": "id",
+  "displayNameColumn": "display_name",
+  "dimensions": [
+    {
+      "key": "university",
+      "label": "University",
+      "type": "string",
+      "column": "university_id",
+      "values": {
+        "table": "reference_demo.universities",
+        "valueColumn": "id",
+        "labelColumn": "name"
+      }
+    },
+    {
+      "key": "semester",
+      "label": "Semester",
+      "type": "number",
+      "column": "semester"
+    },
+    {
+      "key": "course",
+      "label": "Course",
+      "type": "string",
+      "multiValued": true,
+      "exists": {
+        "table": "reference_demo.student_courses",
+        "studentColumn": "student_id",
+        "valueColumn": "course_id"
+      },
+      "values": {
+        "table": "reference_demo.courses",
+        "valueColumn": "id",
+        "labelColumn": "name"
+      }
+    },
+    {
+      "key": "joined",
+      "label": "Joined on",
+      "type": "date",
+      "column": "joined_on"
+    },
+    {
+      "key": "purchase_status",
+      "label": "Purchase status",
+      "type": "string",
+      "expression": "CASE WHEN EXISTS (SELECT 1 FROM reference_demo.purchases p WHERE p.student_id = s.id AND p.is_active AND (p.expiry_date IS NULL OR p.expiry_date >= CURRENT_DATE)) THEN 'PURCHASED' ELSE 'NOT_PURCHASED' END",
+      "staticValues": [
+        { "value": "PURCHASED", "label": "Purchased" },
+        { "value": "NOT_PURCHASED", "label": "Not purchased" }
+      ]
+    }
+  ],
+  "contact": {
+    "emailColumn": "email",
+    "emailVerifiedColumn": "email_verified",
+    "phoneColumn": "phone",
+    "suppressedColumn": "withdrawn",
+    "consent": {
+      "whatsapp": "whatsapp_consent",
+      "smsPromotional": "sms_consent"
+    },
+    "traits": { "firstName": "first_name" }
+  },
+  "devices": {
+    "table": "reference_demo.devices",
+    "studentColumn": "student_id",
+    "tokenColumn": "token",
+    "platformColumn": "platform",
+    "activeColumn": "active"
+  }
+}

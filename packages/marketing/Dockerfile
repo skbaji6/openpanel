@@ -48,7 +48,7 @@ RUN find . -maxdepth 4 -type d -name node_modules -prune -exec rm -rf {} + && \
 
 RUN find /app/node_modules/.bun -maxdepth 1 -name '*musl*' -prune -exec rm -rf {} + && \
     find /app/packages -type f -name '*.test.ts' -delete && \
-    rm -rf /app/packages/sdks /app/packages/marketing/scripts
+    rm -rf /app/packages/sdks /app/packages/marketing/scripts /app/packages/marketing/examples
 
 FROM base AS runtime
 
