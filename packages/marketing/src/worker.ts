@@ -190,6 +190,7 @@ export async function startWorker(
             now: () => new Date(),
             renderUnsubscribeUrl,
             state: tickState,
+            sources,
           })
         )
       );

@@ -83,6 +83,19 @@ describe('audience source routes', () => {
     });
   });
 
+  it('GET returns the status the ticker recorded, and a PUT resets it', async () => {
+    await call('PUT', URL_PATH, valid);
+    await sql.$executeRawUnsafe(
+      "UPDATE marketing.audience_sources SET status = 'source_auth_failed', status_at = now()"
+    );
+    const read = async () =>
+      ((await (await call('GET', URL_PATH)).json()) as { status: string })
+        .status;
+    expect(await read()).toBe('source_auth_failed');
+    await call('PUT', URL_PATH, { ...valid, secret: 'rotated-secret' });
+    expect(await read()).toBe('unknown');
+  });
+
   it('PUT rejects an http:// base URL that is not localhost', async () => {
     for (const baseUrl of [
       'http://owner.test',

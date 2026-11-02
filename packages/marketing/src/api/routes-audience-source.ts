@@ -75,8 +75,8 @@ export function audienceSourceRoutes(deps: Deps): Route[] {
   const now = deps.now ?? Date.now;
 
   async function load(projectId: string) {
-    const [row] = await sql.$queryRawUnsafe<SourceRow[]>(
-      'SELECT kind, base_url, key_id, secret_encrypted FROM marketing.audience_sources WHERE project_id = $1',
+    const [row] = await sql.$queryRawUnsafe<(SourceRow & { status: string })[]>(
+      'SELECT kind, base_url, key_id, secret_encrypted, status FROM marketing.audience_sources WHERE project_id = $1',
       projectId
     );
     return row;
@@ -89,13 +89,12 @@ export function audienceSourceRoutes(deps: Deps): Route[] {
       auth: 'dashboard',
       async handle(ctx) {
         const row = await load(ctx.projectId);
-        // shortcut: no outcome is persisted, so status stays unknown until a column records the last test.
         return json({
           kind: row?.kind ?? 'stored',
           baseUrl: row?.base_url ?? null,
           keyId: row?.key_id ?? null,
           hasSecret: Boolean(row?.secret_encrypted),
-          status: 'unknown',
+          status: row?.status ?? 'unknown',
         });
       },
     },
@@ -126,7 +125,8 @@ export function audienceSourceRoutes(deps: Deps): Route[] {
           `INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
            VALUES ($1, $2, $3, $4, $5)
            ON CONFLICT (project_id) DO UPDATE SET kind = EXCLUDED.kind, base_url = EXCLUDED.base_url,
-             key_id = EXCLUDED.key_id, secret_encrypted = EXCLUDED.secret_encrypted, updated_at = now()`,
+             key_id = EXCLUDED.key_id, secret_encrypted = EXCLUDED.secret_encrypted, updated_at = now(),
+             status = 'unknown', status_at = NULL`,
           ctx.projectId,
           body.kind,
           baseUrl,

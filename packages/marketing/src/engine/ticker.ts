@@ -1,8 +1,16 @@
 import { decryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
+import {
+  type LookupChannel,
+  type LookupEntry,
+  MAX_LOOKUP_IDS,
+} from '../audience/contract';
+import { SourceAuthError } from '../audience/errors';
+import type { AudienceSource } from '../audience/source';
 import { getAdapter } from '../channels/registry';
 import type {
   ChannelAdapter,
+  ChannelId,
   Recipient,
   RenderedMessage,
   SendResult,
@@ -25,9 +33,12 @@ import {
   lagAllowsSending,
   nextAllowedTime,
 } from './gates';
+import { gatherLookupBatch } from './lookup-batch';
 
 const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = 60_000;
+// Short, so journeys resume soon after the source recovers, yet a down source does not spin every tick.
+const SOURCE_BACKOFF_MS = 30_000;
 // Total mark budget is about 0.5 s; leaseSeconds must exceed the adapter's own send timeout
 // (at most 30 s) plus this budget, or a slow send can be reclaimed and sent twice.
 const MARK_RETRY_DELAYS_MS = [100, 400];
@@ -55,7 +66,13 @@ export interface TickDeps {
   // Shared across ticks by the worker; without it every tick sweeps and warns.
   state?: TickState;
   logger?: Pick<Console, 'warn'>;
+  // Without it every project uses its stored contact rows.
+  sources?: { forProject(projectId: string): Promise<AudienceSource | null> };
 }
+
+const ALL_STORED: NonNullable<TickDeps['sources']> = {
+  forProject: () => Promise.resolve(null),
+};
 
 export function createTickState() {
   return {
@@ -80,6 +97,16 @@ interface Claim {
   step_index: number;
   attempt: number;
   is_last: boolean;
+  project_id: string;
+  profile_id: string;
+  channel: ChannelId | null;
+}
+
+interface LookupItem {
+  projectId: string;
+  profileId: string;
+  claim: Claim;
+  source: AudienceSource;
 }
 
 interface StepContext {
@@ -95,6 +122,8 @@ interface StepContext {
   quiet_hours: unknown;
   config_encrypted: string | null;
   trigger_properties: unknown;
+  // Set only for an http source whose lookup said the person must not be messaged.
+  lookup_skip?: string | null;
 }
 
 const zCaps = z
@@ -146,10 +175,12 @@ export const CLAIM_SQL = `
   UPDATE marketing.steps s
   SET status = 'sending', lease_until = $4::timestamptz, attempt = s.attempt + 1
   FROM (SELECT * FROM picked LIMIT $3::int) chosen
+  JOIN marketing.enrollments ce ON ce.id = chosen.enrollment_id
   WHERE s.enrollment_id = chosen.enrollment_id AND s.step_index = chosen.step_index
   RETURNING s.enrollment_id::text, s.step_index, s.attempt,
     NOT EXISTS (SELECT 1 FROM marketing.steps later
-                WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last`;
+                WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last,
+    ce.project_id, ce.profile_id, ce.rule_snapshot->'steps'->s.step_index->>'channel' AS channel`;
 
 // Params: enrollment id, step index.
 const CONTEXT_SQL = `
@@ -177,6 +208,34 @@ const CONTEXT_SQL = `
   LEFT JOIN marketing.contacts c ON c.project_id = en.project_id AND c.profile_id = en.profile_id
   LEFT JOIN marketing.project_settings ps ON ps.project_id = en.project_id
   LEFT JOIN marketing.channel_configs cc ON cc.project_id = en.project_id AND cc.channel = en.channel`;
+
+// Params: enrollment id, step index. For an http source the contact fields come from the lookup;
+// opted_out stays because the email unsubscribe link and the do-not-contact list hold for both sources.
+const CONTEXT_NO_CONTACT_SQL = `
+  WITH en AS (
+    SELECT e.*, e.rule_snapshot->'steps'->$2::int->>'channel' AS channel
+    FROM marketing.enrollments e WHERE e.id = $1::uuid
+  )
+  SELECT en.project_id, en.profile_id, en.rule_id::text, en.rule_snapshot,
+    EXISTS (SELECT 1 FROM marketing.opt_outs o
+            WHERE o.project_id = en.project_id AND o.profile_id = en.profile_id
+              AND o.channel = en.channel) AS opted_out,
+    ps.caps, ps.quiet_hours, cc.config_encrypted,
+    (SELECT ev.properties FROM marketing.events ev
+     WHERE ev.project_id = en.project_id AND ev.profile_id = en.profile_id
+       AND ev.name = en.rule_snapshot->'trigger'->>'event'
+       AND ev.event_time = en.trigger_time
+       AND (en.rule_snapshot->>'matchOn' IS NULL
+            OR ev.properties->>(en.rule_snapshot->>'matchOn') = en.match_value)
+     ORDER BY ev.event_id LIMIT 1) AS trigger_properties
+  FROM en
+  LEFT JOIN marketing.project_settings ps ON ps.project_id = en.project_id
+  LEFT JOIN marketing.channel_configs cc ON cc.project_id = en.project_id AND cc.channel = en.channel`;
+
+// Params: project, status, now. Writes only on a change, so a healthy source costs no row update.
+const SOURCE_STATUS_SQL = `
+  UPDATE marketing.audience_sources SET status = $2, status_at = $3::timestamptz
+  WHERE project_id = $1 AND status IS DISTINCT FROM $2`;
 
 // Every write is fenced by status and attempt: a tick whose lease was reclaimed changes nothing.
 const OWNED = `s.enrollment_id = $1::uuid AND s.step_index = $2::int AND s.status = 'sending' AND s.attempt = $3::int`;
@@ -363,20 +422,210 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
       await completeIfDone(sql, id);
     }
   }
-  const claims = await sql.$queryRawUnsafe<Claim[]>(
-    CLAIM_SQL,
-    tickStart.toISOString(),
-    new Date(tickStart.getTime() - cfg.graceSeconds * 1000).toISOString(),
-    cfg.claimBatch,
-    new Date(tickStart.getTime() + cfg.leaseSeconds * 1000).toISOString()
-  );
-  await runPool(claims, cfg.sendConcurrency, async (claim) => {
-    const outcome = await processClaim(deps, claim);
+  const claimDue = (now: Date) =>
+    sql.$queryRawUnsafe<Claim[]>(
+      CLAIM_SQL,
+      now.toISOString(),
+      new Date(now.getTime() - cfg.graceSeconds * 1000).toISOString(),
+      cfg.claimBatch,
+      new Date(now.getTime() + cfg.leaseSeconds * 1000).toISOString()
+    );
+  const count = (outcome: Outcome) => {
     if (outcome !== 'lost') {
       result[outcome]++;
     }
-  });
+  };
+  const send = async ({
+    claim,
+    entry,
+  }: {
+    claim: Claim;
+    entry?: LookupEntry;
+  }) => count(await processClaim(deps, claim, entry));
+
+  const routing = createSourceRouting(deps, count);
+  const first = await routing.split(await claimDue(tickStart));
+  const laterStored: Claim[] = [];
+  // Stored steps go out while http steps wait for their lookup batch to fill.
+  const [, groups] = await Promise.all([
+    runPool(
+      first.stored.map((claim) => ({ claim })),
+      cfg.sendConcurrency,
+      send
+    ),
+    gatherLookupBatch(first.lookups, {
+      maxBatch: MAX_LOOKUP_IDS,
+      windowMs: cfg.lookupWindowMs,
+      now: Date.now,
+      sleep: (ms) => Bun.sleep(ms),
+      // A failed refill only ends the wait early; the steps already claimed still go out.
+      refill: async () => {
+        try {
+          const more = await routing.split(await claimDue(deps.now()));
+          laterStored.push(...more.stored);
+          return more.lookups;
+        } catch (error) {
+          console.error(LOG_PREFIX, 'refill claim:', redactSecrets(error, []));
+          return [];
+        }
+      },
+    }),
+  ]);
+  const lookedUp = await Promise.all(groups.map(routing.lookUp));
+  await runPool(
+    [...laterStored.map((claim) => ({ claim })), ...lookedUp.flat()],
+    cfg.sendConcurrency,
+    send
+  );
   return result;
+}
+
+function lookupChannel(channel: ChannelId | null): LookupChannel {
+  return channel === null || channel === 'webhook' ? 'none' : channel;
+}
+
+async function setSourceStatus(
+  deps: TickDeps,
+  projectId: string,
+  status: 'ok' | 'source_auth_failed'
+): Promise<void> {
+  try {
+    await deps.sql.$executeRawUnsafe(
+      SOURCE_STATUS_SQL,
+      projectId,
+      status,
+      deps.now().toISOString()
+    );
+  } catch (error) {
+    console.error(
+      LOG_PREFIX,
+      'recording the audience source status:',
+      redactSecrets(error, [])
+    );
+  }
+}
+
+// Splits claims by audience source and runs the lookups; looked-up contact fields live only in the returned items.
+function createSourceRouting(
+  deps: TickDeps,
+  count: (outcome: Outcome) => void
+) {
+  const sources = deps.sources ?? ALL_STORED;
+  const resolved = new Map<string, Promise<AudienceSource | null>>();
+  const loggedProjects = new Set<string>();
+
+  function sourceFor(projectId: string) {
+    let source = resolved.get(projectId);
+    if (!source) {
+      source = sources.forProject(projectId);
+      resolved.set(projectId, source);
+    }
+    return source;
+  }
+
+  // A source failure is never the step's fault: it goes back to pending without spending an attempt.
+  async function deferAll(
+    projectId: string,
+    claims: Claim[],
+    error: unknown
+  ): Promise<void> {
+    if (error instanceof SourceAuthError) {
+      await setSourceStatus(deps, projectId, 'source_auth_failed');
+    }
+    if (!loggedProjects.has(projectId)) {
+      loggedProjects.add(projectId);
+      console.error(
+        LOG_PREFIX,
+        'audience source failed, its steps wait:',
+        redactSecrets(error, [])
+      );
+    }
+    const reason =
+      error instanceof SourceAuthError
+        ? 'source_auth_failed'
+        : 'source_unavailable';
+    const dueAt = new Date(deps.now().getTime() + SOURCE_BACKOFF_MS);
+    await runPool(claims, deps.cfg.sendConcurrency, async (claim) => {
+      try {
+        count(
+          await createStepWriter(deps, claim).deferForSource(dueAt, reason)
+        );
+      } catch (markError) {
+        console.error(
+          LOG_PREFIX,
+          stepLabel(claim),
+          redactSecrets(markError, [])
+        );
+      }
+    });
+  }
+
+  return {
+    async split(claims: Claim[]) {
+      const stored: Claim[] = [];
+      const lookups: LookupItem[] = [];
+      const byProject = Map.groupBy(claims, (claim) => claim.project_id);
+      for (const [projectId, group] of byProject) {
+        let source: AudienceSource | null;
+        try {
+          source = await sourceFor(projectId);
+        } catch (error) {
+          await deferAll(projectId, group, error);
+          continue;
+        }
+        if (!source) {
+          stored.push(...group);
+          continue;
+        }
+        for (const claim of group) {
+          lookups.push({
+            projectId,
+            profileId: claim.profile_id,
+            claim,
+            source,
+          });
+        }
+      }
+      return { stored, lookups };
+    },
+
+    // A group holds one project's steps; it gets one lookup per channel.
+    async lookUp(group: LookupItem[]) {
+      const ready: { claim: Claim; entry: LookupEntry }[] = [];
+      const [head] = group;
+      if (!head) {
+        return ready;
+      }
+      const { source, projectId } = head;
+      const byChannel = Map.groupBy(group, (item) =>
+        lookupChannel(item.claim.channel)
+      );
+      for (const [channel, items] of byChannel) {
+        try {
+          const entries = await source.lookup(
+            items.map((item) => item.profileId),
+            channel
+          );
+          const byId = new Map(entries.map((entry) => [entry.id, entry]));
+          await setSourceStatus(deps, projectId, 'ok');
+          for (const { claim, profileId } of items) {
+            const entry = byId.get(profileId) ?? {
+              id: profileId,
+              status: 'not_found' as const,
+            };
+            ready.push({ claim, entry });
+          }
+        } catch (error) {
+          await deferAll(
+            projectId,
+            items.map((item) => item.claim),
+            error
+          );
+        }
+      }
+      return ready;
+    },
+  };
 }
 
 function warnLagGateClosed(
@@ -402,13 +651,17 @@ function stepLabel(claim: Claim) {
 }
 
 // Throws on a failure before the adapter is called; nothing has been sent then, so a retry is safe.
-async function processClaim(deps: TickDeps, claim: Claim): Promise<Outcome> {
+async function processClaim(
+  deps: TickDeps,
+  claim: Claim,
+  entry?: LookupEntry
+): Promise<Outcome> {
   const step = createStepWriter(deps, claim);
   try {
     if (claim.attempt > MAX_ATTEMPTS) {
       return await step.finish('failed', 'max_attempts');
     }
-    return await deliver(deps, claim, step);
+    return await deliver(deps, claim, step, entry);
   } catch (error) {
     const reason = redactSecrets(error, []);
     console.error(LOG_PREFIX, stepLabel(claim), reason);
@@ -488,6 +741,8 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
     owned,
     finish,
     postpone: (dueAt: Date) => requeue(dueAt, null, true),
+    deferForSource: (dueAt: Date, reason: string) =>
+      requeue(dueAt, reason, true),
     retry(reason: string): Promise<Outcome> {
       if (claim.attempt >= MAX_ATTEMPTS) {
         return finish('failed', reason);
@@ -631,7 +886,47 @@ function render(
     : { subject: heading, body, meta };
 }
 
+function lookupSkipReason(entry: LookupEntry): string | null {
+  if (entry.status === 'ok') {
+    return null;
+  }
+  if (entry.status === 'unreachable') {
+    return `unreachable:${entry.reason ?? 'unknown'}`;
+  }
+  return entry.status;
+}
+
+async function loadContext(
+  deps: TickDeps,
+  claim: Claim,
+  entry: LookupEntry | undefined
+): Promise<StepContext | undefined> {
+  if (!entry) {
+    const [context] = await deps.sql.$queryRawUnsafe<StepContext[]>(
+      CONTEXT_SQL,
+      claim.enrollment_id,
+      claim.step_index
+    );
+    return context;
+  }
+  const [row] = await deps.sql.$queryRawUnsafe<
+    Omit<StepContext, 'email' | 'attributes' | 'device_tokens'>[]
+  >(CONTEXT_NO_CONTACT_SQL, claim.enrollment_id, claim.step_index);
+  return (
+    row && {
+      ...row,
+      email: entry.email ?? null,
+      attributes: entry.traits ?? {},
+      device_tokens: entry.devices?.map((device) => device.token) ?? [],
+      lookup_skip: lookupSkipReason(entry),
+    }
+  );
+}
+
 function skipReason(stepDef: Step, context: StepContext): string | null {
+  if (context.lookup_skip) {
+    return context.lookup_skip;
+  }
   if (context.opted_out) {
     return 'opted_out';
   }
@@ -647,13 +942,10 @@ function skipReason(stepDef: Step, context: StepContext): string | null {
 async function deliver(
   deps: TickDeps,
   claim: Claim,
-  step: StepWriter
+  step: StepWriter,
+  entry: LookupEntry | undefined
 ): Promise<Outcome> {
-  const [context] = await deps.sql.$queryRawUnsafe<StepContext[]>(
-    CONTEXT_SQL,
-    claim.enrollment_id,
-    claim.step_index
-  );
+  const context = await loadContext(deps, claim, entry);
   if (!context) {
     return 'lost';
   }
