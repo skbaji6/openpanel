@@ -50,6 +50,8 @@ const FAILURE_MESSAGES: Record<string, string> = {
 
 const SAVE_ERROR_MESSAGES: Record<string, string> = {
   invalid_body: 'Fill in the base URL, key id and secret',
+  secret_required:
+    'Enter the secret again: a new base URL or key id needs its own secret',
   invalid_base_url:
     'The base URL must be https (http is only allowed for localhost) and have no credentials, query or fragment',
 };
@@ -58,11 +60,31 @@ function failureMessage(code: string): string {
   return FAILURE_MESSAGES[code] ?? 'The test failed';
 }
 
-function saveErrorMessage(error: unknown): string {
+export function saveErrorMessage(error: unknown): string {
   if (error instanceof MarketingApiError && SAVE_ERROR_MESSAGES[error.code]) {
     return SAVE_ERROR_MESSAGES[error.code];
   }
   return describeMarketingError(error);
+}
+
+// The service keeps a saved secret only for the base URL and key id it was entered for.
+export function canKeepSavedSecret(
+  loaded: Pick<AudienceSource, 'baseUrl' | 'keyId' | 'hasSecret'>,
+  baseUrl: string,
+  keyId: string
+): boolean {
+  const targetChanged =
+    baseUrl !== (loaded.baseUrl ?? '') || keyId !== (loaded.keyId ?? '');
+  return loaded.hasSecret && !targetChanged;
+}
+
+export function secretHint(hasSecret: boolean, canKeepSecret: boolean) {
+  if (canKeepSecret) {
+    return 'Secret saved. Leave empty to keep it.';
+  }
+  if (hasSecret) {
+    return 'You changed the base URL or key id, so enter the secret for it.';
+  }
 }
 
 // Keyed on saved values so a background refetch keeps edits but a save refreshes the form.
@@ -85,6 +107,7 @@ function AudienceSourceForm({ loaded }: { loaded: AudienceSource }) {
   const [secret, setSecret] = useState('');
   const [testResult, setTestResult] = useState<TestResult | null>(null);
 
+  const canKeepSecret = canKeepSavedSecret(loaded, baseUrl, keyId);
   const hasUnsavedChanges =
     kind !== loaded.kind ||
     secret !== '' ||
@@ -176,14 +199,11 @@ function AudienceSourceForm({ loaded }: { loaded: AudienceSource }) {
             />
             <InputWithLabel
               autoComplete="new-password"
-              hint={
-                loaded.hasSecret
-                  ? 'Secret saved. Leave empty to keep it.'
-                  : undefined
-              }
+              hint={secretHint(loaded.hasSecret, canKeepSecret)}
               label="Secret"
               onChange={(event) => setSecret(event.target.value)}
-              placeholder={loaded.hasSecret ? SECRET_MASK : undefined}
+              placeholder={canKeepSecret ? SECRET_MASK : undefined}
+              required={!canKeepSecret}
               type="password"
               value={secret}
             />

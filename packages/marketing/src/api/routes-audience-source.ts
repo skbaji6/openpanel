@@ -130,10 +130,16 @@ export function audienceSourceRoutes(deps: Deps): Route[] {
             throw new HttpError(400, 'invalid_base_url');
           }
           keyId = body.keyId ?? null;
-          const stored = (await load(ctx.projectId))?.secret_encrypted ?? null;
+          const stored = await load(ctx.projectId);
+          // A kept secret must not sign requests to a host or key the admin did not enter it for.
+          const targetChanged =
+            stored?.base_url !== baseUrl || stored?.key_id !== keyId;
+          if (!body.secret && stored?.secret_encrypted && targetChanged) {
+            throw new HttpError(400, 'secret_required');
+          }
           secretEncrypted = body.secret
             ? encryptCredential(cfg.encryptionKey, body.secret)
-            : stored;
+            : (stored?.secret_encrypted ?? null);
           if (!(keyId && secretEncrypted)) {
             throw new HttpError(400, 'invalid_body');
           }

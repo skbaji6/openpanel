@@ -120,15 +120,46 @@ describe('audience source routes', () => {
         'SELECT secret_encrypted AS s, key_id AS k FROM marketing.audience_sources'
       );
     const [before] = await read();
-    const res = await call('PUT', URL_PATH, {
-      ...valid,
-      secret: '',
-      keyId: 'k2',
-    });
+    const res = await call('PUT', URL_PATH, { ...valid, secret: '' });
     expect(res.status).toBe(200);
     const [after] = await read();
     expect(after?.s).toBe(before?.s);
-    expect(after?.k).toBe('k2');
+    expect(after?.k).toBe('k1');
+  });
+
+  it('PUT needs a fresh secret when the base URL or key id changes', async () => {
+    await call('PUT', URL_PATH, valid);
+    const read = () =>
+      sql.$queryRawUnsafe<{ u: string; k: string }[]>(
+        'SELECT base_url AS u, key_id AS k FROM marketing.audience_sources'
+      );
+    const before = await read();
+    for (const change of [
+      { baseUrl: 'https://elsewhere.test/api' },
+      { keyId: 'k2' },
+    ]) {
+      const res = await call('PUT', URL_PATH, {
+        ...valid,
+        ...change,
+        secret: '',
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ error: 'secret_required' });
+      expect(await read()).toEqual(before);
+    }
+    // The stored base URL is normalised, so the same URL with a trailing slash is unchanged.
+    const same = await call('PUT', URL_PATH, {
+      ...valid,
+      baseUrl: 'https://owner.test/api/',
+      secret: '',
+    });
+    expect(same.status).toBe(200);
+    const rotated = await call('PUT', URL_PATH, {
+      ...valid,
+      keyId: 'k2',
+      secret: 'new-secret',
+    });
+    expect(rotated.status).toBe(200);
   });
 
   it('test returns source_auth_failed on a 401 from the fake API', async () => {
