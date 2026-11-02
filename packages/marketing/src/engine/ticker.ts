@@ -113,7 +113,7 @@ interface Claim {
   profile_id: string;
   channel: ChannelId | null;
   lease_until: Date;
-  due_at: Date;
+  scheduled_at: Date;
 }
 
 interface LookupItem {
@@ -195,7 +195,7 @@ export const CLAIM_SQL = `
     NOT EXISTS (SELECT 1 FROM marketing.steps later
                 WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last,
     ce.project_id, ce.profile_id, ce.rule_snapshot->'steps'->s.step_index->>'channel' AS channel,
-    s.lease_until, s.due_at`;
+    s.lease_until, COALESCE(s.scheduled_at, s.due_at) AS scheduled_at`;
 
 // Params: enrollment id, step index.
 const CONTEXT_SQL = `
@@ -287,12 +287,15 @@ const GOAL_MET_SQL = `
   )
   SELECT count(*)::int AS updated FROM step`;
 
-// Params: enrollment, step, attempt, due_at, outcome, attempts to give back.
+// Params: enrollment, step, attempt, due_at, outcome, attempts to give back, whether due_at is a new schedule.
 // Under an enrollment that ended meanwhile the step is cancelled instead of orphaned as pending.
+// A retry or source deferral keeps scheduled_at, so a step the source keeps deferring still expires.
 const REQUEUE_SQL = `
   UPDATE marketing.steps s SET
     status = CASE WHEN e.status = 'active' THEN 'pending' ELSE 'cancelled' END,
-    due_at = $4::timestamptz, outcome = $5::jsonb,
+    due_at = $4::timestamptz,
+    scheduled_at = CASE WHEN $7::boolean THEN $4::timestamptz ELSE COALESCE(s.scheduled_at, s.due_at) END,
+    outcome = $5::jsonb,
     attempt = s.attempt - $6::int, lease_until = NULL, sent_at = NULL
   FROM marketing.enrollments e
   WHERE e.id = s.enrollment_id AND ${OWNED}
@@ -463,7 +466,7 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
     const latestAllowed = now.getTime() - cfg.maxLatenessSeconds * 1000;
     const onTime: Claim[] = [];
     for (const claim of claims) {
-      if (new Date(claim.due_at).getTime() >= latestAllowed) {
+      if (new Date(claim.scheduled_at).getTime() >= latestAllowed) {
         onTime.push(claim);
         continue;
       }
@@ -788,7 +791,8 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
   async function requeue(
     dueAt: Date,
     reason: string | null,
-    giveBackAttempt: boolean
+    giveBackAttempt: boolean,
+    reschedule = false
   ): Promise<Outcome> {
     const [row] = await underProfileLock(deps.sql, claim.enrollment_id, (tx) =>
       tx.$queryRawUnsafe<{ status: string }[]>(
@@ -796,7 +800,8 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
         ...owned,
         dueAt.toISOString(),
         outcomeJson(reason),
-        giveBackAttempt ? 1 : 0
+        giveBackAttempt ? 1 : 0,
+        reschedule
       )
     );
     if (!row) {
@@ -809,6 +814,8 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
     owned,
     finish,
     postpone: (dueAt: Date) => requeue(dueAt, null, true),
+    // Quiet hours set a deliberate new send time, which is not lateness.
+    reschedule: (dueAt: Date) => requeue(dueAt, null, true, true),
     deferForSource: (dueAt: Date, reason: string) =>
       requeue(dueAt, reason, true),
     retry(reason: string): Promise<Outcome> {
@@ -1049,7 +1056,7 @@ async function deliver(
   const quietHours = zQuietHours.parse(context.quiet_hours ?? null);
   const now = deps.now();
   if (inQuietHours(now, quietHours)) {
-    return await step.postpone(nextAllowedTime(now, quietHours));
+    return await step.reschedule(nextAllowedTime(now, quietHours));
   }
 
   let adapter: ChannelAdapter<unknown>;

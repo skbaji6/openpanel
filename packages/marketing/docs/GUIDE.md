@@ -108,7 +108,7 @@ Each project gets its people from one source, set on the Channels tab:
 - **Stored**: your backend pushes contacts and devices to the sync API (5d). Simple; the plugin holds the contact data.
 - **HTTP**: you run the audience API of `docs/AUDIENCE_CONTRACT.md` and register its base URL, key id and secret. The plugin stores only the encrypted secret and, per send, ids and a status; it asks your API for contact details one batch at a time and discards them. Use this when student data must stay in your system. The Channels tab shows whether the source is healthy or failing authentication. Verify your API first with the conformance suite (`conformance/README.md`); `examples/audience-api-postgres/` is a working reference.
 
-With the HTTP source, steps that come due are grouped (up to 500 ids, waiting at most `MARKETING_LOOKUP_WINDOW_MS`, default 2 s), looked up and sent; a person returned as not found, suppressed or unreachable is recorded as skipped with that reason. A step overdue by more than `MARKETING_MAX_LATENESS` (default one day) is skipped as `expired`, for both sources.
+With the HTTP source, steps that come due are grouped (up to 500 ids, waiting at most `MARKETING_LOOKUP_WINDOW_MS`, default 2 s), looked up and sent; a person returned as not found, suppressed or unreachable is recorded as skipped with that reason. A step more than `MARKETING_MAX_LATENESS` (default one day) past its scheduled time is skipped as `expired`, for both sources, including a step the audience source kept deferring during an outage. While the source fails, the Channels tab says so and journeys wait.
 
 ### 5d. Your backend (server to server, stored source)
 
@@ -256,7 +256,7 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 | No "Marketing" in the sidebar, or the pages 404 | The dashboard is the stock image, or `MARKETING_URL` / `MARKETING_PROXY_SECRET` are not set on it. |
 | Unsubscribe link 404s | The same, or `MARKETING_PUBLIC_URL` is not the dashboard's public origin. |
 | Rule is active but nobody is messaged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours or caps hold it back. Check Results (skipped / failed). |
-| Steps show `skipped: expired` | The step was more than `MARKETING_MAX_LATENESS` late (an outage or a long backlog). Intended. |
+| Steps show `skipped: expired` | The step was more than `MARKETING_MAX_LATENESS` past its scheduled time (an outage, a failing audience source or a long backlog). Intended. |
 | Steps show `unreachable:...` or `suppressed` | The audience source says the person cannot be reached on that channel (HTTP source). |
 | Source shows failing | Wrong key or secret (401), the API is down, or its answers do not match the contract; run the conformance suite. |
 | Everyone is messaged though they reached the goal | A `matchOn` property is missing on the goal event, or the goal event name differs. For a `set` goal, the set does not contain the value the app sends. |

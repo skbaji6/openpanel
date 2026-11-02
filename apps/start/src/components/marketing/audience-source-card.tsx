@@ -136,6 +136,12 @@ function AudienceSourceForm({ loaded }: { loaded: AudienceSource }) {
             The source rejected our key. Check the key id and secret.
           </p>
         )}
+        {loaded.status === 'source_error' && (
+          <p className="text-destructive text-sm" role="alert">
+            The source answered in an unexpected format or failed. Journeys are
+            paused and will resume when it recovers.
+          </p>
+        )}
         <WithLabel id="audience-source-kind" label="Where contacts come from">
           <Select
             onValueChange={(value) => setKind(value as SourceKind)}

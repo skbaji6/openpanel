@@ -499,6 +499,48 @@ describe('runTick with an http audience source', () => {
     expect(sends).toHaveLength(0);
   });
 
+  async function tickAt(at: Date) {
+    clock = at;
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.consumer_state SET updated_at = $1::timestamptz',
+      at.toISOString()
+    );
+    return await tick();
+  }
+
+  it('a step the source deferred past the max lateness is skipped as expired when the source recovers', async () => {
+    lookupError = new SourceProtocolError('lookup: invalid JSON');
+    const enrollmentId = await enroll();
+    const sixHours = 6 * HOUR * 1000;
+    for (let i = 0; i < 4; i++) {
+      await tickAt(new Date(NOW.getTime() + i * sixHours));
+    }
+    lookupError = null;
+    lookups = [];
+    expect(await tickAt(new Date(NOW.getTime() + 4 * sixHours))).toMatchObject({
+      skipped: 1,
+      sent: 0,
+    });
+    expect(sends).toHaveLength(0);
+    expect(lookups).toHaveLength(0);
+    expect((await stepOf(enrollmentId))?.outcome).toEqual({
+      reason: 'expired',
+    });
+  });
+
+  it('a step the source deferred for less than the max lateness is still sent', async () => {
+    lookupError = new SourceUnavailableError('breaker_open');
+    const enrollmentId = await enroll();
+    for (let i = 0; i < 3; i++) {
+      await tickAt(new Date(NOW.getTime() + i * HOUR * 1000));
+    }
+    lookupError = null;
+    expect(
+      await tickAt(new Date(NOW.getTime() + 3 * HOUR * 1000))
+    ).toMatchObject({ sent: 1 });
+    expect((await stepOf(enrollmentId))?.status).toBe('sent');
+  });
+
   it('a protocol error sets the source status to source_error and leaves steps pending', async () => {
     lookupError = new SourceProtocolError('lookup: invalid JSON');
     const enrollmentId = await enroll();

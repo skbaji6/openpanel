@@ -115,10 +115,11 @@ export const ENROLL_SQL = `
     ON CONFLICT (project_id, rule_id, profile_id, match_value) WHERE status = 'active' DO NOTHING
     RETURNING id, trigger_time
   ), new_steps AS (
-    INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
-    SELECT enrollment.id, (step.ordinality - 1)::int,
-           enrollment.trigger_time + make_interval(secs => (step.value->>'delaySeconds')::double precision), 'pending'
-    FROM enrollment, jsonb_array_elements($3::jsonb->'steps') WITH ORDINALITY AS step
+    INSERT INTO marketing.steps (enrollment_id, step_index, due_at, scheduled_at, status)
+    SELECT enrollment.id, (step.ordinality - 1)::int, scheduled.at, scheduled.at, 'pending'
+    FROM enrollment, jsonb_array_elements($3::jsonb->'steps') WITH ORDINALITY AS step,
+      LATERAL (SELECT enrollment.trigger_time
+                 + make_interval(secs => (step.value->>'delaySeconds')::double precision) AS at) scheduled
   )
   SELECT id::text FROM enrollment`;
 
@@ -140,8 +141,10 @@ const STEP_DELAY = `make_interval(secs => (e.rule_snapshot->'steps'->s.step_inde
 const NOT_EXCLUDED = `NOT (COALESCE(e.rule_snapshot->'goal'->'excludeEvents', '[]'::jsonb) ?`;
 
 // GREATEST keeps the debounce order-independent: an older event never pulls due_at back.
+// A debounce moves the schedule itself, so scheduled_at (what expiry measures from) moves with it.
 const DEBOUNCE_SQL = `
-  UPDATE marketing.steps s SET due_at = GREATEST(s.due_at, $4::timestamptz + ${STEP_DELAY})
+  UPDATE marketing.steps s SET due_at = GREATEST(s.due_at, $4::timestamptz + ${STEP_DELAY}),
+    scheduled_at = GREATEST(COALESCE(s.scheduled_at, s.due_at), $4::timestamptz + ${STEP_DELAY})
   FROM marketing.enrollments e
   WHERE s.enrollment_id = e.id AND s.status = 'pending'
     AND e.project_id = $1 AND e.profile_id = $2 AND e.status = 'active'
@@ -151,7 +154,8 @@ const DEBOUNCE_SQL = `
 
 // Activity stored before the trigger arrived but later in event time counts too.
 const DEBOUNCE_FROM_STORED_SQL = `
-  UPDATE marketing.steps s SET due_at = GREATEST(s.due_at, activity.last + ${STEP_DELAY})
+  UPDATE marketing.steps s SET due_at = GREATEST(s.due_at, activity.last + ${STEP_DELAY}),
+    scheduled_at = GREATEST(COALESCE(s.scheduled_at, s.due_at), activity.last + ${STEP_DELAY})
   FROM marketing.enrollments e
   CROSS JOIN LATERAL (
     SELECT max(ev.event_time) AS last FROM marketing.events ev
