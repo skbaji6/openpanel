@@ -60,9 +60,19 @@ function failureMessage(code: string): string {
 
 function saveErrorMessage(error: unknown): string {
   if (error instanceof MarketingApiError && SAVE_ERROR_MESSAGES[error.code]) {
-    return SAVE_ERROR_MESSAGES[error.code] ?? '';
+    return SAVE_ERROR_MESSAGES[error.code];
   }
   return describeMarketingError(error);
+}
+
+// Keyed on saved values so a background refetch keeps edits but a save refreshes the form.
+function savedKey(source: AudienceSource): string {
+  return JSON.stringify([
+    source.kind,
+    source.baseUrl,
+    source.keyId,
+    source.hasSecret,
+  ]);
 }
 
 function AudienceSourceForm({ loaded }: { loaded: AudienceSource }) {
@@ -74,6 +84,12 @@ function AudienceSourceForm({ loaded }: { loaded: AudienceSource }) {
   const [keyId, setKeyId] = useState(loaded.keyId ?? '');
   const [secret, setSecret] = useState('');
   const [testResult, setTestResult] = useState<TestResult | null>(null);
+
+  const hasUnsavedChanges =
+    kind !== loaded.kind ||
+    secret !== '' ||
+    (kind === 'http' &&
+      (baseUrl !== (loaded.baseUrl ?? '') || keyId !== (loaded.keyId ?? '')));
 
   const save = useMutation({
     mutationFn: () =>
@@ -180,14 +196,20 @@ function AudienceSourceForm({ loaded }: { loaded: AudienceSource }) {
       </div>
       <IntegrationCardFooter className="justify-end">
         {loaded.kind === 'http' && (
-          <Button
-            loading={test.isPending}
-            onClick={() => test.mutate()}
-            type="button"
-            variant="outline"
-          >
-            Test connection
-          </Button>
+          <>
+            <Button
+              disabled={hasUnsavedChanges || save.isPending}
+              loading={test.isPending}
+              onClick={() => test.mutate()}
+              type="button"
+              variant="outline"
+            >
+              Test connection
+            </Button>
+            <span className="text-muted-foreground text-xs">
+              Tests the saved settings — save first
+            </span>
+          </>
         )}
         <Button loading={save.isPending} type="submit">
           Save
@@ -216,7 +238,7 @@ export function AudienceSourceCard() {
         </p>
       )}
       {source.data && (
-        <AudienceSourceForm key={source.dataUpdatedAt} loaded={source.data} />
+        <AudienceSourceForm key={savedKey(source.data)} loaded={source.data} />
       )}
     </section>
   );
