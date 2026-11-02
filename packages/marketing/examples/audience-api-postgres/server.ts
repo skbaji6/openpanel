@@ -193,6 +193,8 @@ export function createServer(opts: ServerOptions) {
   const schema = schemaOf(mapping);
   const idExpr = idExpression(mapping);
   const from = studentsFrom(mapping);
+  const memberOnly = (sql: string) =>
+    mapping.memberCondition ? `(${mapping.memberCondition}) AND ${sql}` : sql;
 
   const query = async (sql: string, params: unknown[]) =>
     (await opts.db.query(sql, params)).rows as Row[];
@@ -217,7 +219,7 @@ export function createServer(opts: ServerOptions) {
     const { filter } = parseBody(zCountRequest, body);
     const { sql, params } = compileFilter(parseFilter(filter), mapping);
     const [row] = await query(
-      `SELECT COUNT(*)::int AS count FROM ${from} WHERE ${sql}`,
+      `SELECT COUNT(*)::int AS count FROM ${from} WHERE ${memberOnly(sql)}`,
       params
     );
     return { count: Number(row?.count ?? 0) };
@@ -233,7 +235,7 @@ export function createServer(opts: ServerOptions) {
       ? studentColumn(mapping.displayNameColumn)
       : 'NULL';
     const rows = await query(
-      `SELECT ${idExpr} AS id, ${display} AS display_name FROM ${from} WHERE ${sql}${after} ORDER BY ${idExpr} LIMIT ${request.limit + 1}`,
+      `SELECT ${idExpr} AS id, ${display} AS display_name FROM ${from} WHERE ${memberOnly(sql)}${after} ORDER BY ${idExpr} LIMIT ${request.limit + 1}`,
       params
     );
     const page = rows.slice(0, request.limit);
@@ -266,7 +268,7 @@ export function createServer(opts: ServerOptions) {
     );
     const idPlaceholder = bind(params, request.id);
     const [row] = await query(
-      `SELECT ${[`${whole.sql} AS matches`, ...columns].join(', ')} FROM ${from} WHERE ${idExpr} = ${idPlaceholder}`,
+      `SELECT ${[`${whole.sql} AS matches`, ...columns].join(', ')} FROM ${from} WHERE ${memberOnly(`${idExpr} = ${idPlaceholder}`)}`,
       params
     );
     return {

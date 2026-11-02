@@ -5,6 +5,6 @@
     "strictNullChecks": true,
     "types": ["bun-types", "node"]
   },
-  "include": ["src", "scripts", "examples"],
+  "include": ["src", "scripts", "examples", "conformance"],
   "exclude": ["node_modules"]
 }

@@ -23,6 +23,8 @@ Point a project's audience source at `http://host:4200<AUDIENCE_BASE_PATH>`. Use
 - `expression`: a trusted SQL expression over `s` for computed dimensions. The example `purchase_status` is `PURCHASED` for an active, unexpired purchase and `NOT_PURCHASED` otherwise. Expressions are configuration, never user input; each must be one self-contained SQL expression (`;`, `--`, `/*` and `*/` are rejected).
 - `exists`: an EXISTS sub-select over a child relation, for multi-valued dimensions such as `course`. Students stay one row, so counts and pages are of distinct students.
 
+Optional `memberCondition`: a trusted boolean expression over `s` (same rules as `expression`); students failing it are never audience members (count, members, explain), while `lookup` still reports them, for example `NOT s.suppressed`.
+
 Also mapped: the id column (ids are served as text), the display name, contact columns (email, verified flag, phone, suppression flag, consent), traits, and the devices table. Only mapped columns are ever selected, so a password column cannot leak.
 
 Contract notes: `not_in` includes students who have no value for the dimension (single valued: NULL; multi valued: no matching child row). Ids are compared and ordered as `id::text`; if your id column is already text, drop the cast in `idExpression` (compile.ts), otherwise add an expression index on `(id::text)` so paging and `id` conditions can use an index.
@@ -34,6 +36,10 @@ Every request carries `Authorization: Bearer <keyId>.<secret>`, `X-Timestamp` (s
 ## Limits
 
 Page `limit` at most 1,000; lookup at most 500 ids; resolve at most 200 inputs; `id` conditions at most 1,000 values; filter depth at most 3; body at most 8 MB. Violations are `400 {"error"}` with a fixed message that never echoes input.
+
+## Conformance
+
+`../../conformance/seed/reference-mapping.json` maps this service onto the conformance seed (`conformance/seed/seed.sql`, schema `conformance_demo`); `conformance/conformance.test.ts` runs the suite against it. See `conformance/README.md`.
 
 ## Tests
 

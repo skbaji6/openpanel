@@ -1,0 +1,2916 @@
+{
+  "universities": [
+    {
+      "id": 1,
+      "name": "Alpha University"
+    },
+    {
+      "id": 2,
+      "name": "Beta University"
+    },
+    {
+      "id": 3,
+      "name": "Gamma University"
+    }
+  ],
+  "courses": [
+    {
+      "id": 11,
+      "name": "Medicine"
+    },
+    {
+      "id": 12,
+      "name": "Nursing"
+    },
+    {
+      "id": 13,
+      "name": "Pharmacy"
+    },
+    {
+      "id": 14,
+      "name": "Dentistry"
+    }
+  ],
+  "semesters": [
+    {
+      "id": 1,
+      "name": "Semester 1"
+    },
+    {
+      "id": 2,
+      "name": "Semester 2"
+    }
+  ],
+  "students": [
+    {
+      "id": "1001",
+      "firstName": "Asha",
+      "lastName": "Rao",
+      "email": "student1001@example.test",
+      "emailVerified": true,
+      "phone": "919000001001",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-01-01",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1002",
+      "firstName": "Bala",
+      "lastName": "Iyer",
+      "email": "student1002@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-01-04",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1003",
+      "firstName": "Chitra",
+      "lastName": "Nair",
+      "email": "student1003@example.test",
+      "emailVerified": false,
+      "phone": "919000001003",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-01-07",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1004",
+      "firstName": "Dev",
+      "lastName": "Menon",
+      "email": "student1004@example.test",
+      "emailVerified": true,
+      "phone": "919000001004",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-01-10",
+      "suppressed": true,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1005",
+      "firstName": "Esha",
+      "lastName": "Pillai",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001005",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-01-13",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1006",
+      "firstName": "Farid",
+      "lastName": "Khan",
+      "email": "student1006@example.test",
+      "emailVerified": true,
+      "phone": "919000001006",
+      "universityId": 3,
+      "courseId": null,
+      "semesterId": 2,
+      "signupDate": "2025-01-16",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1007",
+      "firstName": "Gita",
+      "lastName": "Sen",
+      "email": "student1007@example.test",
+      "emailVerified": true,
+      "phone": "919000001007",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-01-19",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1008",
+      "firstName": "Hari",
+      "lastName": "Das",
+      "email": "student1008@example.test",
+      "emailVerified": true,
+      "phone": "919000001008",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": null,
+      "signupDate": "2025-01-22",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1009",
+      "firstName": "Indu",
+      "lastName": "Gupta",
+      "email": "student1009@example.test",
+      "emailVerified": true,
+      "phone": "919000001009",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-01-25",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1010",
+      "firstName": "Jai",
+      "lastName": "Reddy",
+      "email": "student1010@example.test",
+      "emailVerified": true,
+      "phone": "919000001010",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-01-28",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1011",
+      "firstName": "Kavya",
+      "lastName": "Rao",
+      "email": "student1011@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-01-31",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1012",
+      "firstName": "Lakshmi",
+      "lastName": "Iyer",
+      "email": "student1012@example.test",
+      "emailVerified": true,
+      "phone": "919000001012",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-02-03",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1013",
+      "firstName": "Asha",
+      "lastName": "Nair",
+      "email": "student1013@example.test",
+      "emailVerified": true,
+      "phone": "919000001013",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-02-06",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1014",
+      "firstName": "Bala",
+      "lastName": "Menon",
+      "email": "student1014@example.test",
+      "emailVerified": false,
+      "phone": "919000001014",
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-02-09",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1015",
+      "firstName": "Chitra",
+      "lastName": "Pillai",
+      "email": "student1015@example.test",
+      "emailVerified": true,
+      "phone": "919000001015",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-02-12",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1016",
+      "firstName": "Dev",
+      "lastName": "Khan",
+      "email": "student1016@example.test",
+      "emailVerified": true,
+      "phone": "919000001016",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-02-15",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1017",
+      "firstName": "Esha",
+      "lastName": "Sen",
+      "email": "student1017@example.test",
+      "emailVerified": true,
+      "phone": "919000001017",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-02-18",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1018",
+      "firstName": "Farid",
+      "lastName": "Das",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001018",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-02-21",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1019",
+      "firstName": "Gita",
+      "lastName": "Gupta",
+      "email": "student1019@example.test",
+      "emailVerified": true,
+      "phone": "919000001019",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-02-24",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1020",
+      "firstName": "Hari",
+      "lastName": "Reddy",
+      "email": "student1020@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-02-27",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1021",
+      "firstName": "Indu",
+      "lastName": "Rao",
+      "email": "student1021@example.test",
+      "emailVerified": true,
+      "phone": "919000001021",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-03-02",
+      "suppressed": true,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1022",
+      "firstName": "Jai",
+      "lastName": "Iyer",
+      "email": "student1022@example.test",
+      "emailVerified": true,
+      "phone": "919000001022",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-03-05",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1023",
+      "firstName": "Kavya",
+      "lastName": "Nair",
+      "email": "student1023@example.test",
+      "emailVerified": true,
+      "phone": "919000001023",
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-03-08",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1024",
+      "firstName": "Lakshmi",
+      "lastName": "Menon",
+      "email": "student1024@example.test",
+      "emailVerified": true,
+      "phone": "919000001024",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-03-11",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1025",
+      "firstName": "Asha",
+      "lastName": "Pillai",
+      "email": "student1025@example.test",
+      "emailVerified": false,
+      "phone": "919000001025",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-03-14",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1026",
+      "firstName": "Bala",
+      "lastName": "Khan",
+      "email": "student1026@example.test",
+      "emailVerified": true,
+      "phone": "919000001026",
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-03-17",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1027",
+      "firstName": "Chitra",
+      "lastName": "Sen",
+      "email": "student1027@example.test",
+      "emailVerified": true,
+      "phone": "919000001027",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-03-20",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1028",
+      "firstName": "Dev",
+      "lastName": "Das",
+      "email": "student1028@example.test",
+      "emailVerified": true,
+      "phone": "919000001028",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-03-23",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1029",
+      "firstName": "Esha",
+      "lastName": "Gupta",
+      "email": "student1029@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": null,
+      "semesterId": 2,
+      "signupDate": "2025-03-26",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1030",
+      "firstName": "Farid",
+      "lastName": "Reddy",
+      "email": "student1030@example.test",
+      "emailVerified": true,
+      "phone": "919000001030",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-03-29",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1031",
+      "firstName": "Gita",
+      "lastName": "Rao",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001031",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-04-01",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1032",
+      "firstName": "Hari",
+      "lastName": "Iyer",
+      "email": "student1032@example.test",
+      "emailVerified": true,
+      "phone": "919000001032",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-04-04",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1033",
+      "firstName": "Indu",
+      "lastName": "Nair",
+      "email": "student1033@example.test",
+      "emailVerified": true,
+      "phone": "919000001033",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-04-07",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1034",
+      "firstName": "Jai",
+      "lastName": "Menon",
+      "email": "student1034@example.test",
+      "emailVerified": true,
+      "phone": "919000001034",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-04-10",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1035",
+      "firstName": "Kavya",
+      "lastName": "Pillai",
+      "email": "student1035@example.test",
+      "emailVerified": true,
+      "phone": "919000001035",
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-04-13",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1036",
+      "firstName": "Lakshmi",
+      "lastName": "Khan",
+      "email": "student1036@example.test",
+      "emailVerified": false,
+      "phone": "919000001036",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-04-16",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1037",
+      "firstName": "Asha",
+      "lastName": "Sen",
+      "email": "student1037@example.test",
+      "emailVerified": true,
+      "phone": "919000001037",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": null,
+      "signupDate": "2025-04-19",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1038",
+      "firstName": "Bala",
+      "lastName": "Das",
+      "email": "student1038@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-04-22",
+      "suppressed": true,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1039",
+      "firstName": "Chitra",
+      "lastName": "Gupta",
+      "email": "student1039@example.test",
+      "emailVerified": true,
+      "phone": "919000001039",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-04-25",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1040",
+      "firstName": "Dev",
+      "lastName": "Reddy",
+      "email": "student1040@example.test",
+      "emailVerified": true,
+      "phone": "919000001040",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-04-28",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1041",
+      "firstName": "Esha",
+      "lastName": "Rao",
+      "email": "student1041@example.test",
+      "emailVerified": true,
+      "phone": "919000001041",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-05-01",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1042",
+      "firstName": "Farid",
+      "lastName": "Iyer",
+      "email": "student1042@example.test",
+      "emailVerified": true,
+      "phone": "919000001042",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-05-04",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1043",
+      "firstName": "Gita",
+      "lastName": "Nair",
+      "email": "student1043@example.test",
+      "emailVerified": true,
+      "phone": "919000001043",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-05-07",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1044",
+      "firstName": "Hari",
+      "lastName": "Menon",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001044",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-05-10",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1045",
+      "firstName": "Indu",
+      "lastName": "Pillai",
+      "email": "student1045@example.test",
+      "emailVerified": true,
+      "phone": "919000001045",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-05-13",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1046",
+      "firstName": "Jai",
+      "lastName": "Khan",
+      "email": "student1046@example.test",
+      "emailVerified": true,
+      "phone": "919000001046",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-05-16",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1047",
+      "firstName": "Kavya",
+      "lastName": "Sen",
+      "email": "student1047@example.test",
+      "emailVerified": false,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-05-19",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1048",
+      "firstName": "Lakshmi",
+      "lastName": "Das",
+      "email": "student1048@example.test",
+      "emailVerified": true,
+      "phone": "919000001048",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-05-22",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1049",
+      "firstName": "Asha",
+      "lastName": "Gupta",
+      "email": "student1049@example.test",
+      "emailVerified": true,
+      "phone": "919000001049",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-05-25",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1050",
+      "firstName": "Bala",
+      "lastName": "Reddy",
+      "email": "student1050@example.test",
+      "emailVerified": true,
+      "phone": "919000001050",
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-05-28",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1051",
+      "firstName": "Chitra",
+      "lastName": "Rao",
+      "email": "student1051@example.test",
+      "emailVerified": true,
+      "phone": "919000001051",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-05-31",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1052",
+      "firstName": "Dev",
+      "lastName": "Iyer",
+      "email": "student1052@example.test",
+      "emailVerified": true,
+      "phone": "919000001052",
+      "universityId": 1,
+      "courseId": null,
+      "semesterId": 2,
+      "signupDate": "2025-06-03",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1053",
+      "firstName": "Esha",
+      "lastName": "Nair",
+      "email": "student1053@example.test",
+      "emailVerified": true,
+      "phone": "919000001053",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-06-06",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1054",
+      "firstName": "Farid",
+      "lastName": "Menon",
+      "email": "student1054@example.test",
+      "emailVerified": true,
+      "phone": "919000001054",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-06-09",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1055",
+      "firstName": "Gita",
+      "lastName": "Pillai",
+      "email": "student1055@example.test",
+      "emailVerified": true,
+      "phone": "919000001055",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-06-12",
+      "suppressed": true,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1056",
+      "firstName": "Hari",
+      "lastName": "Khan",
+      "email": "student1056@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-06-15",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1057",
+      "firstName": "Indu",
+      "lastName": "Sen",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001057",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-06-18",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1058",
+      "firstName": "Jai",
+      "lastName": "Das",
+      "email": "student1058@example.test",
+      "emailVerified": false,
+      "phone": "919000001058",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-06-21",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1059",
+      "firstName": "Kavya",
+      "lastName": "Gupta",
+      "email": "student1059@example.test",
+      "emailVerified": true,
+      "phone": "919000001059",
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-06-24",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1060",
+      "firstName": "Lakshmi",
+      "lastName": "Reddy",
+      "email": "student1060@example.test",
+      "emailVerified": true,
+      "phone": "919000001060",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-06-27",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1061",
+      "firstName": "Asha",
+      "lastName": "Rao",
+      "email": "student1061@example.test",
+      "emailVerified": true,
+      "phone": "919000001061",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-06-30",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1062",
+      "firstName": "Bala",
+      "lastName": "Iyer",
+      "email": "student1062@example.test",
+      "emailVerified": true,
+      "phone": "919000001062",
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-07-03",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1063",
+      "firstName": "Chitra",
+      "lastName": "Nair",
+      "email": "student1063@example.test",
+      "emailVerified": true,
+      "phone": "919000001063",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-07-06",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1064",
+      "firstName": "Dev",
+      "lastName": "Menon",
+      "email": "student1064@example.test",
+      "emailVerified": true,
+      "phone": "919000001064",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-07-09",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1065",
+      "firstName": "Esha",
+      "lastName": "Pillai",
+      "email": "student1065@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-07-12",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1066",
+      "firstName": "Farid",
+      "lastName": "Khan",
+      "email": "student1066@example.test",
+      "emailVerified": true,
+      "phone": "919000001066",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": null,
+      "signupDate": "2025-07-15",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1067",
+      "firstName": "Gita",
+      "lastName": "Sen",
+      "email": "student1067@example.test",
+      "emailVerified": true,
+      "phone": "919000001067",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-07-18",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1068",
+      "firstName": "Hari",
+      "lastName": "Das",
+      "email": "student1068@example.test",
+      "emailVerified": true,
+      "phone": "919000001068",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-07-21",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1069",
+      "firstName": "Indu",
+      "lastName": "Gupta",
+      "email": "student1069@example.test",
+      "emailVerified": false,
+      "phone": "919000001069",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-07-24",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1070",
+      "firstName": "Jai",
+      "lastName": "Reddy",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001070",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-07-27",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1071",
+      "firstName": "Kavya",
+      "lastName": "Rao",
+      "email": "student1071@example.test",
+      "emailVerified": true,
+      "phone": "919000001071",
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-07-30",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1072",
+      "firstName": "Lakshmi",
+      "lastName": "Iyer",
+      "email": "student1072@example.test",
+      "emailVerified": true,
+      "phone": "919000001072",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-08-02",
+      "suppressed": true,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1073",
+      "firstName": "Asha",
+      "lastName": "Nair",
+      "email": "student1073@example.test",
+      "emailVerified": true,
+      "phone": "919000001073",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-08-05",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1074",
+      "firstName": "Bala",
+      "lastName": "Menon",
+      "email": "student1074@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-08-08",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1075",
+      "firstName": "Chitra",
+      "lastName": "Pillai",
+      "email": "student1075@example.test",
+      "emailVerified": true,
+      "phone": "919000001075",
+      "universityId": 3,
+      "courseId": null,
+      "semesterId": 1,
+      "signupDate": "2025-08-11",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1076",
+      "firstName": "Dev",
+      "lastName": "Khan",
+      "email": "student1076@example.test",
+      "emailVerified": true,
+      "phone": "919000001076",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-08-14",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1077",
+      "firstName": "Esha",
+      "lastName": "Sen",
+      "email": "student1077@example.test",
+      "emailVerified": true,
+      "phone": "919000001077",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-08-17",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1078",
+      "firstName": "Farid",
+      "lastName": "Das",
+      "email": "student1078@example.test",
+      "emailVerified": true,
+      "phone": "919000001078",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-08-20",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1079",
+      "firstName": "Gita",
+      "lastName": "Gupta",
+      "email": "student1079@example.test",
+      "emailVerified": true,
+      "phone": "919000001079",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-08-23",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1080",
+      "firstName": "Hari",
+      "lastName": "Reddy",
+      "email": "student1080@example.test",
+      "emailVerified": false,
+      "phone": "919000001080",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-08-26",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1081",
+      "firstName": "Indu",
+      "lastName": "Rao",
+      "email": "student1081@example.test",
+      "emailVerified": true,
+      "phone": "919000001081",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-08-29",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1082",
+      "firstName": "Jai",
+      "lastName": "Iyer",
+      "email": "student1082@example.test",
+      "emailVerified": true,
+      "phone": "919000001082",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-09-01",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1083",
+      "firstName": "Kavya",
+      "lastName": "Nair",
+      "email": null,
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-09-04",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1084",
+      "firstName": "Lakshmi",
+      "lastName": "Menon",
+      "email": "student1084@example.test",
+      "emailVerified": true,
+      "phone": "919000001084",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-09-07",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1085",
+      "firstName": "Asha",
+      "lastName": "Pillai",
+      "email": "student1085@example.test",
+      "emailVerified": true,
+      "phone": "919000001085",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-09-10",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1086",
+      "firstName": "Bala",
+      "lastName": "Khan",
+      "email": "student1086@example.test",
+      "emailVerified": true,
+      "phone": "919000001086",
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-09-13",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1087",
+      "firstName": "Chitra",
+      "lastName": "Sen",
+      "email": "student1087@example.test",
+      "emailVerified": true,
+      "phone": "919000001087",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-09-16",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1088",
+      "firstName": "Dev",
+      "lastName": "Das",
+      "email": "student1088@example.test",
+      "emailVerified": true,
+      "phone": "919000001088",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-09-19",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1089",
+      "firstName": "Esha",
+      "lastName": "Gupta",
+      "email": "student1089@example.test",
+      "emailVerified": true,
+      "phone": "919000001089",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-09-22",
+      "suppressed": true,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1090",
+      "firstName": "Farid",
+      "lastName": "Reddy",
+      "email": "student1090@example.test",
+      "emailVerified": true,
+      "phone": "919000001090",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-09-25",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1091",
+      "firstName": "Gita",
+      "lastName": "Rao",
+      "email": "student1091@example.test",
+      "emailVerified": false,
+      "phone": "919000001091",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-09-28",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1092",
+      "firstName": "Hari",
+      "lastName": "Iyer",
+      "email": "student1092@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-10-01",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1093",
+      "firstName": "Indu",
+      "lastName": "Nair",
+      "email": "student1093@example.test",
+      "emailVerified": true,
+      "phone": "919000001093",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-10-04",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1094",
+      "firstName": "Jai",
+      "lastName": "Menon",
+      "email": "student1094@example.test",
+      "emailVerified": true,
+      "phone": "919000001094",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-10-07",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1095",
+      "firstName": "Kavya",
+      "lastName": "Pillai",
+      "email": "student1095@example.test",
+      "emailVerified": true,
+      "phone": "919000001095",
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": null,
+      "signupDate": "2025-10-10",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1096",
+      "firstName": "Lakshmi",
+      "lastName": "Khan",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001096",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-10-13",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1097",
+      "firstName": "Asha",
+      "lastName": "Sen",
+      "email": "student1097@example.test",
+      "emailVerified": true,
+      "phone": "919000001097",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-10-16",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1098",
+      "firstName": "Bala",
+      "lastName": "Das",
+      "email": "student1098@example.test",
+      "emailVerified": true,
+      "phone": "919000001098",
+      "universityId": 2,
+      "courseId": null,
+      "semesterId": 1,
+      "signupDate": "2025-10-19",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1099",
+      "firstName": "Chitra",
+      "lastName": "Gupta",
+      "email": "student1099@example.test",
+      "emailVerified": true,
+      "phone": "919000001099",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-10-22",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1100",
+      "firstName": "Dev",
+      "lastName": "Reddy",
+      "email": "student1100@example.test",
+      "emailVerified": true,
+      "phone": "919000001100",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-10-25",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1101",
+      "firstName": "Esha",
+      "lastName": "Rao",
+      "email": "student1101@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-10-28",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1102",
+      "firstName": "Farid",
+      "lastName": "Iyer",
+      "email": "student1102@example.test",
+      "emailVerified": false,
+      "phone": "919000001102",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-10-31",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1103",
+      "firstName": "Gita",
+      "lastName": "Nair",
+      "email": "student1103@example.test",
+      "emailVerified": true,
+      "phone": "919000001103",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-11-03",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1104",
+      "firstName": "Hari",
+      "lastName": "Menon",
+      "email": "student1104@example.test",
+      "emailVerified": true,
+      "phone": "919000001104",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-11-06",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1105",
+      "firstName": "Indu",
+      "lastName": "Pillai",
+      "email": "student1105@example.test",
+      "emailVerified": true,
+      "phone": "919000001105",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-11-09",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1106",
+      "firstName": "Jai",
+      "lastName": "Khan",
+      "email": "student1106@example.test",
+      "emailVerified": true,
+      "phone": "919000001106",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-11-12",
+      "suppressed": true,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1107",
+      "firstName": "Kavya",
+      "lastName": "Sen",
+      "email": "student1107@example.test",
+      "emailVerified": true,
+      "phone": "919000001107",
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-11-15",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1108",
+      "firstName": "Lakshmi",
+      "lastName": "Das",
+      "email": "student1108@example.test",
+      "emailVerified": true,
+      "phone": "919000001108",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-11-18",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1109",
+      "firstName": "Asha",
+      "lastName": "Gupta",
+      "email": null,
+      "emailVerified": true,
+      "phone": "919000001109",
+      "universityId": 1,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-11-21",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1110",
+      "firstName": "Bala",
+      "lastName": "Reddy",
+      "email": "student1110@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 12,
+      "semesterId": 1,
+      "signupDate": "2025-11-24",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1111",
+      "firstName": "Chitra",
+      "lastName": "Rao",
+      "email": "student1111@example.test",
+      "emailVerified": true,
+      "phone": "919000001111",
+      "universityId": 3,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-11-27",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1112",
+      "firstName": "Dev",
+      "lastName": "Iyer",
+      "email": "student1112@example.test",
+      "emailVerified": true,
+      "phone": "919000001112",
+      "universityId": 1,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-11-30",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1113",
+      "firstName": "Esha",
+      "lastName": "Nair",
+      "email": "student1113@example.test",
+      "emailVerified": false,
+      "phone": "919000001113",
+      "universityId": 2,
+      "courseId": 11,
+      "semesterId": 2,
+      "signupDate": "2025-12-03",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1114",
+      "firstName": "Farid",
+      "lastName": "Menon",
+      "email": "student1114@example.test",
+      "emailVerified": true,
+      "phone": "919000001114",
+      "universityId": 3,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-12-06",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1115",
+      "firstName": "Gita",
+      "lastName": "Pillai",
+      "email": "student1115@example.test",
+      "emailVerified": true,
+      "phone": "919000001115",
+      "universityId": 1,
+      "courseId": 13,
+      "semesterId": 1,
+      "signupDate": "2025-12-09",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": false
+    },
+    {
+      "id": "1116",
+      "firstName": "Hari",
+      "lastName": "Khan",
+      "email": "student1116@example.test",
+      "emailVerified": true,
+      "phone": "919000001116",
+      "universityId": 2,
+      "courseId": 14,
+      "semesterId": 1,
+      "signupDate": "2025-12-12",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    },
+    {
+      "id": "1117",
+      "firstName": "Indu",
+      "lastName": "Sen",
+      "email": "student1117@example.test",
+      "emailVerified": true,
+      "phone": "919000001117",
+      "universityId": 3,
+      "courseId": 11,
+      "semesterId": 1,
+      "signupDate": "2025-12-15",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1118",
+      "firstName": "Jai",
+      "lastName": "Das",
+      "email": "student1118@example.test",
+      "emailVerified": true,
+      "phone": "919000001118",
+      "universityId": 1,
+      "courseId": 12,
+      "semesterId": 2,
+      "signupDate": "2025-12-18",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": false
+    },
+    {
+      "id": "1119",
+      "firstName": "Kavya",
+      "lastName": "Gupta",
+      "email": "student1119@example.test",
+      "emailVerified": true,
+      "phone": null,
+      "universityId": 2,
+      "courseId": 13,
+      "semesterId": 2,
+      "signupDate": "2025-12-21",
+      "suppressed": false,
+      "whatsappConsent": true,
+      "smsConsent": true
+    },
+    {
+      "id": "1120",
+      "firstName": "Lakshmi",
+      "lastName": "Reddy",
+      "email": "student1120@example.test",
+      "emailVerified": true,
+      "phone": "919000001120",
+      "universityId": 3,
+      "courseId": 14,
+      "semesterId": 2,
+      "signupDate": "2025-12-24",
+      "suppressed": false,
+      "whatsappConsent": false,
+      "smsConsent": true
+    }
+  ],
+  "enrollments": [
+    {
+      "studentId": "1001",
+      "courseId": 12
+    },
+    {
+      "studentId": "1016",
+      "courseId": 11
+    },
+    {
+      "studentId": "1031",
+      "courseId": 14
+    },
+    {
+      "studentId": "1031",
+      "courseId": 13
+    },
+    {
+      "studentId": "1046",
+      "courseId": 13
+    },
+    {
+      "studentId": "1061",
+      "courseId": 12
+    },
+    {
+      "studentId": "1076",
+      "courseId": 11
+    },
+    {
+      "studentId": "1091",
+      "courseId": 14
+    },
+    {
+      "studentId": "1106",
+      "courseId": 13
+    }
+  ],
+  "devices": [
+    {
+      "studentId": "1001",
+      "token": "tok-1001-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1002",
+      "token": "tok-1002",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1003",
+      "token": "tok-1003",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1004",
+      "token": "tok-1004",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1005",
+      "token": "tok-1005",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1006",
+      "token": "",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1007",
+      "token": "tok-1007",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1008",
+      "token": "tok-1008",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1009",
+      "token": "tok-1009",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1010",
+      "token": "tok-1010",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1011",
+      "token": "tok-1011-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1012",
+      "token": "tok-1012",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1013",
+      "token": "tok-1013",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1014",
+      "token": "tok-1014",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1015",
+      "token": "tok-1015",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1017",
+      "token": "tok-1017",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1018",
+      "token": "tok-1018",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1019",
+      "token": "tok-1019",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1020",
+      "token": "tok-1020",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1021",
+      "token": "tok-1021-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1022",
+      "token": "tok-1022",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1023",
+      "token": "tok-1023",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1024",
+      "token": "tok-1024",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1025",
+      "token": "tok-1025",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1027",
+      "token": "tok-1027",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1028",
+      "token": "tok-1028",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1029",
+      "token": "tok-1029",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1030",
+      "token": "tok-1030",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1031",
+      "token": "tok-1031-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1031",
+      "token": "",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1032",
+      "token": "tok-1032",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1033",
+      "token": "tok-1033",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1034",
+      "token": "tok-1034",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1035",
+      "token": "tok-1035",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1037",
+      "token": "tok-1037",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1038",
+      "token": "tok-1038",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1039",
+      "token": "tok-1039",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1040",
+      "token": "tok-1040",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1041",
+      "token": "tok-1041-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1042",
+      "token": "tok-1042",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1043",
+      "token": "tok-1043",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1044",
+      "token": "tok-1044",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1045",
+      "token": "tok-1045",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1047",
+      "token": "tok-1047",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1048",
+      "token": "tok-1048",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1049",
+      "token": "tok-1049",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1050",
+      "token": "tok-1050",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1051",
+      "token": "tok-1051-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1052",
+      "token": "tok-1052",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1053",
+      "token": "tok-1053",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1054",
+      "token": "tok-1054",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1055",
+      "token": "tok-1055",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1056",
+      "token": "",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1057",
+      "token": "tok-1057",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1058",
+      "token": "tok-1058",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1059",
+      "token": "tok-1059",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1060",
+      "token": "tok-1060",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1061",
+      "token": "tok-1061-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1062",
+      "token": "tok-1062",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1063",
+      "token": "tok-1063",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1064",
+      "token": "tok-1064",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1065",
+      "token": "tok-1065",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1067",
+      "token": "tok-1067",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1068",
+      "token": "tok-1068",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1069",
+      "token": "tok-1069",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1070",
+      "token": "tok-1070",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1071",
+      "token": "tok-1071-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1072",
+      "token": "tok-1072",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1073",
+      "token": "tok-1073",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1074",
+      "token": "tok-1074",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1075",
+      "token": "tok-1075",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1077",
+      "token": "tok-1077",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1078",
+      "token": "tok-1078",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1079",
+      "token": "tok-1079",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1080",
+      "token": "tok-1080",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1081",
+      "token": "tok-1081-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1081",
+      "token": "",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1082",
+      "token": "tok-1082",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1083",
+      "token": "tok-1083",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1084",
+      "token": "tok-1084",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1085",
+      "token": "tok-1085",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1087",
+      "token": "tok-1087",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1088",
+      "token": "tok-1088",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1089",
+      "token": "tok-1089",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1090",
+      "token": "tok-1090",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1091",
+      "token": "tok-1091-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1092",
+      "token": "tok-1092",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1093",
+      "token": "tok-1093",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1094",
+      "token": "tok-1094",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1095",
+      "token": "tok-1095",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1097",
+      "token": "tok-1097",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1098",
+      "token": "tok-1098",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1099",
+      "token": "tok-1099",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1100",
+      "token": "tok-1100",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1101",
+      "token": "tok-1101-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1102",
+      "token": "tok-1102",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1103",
+      "token": "tok-1103",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1104",
+      "token": "tok-1104",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1105",
+      "token": "tok-1105",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1106",
+      "token": "",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1107",
+      "token": "tok-1107",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1108",
+      "token": "tok-1108",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1109",
+      "token": "tok-1109",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1110",
+      "token": "tok-1110",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1111",
+      "token": "tok-1111-old",
+      "platform": "android",
+      "active": false
+    },
+    {
+      "studentId": "1112",
+      "token": "tok-1112",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1113",
+      "token": "tok-1113",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1114",
+      "token": "tok-1114",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1115",
+      "token": "tok-1115",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1117",
+      "token": "tok-1117",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1118",
+      "token": "tok-1118",
+      "platform": "android",
+      "active": true
+    },
+    {
+      "studentId": "1119",
+      "token": "tok-1119",
+      "platform": "ios",
+      "active": true
+    },
+    {
+      "studentId": "1120",
+      "token": "tok-1120",
+      "platform": "android",
+      "active": true
+    }
+  ],
+  "purchases": [
+    {
+      "studentId": "1001",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1002",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1003",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1004",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1007",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1008",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1009",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1012",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1013",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1014",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1015",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1019",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1020",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1021",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1025",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1026",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1027",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1028",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1031",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1032",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1033",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1036",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1037",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1038",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1039",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1043",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1044",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1045",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1049",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1050",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1051",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1052",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1055",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1056",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1057",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1060",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1061",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1062",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1063",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1067",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1068",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1069",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1073",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1074",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1075",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1076",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1079",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1080",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1081",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1084",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1085",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1086",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1087",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1091",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1092",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1093",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1097",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1098",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1099",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1100",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1103",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1104",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1105",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1108",
+      "isActive": true,
+      "expiryDate": "2999-12-31"
+    },
+    {
+      "studentId": "1109",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1110",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1111",
+      "isActive": false,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1115",
+      "isActive": true,
+      "expiryDate": null
+    },
+    {
+      "studentId": "1116",
+      "isActive": true,
+      "expiryDate": "2000-01-01"
+    },
+    {
+      "studentId": "1117",
+      "isActive": false,
+      "expiryDate": null
+    }
+  ]
+}

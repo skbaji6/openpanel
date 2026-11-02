@@ -7,6 +7,14 @@ export const IDENTIFIER = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 
 const zIdentifier = z.string().regex(IDENTIFIER, 'not a valid identifier');
 
+// Trusted configuration, but kept to one self-contained SQL expression.
+const zExpression = z
+  .string()
+  .refine(
+    (value) => !/;|--|\/\*|\*\//.test(value),
+    'no statement separators or comments'
+  );
+
 const zExists = z.object({
   table: zIdentifier,
   studentColumn: zIdentifier,
@@ -23,13 +31,7 @@ const zDimensionMapping = z
     // alias `s` (for computed dimensions such as purchase_status), or an EXISTS
     // sub-select over a child relation (multi-valued dimensions).
     column: zIdentifier.optional(),
-    expression: z
-      .string()
-      .refine(
-        (value) => !/;|--|\/\*|\*\//.test(value),
-        'no statement separators or comments'
-      )
-      .optional(),
+    expression: zExpression.optional(),
     exists: zExists.optional(),
     values: z
       .object({
@@ -56,6 +58,9 @@ export const zMapping = z
     studentsTable: zIdentifier,
     idColumn: zIdentifier,
     displayNameColumn: zIdentifier.optional(),
+    // A boolean expression over `s`; students failing it are never audience
+    // members (count, members, explain), though lookup still reports them.
+    memberCondition: zExpression.optional(),
     dimensions: z.array(zDimensionMapping),
     contact: z
       .object({
