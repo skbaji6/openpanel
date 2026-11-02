@@ -1,5 +1,6 @@
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -12,7 +13,7 @@ import { getRedisCache } from '@openpanel/redis';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
 import { createSourceResolver } from '../audience/resolver';
-import { registerAdapter } from '../channels/registry';
+import { getAdapter, registerAdapter } from '../channels/registry';
 import type {
   ChannelAdapter,
   ChannelId,
@@ -23,9 +24,10 @@ import type { MarketingConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
+import { redactSecrets } from '../redact';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine } from './engine';
-import { runTick } from './ticker';
+import { recipientValues, runTick } from './ticker';
 
 // What a source-backed project must never persist or log: it is looked up per send and forgotten.
 const CANARY_EMAIL = 'pii-canary@example.test';
@@ -81,7 +83,9 @@ let failures = new Map<string, SendFailure>();
 let malformedProfiles = new Set<string>();
 let redisKeysDuringLookup: string[] = [];
 let logged: string[] = [];
-const spies: { mockRestore(): void }[] = [];
+let spies: { mockRestore(): void }[] = [];
+const ADAPTER_IDS: ChannelId[] = ['email', 'webhook', 'push'];
+const originalAdapters: ChannelAdapter<unknown>[] = [];
 
 function capturingAdapter(id: ChannelId): ChannelAdapter<{ secret: string }> {
   return {
@@ -276,6 +280,13 @@ async function tickUntilQuiet(): Promise<void> {
 
 describe('personal data from an http audience source', () => {
   beforeAll(async () => {
+    for (const id of ADAPTER_IDS) {
+      try {
+        originalAdapters.push(getAdapter(id));
+      } catch {
+        // nothing registered yet
+      }
+    }
     await migrate();
   });
   beforeEach(async () => {
@@ -322,9 +333,15 @@ describe('personal data from an http audience source', () => {
       );
     }
   });
-  afterAll(async () => {
+  afterEach(() => {
     for (const spy of spies) {
       spy.mockRestore();
+    }
+    spies = [];
+  });
+  afterAll(async () => {
+    for (const adapter of originalAdapters) {
+      registerAdapter(adapter);
     }
     await resetMarketingTables();
     await sql.$disconnect();
@@ -410,5 +427,34 @@ describe('personal data from an http audience source', () => {
     expect(row?.status).toBe('source_error');
 
     expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
+  });
+});
+
+describe('redacting recipient values from adapter errors', () => {
+  const recipient = (attributes: Record<string, unknown>): Recipient => ({
+    profileId: 'p',
+    email: 'Pii-Canary@Example.test',
+    deviceTokens: ['tok-1'],
+    attributes,
+  });
+
+  it('replaces the longest value first so no half of a name is left', () => {
+    const message = 'refused Asha Rao <pii-canary@example.test> (Asha) tok-1';
+    const redacted = redactSecrets(
+      message,
+      recipientValues(recipient({ firstName: 'Asha', fullName: 'Asha Rao' }))
+    );
+    expect(redacted).toBe(
+      'refused [redacted] <[redacted]> ([redacted]) [redacted]'
+    );
+  });
+
+  it('keeps short attribute values and non-strings out of the list', () => {
+    const values = recipientValues(
+      recipient({ country: 'IN', year: 5, n: '5' })
+    );
+    expect(values).not.toContain('IN');
+    expect(values).not.toContain('5');
+    expect(values).toContain('tok-1');
   });
 });

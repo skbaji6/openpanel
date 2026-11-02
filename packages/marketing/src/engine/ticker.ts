@@ -1131,16 +1131,22 @@ async function deliver(
   return outcome;
 }
 
+// Attribute values shorter than this (a country code, "5") would garble messages without hiding anything.
+const MIN_REDACTED_ATTRIBUTE_LENGTH = 3;
+
 // An adapter's error text can echo who it was sending to; those values must not reach logs or the step row.
-function recipientValues(recipient: Recipient): string[] {
+// Longest first, so "Asha Rao" goes before "Asha" and no half of a name survives.
+export function recipientValues(recipient: Recipient): string[] {
   const attributeValues = Object.values(recipient.attributes).filter(
-    (value): value is string => typeof value === 'string'
+    (value): value is string =>
+      typeof value === 'string' && value.length >= MIN_REDACTED_ATTRIBUTE_LENGTH
   );
-  return [
-    ...(recipient.email ? [recipient.email] : []),
-    ...recipient.deviceTokens,
-    ...attributeValues,
-  ].filter((value) => value.length > 0);
+  const email = recipient.email
+    ? [recipient.email, recipient.email.toLowerCase()]
+    : [];
+  return [...email, ...recipient.deviceTokens, ...attributeValues]
+    .filter((value) => value.length > 0)
+    .sort((a, b) => b.length - a.length);
 }
 
 // Best effort and never thrown: a throw would reach processClaim, which retries the already sent step.

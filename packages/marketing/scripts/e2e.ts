@@ -46,6 +46,16 @@ function requireEnv(name: string): string {
   return value;
 }
 
+// Prisma's ?schema=public is not a Postgres setting, so Bun's driver rejects it; other parameters stay.
+function stripSchemaParam(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  const parsed = new URL(url);
+  parsed.searchParams.delete('schema');
+  return parsed.toString();
+}
+
 const env = {
   marketingUrl: process.env.MARKETING_URL?.trim() || 'http://localhost:4100',
   proxySecret: requireEnv('MARKETING_PROXY_SECRET'),
@@ -55,8 +65,7 @@ const env = {
   clientSecret: requireEnv('E2E_CLIENT_SECRET'),
   // Must be listed in the worker's MARKETING_WEBHOOK_ALLOW_HOSTS (plain http is only allowed for those).
   receiverHost: process.env.E2E_RECEIVER_HOST?.trim() || 'localhost',
-  // Prisma's ?schema=public is not a Postgres setting, so Bun's driver rejects it.
-  databaseUrl: process.env.DATABASE_URL?.trim().split('?')[0] || undefined,
+  databaseUrl: stripSchemaParam(process.env.DATABASE_URL?.trim()),
   allowWebhookOverwrite: process.env.E2E_ALLOW_WEBHOOK_OVERWRITE === 'true',
 };
 
@@ -362,6 +371,12 @@ async function httpSourceScenario() {
   let ruleId: string | undefined;
   let cleanedUp = true;
   try {
+    const existingSource = await marketing('GET', 'audience-source');
+    if (existingSource.kind === 'http' && !env.allowWebhookOverwrite) {
+      throw new Error(
+        'project already has an http audience source; use a dedicated project or set E2E_ALLOW_WEBHOOK_OVERWRITE=true'
+      );
+    }
     await db.unsafe(await Bun.file(new URL('seed.sql', seedDir)).text());
     service = Bun.spawn(
       [
@@ -496,6 +511,7 @@ async function httpSourceScenario() {
       ],
       [
         'drop seed schema',
+        // seed.sql recreates this schema, so dropping it removes only what this run loaded.
         () => db.unsafe(`DROP SCHEMA IF EXISTS ${SEED_SCHEMA} CASCADE`),
       ],
     ];
