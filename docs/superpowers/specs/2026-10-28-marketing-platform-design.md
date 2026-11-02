@@ -113,7 +113,7 @@ Journeys no longer read stored contact rows when the `http` source is selected: 
 
 An optional, separate, runnable example service (`packages/marketing/examples/audience-api-postgres`, new files, not part of the worker image) implements the contract over a Postgres schema through a small mapping file: dimensions mapped to columns or joins, the id column, the contact columns. It shows parameterised filter compilation and passes the conformance suite. The owner may use it as a base for the read-only API service in AWS or write their own.
 
-### 5.4a The owner's audience API lives in `sia-backend-public`
+### 5.4a The owner's audience API is built in `sia-backend`
 
 The owner's main backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Postgres). It holds the real data. `sia-backend-public` is a separate public website backend that shares the database and only maps `users` as `id`, `phone_number`, `active`. A read-only look at `sia-backend` found:
 
@@ -133,11 +133,11 @@ So the data needed for the audience API already exists in one place and the work
 **Overlap to decide (owner):** the plugin's journeys and campaigns would replace the hard-coded journey service and the admin notification screens over time. This roadmap does not touch `sia-backend`'s notification code; the two run side by side, the plugin's shared frequency cap does not see the backend's own sends, and so a student could receive both. The owner decides whether the backend's journeys are switched off when the plugin's go live.
 
 Binding rules for building them:
-- **Separate trust zone.** `sia-backend-public` is an unauthenticated public website backend and must not host these endpoints. They go in a new `/internal/audience/**` controller set in `sia-backend` (the private backend, which already has auth and the data), not in `sia-backend-public` (an `/internal/audience/**` path set, its own port, bearer + HMAC auth from section 5.2, IP allow-list, no CORS). The public site's deployment never exposes them.
+- **Separate trust zone.** `sia-backend-public` is an unauthenticated public website backend and must not host these endpoints. They go in a new `/internal/audience/**` controller set in `sia-backend` (the private backend, which already has auth and the data), with bearer + HMAC auth from section 5.2, an IP allow-list and no CORS. The public site's deployment never exposes them.
 - **Read-only database role.** The audience module connects with a dedicated read-only Postgres role limited to the tables it needs, not the current application account.
 - **Secrets.** The repo currently has a database password committed in plain text in `application.yaml`. This is out of scope to change here, but the audience module must read its credentials from environment variables, and the owner should rotate that password and move it out of git.
 - **Indexes.** The filter fields (university, course, semester, regulation, state, purchase) need indexes on the audience queries; a Flyway migration in that repo adds them. Counts and keyset paging are tested against the production-sized data.
-- The plugin repo ships the conformance suite and the contract document; the Java code is written in `sia-backend-public` by the owner's team or on request in a separate task with its own plan. This roadmap does not edit that repo.
+- The plugin repo ships the conformance suite and the contract document; the Java code is written in `sia-backend` by the owner's team or on request in a separate task with its own plan. This roadmap does not edit that repo.
 
 ### 5.4b Selection control: down to one student
 
