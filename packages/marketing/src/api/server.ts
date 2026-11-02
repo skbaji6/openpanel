@@ -20,6 +20,7 @@ import { createUnsubscribeHandlers } from './unsubscribe';
 const LOG_PREFIX = 'marketing api:';
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
+const SERVICE_UNAVAILABLE = 503;
 
 export interface ServerDeps {
   cfg: MarketingConfig;
@@ -93,7 +94,15 @@ export function createServer(deps: ServerDeps) {
       method: 'GET',
       pattern: /^\/marketing\/health$/,
       auth: 'public',
-      handle: () => json({ ok: true }),
+      // Healthy means the marketing database answers; the cause is logged nowhere and returned to no one.
+      async handle() {
+        try {
+          await sql.$queryRawUnsafe('SELECT 1');
+          return json({ ok: true });
+        } catch {
+          return json({ ok: false }, SERVICE_UNAVAILABLE);
+        }
+      },
     },
     ...syncRoutes(sql),
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),

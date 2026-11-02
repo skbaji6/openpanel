@@ -217,6 +217,21 @@ describe('health', () => {
     expect(await response.json()).toEqual({ ok: true });
   });
 
+  it('GET /marketing/health answers 503 without detail when the database is unreachable', async () => {
+    const refused = () =>
+      Promise.reject(new Error('connect ECONNREFUSED 10.0.0.5:5432'));
+    const down = {
+      $queryRawUnsafe: refused,
+      $executeRawUnsafe: refused,
+    } as unknown as typeof sql;
+    const unhealthy = createServer({ cfg, sql: down, onRulesChanged });
+    const response = await unhealthy.fetch(
+      new Request(`${BASE}/marketing/health`)
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ ok: false });
+  });
+
   it('unknown routes return a JSON 404', async () => {
     const response = await dashboard('GET', '/marketing/nope');
     expect(response.status).toBe(404);

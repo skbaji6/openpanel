@@ -73,7 +73,7 @@ The worker image is `packages/marketing/Dockerfile`, built from the repository r
 docker build -f packages/marketing/Dockerfile -t openpanel-marketing:local .
 ```
 
-It runs `bun src/worker.ts` as the non-root `bun` user, applies the plugin's own migrations (schema `marketing`, under a Postgres advisory lock so replicas can boot together) at start, serves `/marketing/*` on `MARKETING_PORT` and has a `HEALTHCHECK` on `GET /marketing/health`. No secret is baked in; Prisma's client is generated with a placeholder URL. Build from a clean checkout: the root `.dockerignore` (which the plugin may not edit) does not exclude `.worktrees/`, so building from a main checkout that has worktrees sends all of them as build context.
+It runs `bun src/worker.ts` as the non-root `bun` user, applies the plugin's own migrations (schema `marketing`, under a Postgres advisory lock so replicas can boot together) at start, serves `/marketing/*` on `MARKETING_PORT` and has a `HEALTHCHECK` on `GET /marketing/health`, which answers 503 while the marketing database does not answer a `SELECT 1`. No secret is baked in; Prisma's client is generated with a placeholder URL. Build from a clean checkout: the root `.dockerignore` (which the plugin may not edit) does not exclude `.worktrees/`, so building from a main checkout that has worktrees sends all of them as build context.
 
 `docker-compose.marketing.yml` (repository root) is an override for the self-hosted stack, the `docker-compose.yml` that `openpanel init` renders from `self-hosting/docker-compose.template.yml`:
 
