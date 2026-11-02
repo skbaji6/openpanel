@@ -75,7 +75,9 @@ describe('startWorker', () => {
       expect(Object.keys(context).sort()).toEqual([
         'cfg',
         'engine',
+        'redis',
         'refreshInterest',
+        'sources',
         'sql',
       ]);
 

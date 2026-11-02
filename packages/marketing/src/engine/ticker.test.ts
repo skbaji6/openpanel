@@ -64,6 +64,9 @@ const CFG: MarketingConfig = {
   claimBatch: 200,
   sendConcurrency: 10,
   dbPool: 10,
+  sourceConcurrency: 4,
+  lookupWindowMs: 2000,
+  maxLatenessSeconds: 86_400,
   webhookAllowHosts: [],
   kafka: { brokers: [], clientId: '', topic: '', groupId: '', ssl: false },
 };

@@ -12,6 +12,27 @@ const required = {
 };
 
 describe('loadConfig', () => {
+  it('defaults the audience source settings and parses overrides', () => {
+    const defaults = loadConfig(required);
+    expect(defaults.sourceConcurrency).toBe(4);
+    expect(defaults.lookupWindowMs).toBe(2000);
+    expect(defaults.maxLatenessSeconds).toBe(86_400);
+    const custom = loadConfig({
+      ...required,
+      MARKETING_SOURCE_CONCURRENCY: '2',
+      MARKETING_LOOKUP_WINDOW_MS: '500',
+      MARKETING_MAX_LATENESS: '60',
+    });
+    expect([
+      custom.sourceConcurrency,
+      custom.lookupWindowMs,
+      custom.maxLatenessSeconds,
+    ]).toEqual([2, 500, 60]);
+    expect(() =>
+      loadConfig({ ...required, MARKETING_SOURCE_CONCURRENCY: '0' })
+    ).toThrow(/MARKETING_SOURCE_CONCURRENCY/);
+  });
+
   it('uses MARKETING_DATABASE_URL when set', () => {
     const config = loadConfig({
       ...required,

@@ -1,4 +1,6 @@
+import type { Redis } from '@openpanel/redis';
 import { createUnsubscribeUrlRenderer } from './api/unsubscribe';
+import type { SourceResolver } from './audience/resolver';
 import { loadConfig, type MarketingConfig } from './config';
 import type { createEngine, Sql } from './engine/engine';
 import type { TickDeps } from './engine/ticker';
@@ -18,6 +20,8 @@ export interface WorkerContext {
   sql: Sql;
   engine: ReturnType<typeof createEngine>;
   refreshInterest: () => Promise<void>;
+  redis: Redis;
+  sources: SourceResolver;
 }
 
 export interface WorkerDeps {
@@ -116,6 +120,7 @@ export async function startWorker(
     { createBatchHandler, startConsumer },
     { createRedisInterestSet },
     { createLagReporter, LAG_REPORT_INTERVAL_MS },
+    { createSourceResolver },
   ] = await Promise.all([
     import('./db/client'),
     import('./db/migrate'),
@@ -126,6 +131,7 @@ export async function startWorker(
     import('./kafka/consumer'),
     import('./kafka/interest'),
     import('./kafka/lag'),
+    import('./audience/resolver'),
   ]);
   const secrets = secretsOf(cfg);
   const started: Stoppable[] = [];
@@ -139,6 +145,7 @@ export async function startWorker(
 
     const redis = getRedisCache();
     started.push({ stop: async () => redis.disconnect() });
+    const sources = createSourceResolver({ sql, cfg, redis });
     const interest = createRedisInterestSet(redis, { engine, sql });
     // The consumer must not start before the first refresh, or it drops everything.
     await interest.refresh();
@@ -203,6 +210,8 @@ export async function startWorker(
           sql,
           engine,
           refreshInterest: () => interest.refresh(),
+          redis,
+          sources,
         })
       );
     }

@@ -1,3 +1,5 @@
+import type { Redis } from '@openpanel/redis';
+import type { SourceResolver } from '../audience/resolver';
 import type { MarketingConfig } from '../config';
 import type { Sql } from '../engine/engine';
 import { redactSecrets } from '../redact';
@@ -10,6 +12,7 @@ import {
 } from './auth';
 import { HttpError, json, MAX_BODY_BYTES, type Route } from './http';
 import { createRateLimiter } from './rate-limit';
+import { audienceSourceRoutes } from './routes-audience-source';
 import { dashboardRoutes } from './routes-dashboard';
 import { syncRoutes } from './routes-sync';
 import { createUnsubscribeHandlers } from './unsubscribe';
@@ -24,6 +27,10 @@ export interface ServerDeps {
   // Lets the worker refresh its interest set as soon as rules change instead of on the next interval.
   onRulesChanged?: () => Promise<void>;
   now?: () => number;
+  // Both are needed for the audience source settings routes.
+  redis?: Redis;
+  sources?: SourceResolver;
+  sourceFetch?: typeof fetch;
 }
 
 function matchRoute(routes: Route[], method: string, pathname: string) {
@@ -90,6 +97,16 @@ export function createServer(deps: ServerDeps) {
     },
     ...syncRoutes(sql),
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),
+    ...(deps.redis && deps.sources
+      ? audienceSourceRoutes({
+          cfg,
+          sql,
+          redis: deps.redis,
+          resolver: deps.sources,
+          fetch: deps.sourceFetch,
+          now: deps.now,
+        })
+      : []),
     {
       method: 'GET',
       pattern: /^\/marketing\/unsubscribe$/,
@@ -168,6 +185,8 @@ export function startHttpServer(context: WorkerContext) {
     cfg: context.cfg,
     sql: context.sql,
     onRulesChanged: context.refreshInterest,
+    redis: context.redis,
+    sources: context.sources,
   });
   const server = Bun.serve({
     port: context.cfg.port,

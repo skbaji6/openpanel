@@ -72,6 +72,9 @@ const rawSchema = z
     MARKETING_CLAIM_BATCH: positiveInt(200),
     MARKETING_SEND_CONCURRENCY: positiveInt(10),
     MARKETING_DB_POOL: positiveInt(15),
+    MARKETING_SOURCE_CONCURRENCY: positiveInt(4),
+    MARKETING_LOOKUP_WINDOW_MS: positiveInt(2000),
+    MARKETING_MAX_LATENESS: positiveInt(86_400),
     // Hostnames only, any port; IPv6 literals are unsupported because they contain ':'.
     MARKETING_WEBHOOK_ALLOW_HOSTS: list.refine(
       (hosts) => hosts.every((host) => !/[:/]/.test(host)),
@@ -177,6 +180,9 @@ export interface MarketingConfig {
   claimBatch: number;
   sendConcurrency: number;
   dbPool: number;
+  sourceConcurrency: number;
+  lookupWindowMs: number;
+  maxLatenessSeconds: number;
   webhookAllowHosts: string[];
   kafka: KafkaConfig;
 }
@@ -231,6 +237,9 @@ export function loadConfig(
     claimBatch: raw.MARKETING_CLAIM_BATCH,
     sendConcurrency: raw.MARKETING_SEND_CONCURRENCY,
     dbPool: raw.MARKETING_DB_POOL,
+    sourceConcurrency: raw.MARKETING_SOURCE_CONCURRENCY,
+    lookupWindowMs: raw.MARKETING_LOOKUP_WINDOW_MS,
+    maxLatenessSeconds: raw.MARKETING_MAX_LATENESS,
     webhookAllowHosts: raw.MARKETING_WEBHOOK_ALLOW_HOSTS,
     kafka: {
       brokers: raw.KAFKA_BROKERS,
