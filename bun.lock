@@ -414,8 +414,8 @@
         "typescript": "catalog:",
       },
     },
-    "packages/nudge": {
-      "name": "@openpanel/nudge",
+    "packages/marketing": {
+      "name": "@openpanel/marketing",
       "version": "0.0.1",
       "dependencies": {
         "@openpanel/db": "workspace:*",
@@ -1676,9 +1676,9 @@
 
     "@openpanel/express": ["@openpanel/express@workspace:packages/sdks/express"],
 
-    "@openpanel/nextjs": ["@openpanel/nextjs@workspace:packages/sdks/nextjs"],
+    "@openpanel/marketing": ["@openpanel/marketing@workspace:packages/marketing"],
 
-    "@openpanel/nudge": ["@openpanel/nudge@workspace:packages/nudge"],
+    "@openpanel/nextjs": ["@openpanel/nextjs@workspace:packages/sdks/nextjs"],
 
     "@openpanel/nuxt": ["@openpanel/nuxt@workspace:packages/sdks/nuxt"],
 

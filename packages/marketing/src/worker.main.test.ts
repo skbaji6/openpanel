@@ -25,12 +25,12 @@ describe('defaultWorkerDeps', () => {
         DATABASE_URL: process.env.DATABASE_URL,
         REDIS_URL: process.env.REDIS_URL,
         KAFKA_BROKERS: process.env.KAFKA_BROKERS ?? '127.0.0.1:23092',
-        KAFKA_EVENTS_TOPIC: `nudge-main-${runId}`,
-        NUDGE_KAFKA_GROUP: `nudge-main-${runId}`,
+        KAFKA_EVENTS_TOPIC: `marketing-main-${runId}`,
+        MARKETING_KAFKA_GROUP: `marketing-main-${runId}`,
         ENCRYPTION_KEY: 'test-encryption-key',
-        NUDGE_PROXY_SECRET: 'test-proxy-secret',
-        NUDGE_PUBLIC_URL: 'https://nudge.test',
-        NUDGE_PORT: String(port),
+        MARKETING_PROXY_SECRET: 'test-proxy-secret',
+        MARKETING_PUBLIC_URL: 'https://marketing.test',
+        MARKETING_PORT: String(port),
       });
       const admin = createKafka(cfg.kafka).admin();
       await admin.connect();
@@ -45,14 +45,14 @@ describe('defaultWorkerDeps', () => {
       // The only warning startWorker emits is the "sending is off" one, when the ticker is not started.
       expect(warn).not.toHaveBeenCalled();
       warn.mockRestore();
-      const health = await fetch(`http://127.0.0.1:${port}/nudge/health`);
+      const health = await fetch(`http://127.0.0.1:${port}/marketing/health`);
       expect(await health.json()).toEqual({ ok: true });
 
       const url = new URL(
         deps.renderUnsubscribeUrl?.('proj-a', 'u1', 'email') ?? ''
       );
       expect(`${url.origin}${url.pathname}`).toBe(
-        'https://nudge.test/nudge/unsubscribe'
+        'https://marketing.test/marketing/unsubscribe'
       );
       expect(
         verifyUnsubscribeToken(
@@ -65,7 +65,7 @@ describe('defaultWorkerDeps', () => {
       await admin.deleteTopics({ topics: [cfg.kafka.topic] });
       await admin.disconnect();
       await expect(
-        fetch(`http://127.0.0.1:${port}/nudge/health`)
+        fetch(`http://127.0.0.1:${port}/marketing/health`)
       ).rejects.toThrow();
     },
     WORKER_TEST_TIMEOUT_MS

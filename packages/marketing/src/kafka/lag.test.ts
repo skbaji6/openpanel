@@ -9,7 +9,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 import { lagAllowsSending } from '../engine/gates';
 import { createKafka } from './consumer';
 import { computeLag, createLagReporter } from './lag';
@@ -22,7 +22,7 @@ const BROKER_TEST_TIMEOUT_MS = 30_000;
 
 async function readState() {
   const [row] = await sql.$queryRawUnsafe<{ lag: bigint; updated_at: Date }[]>(
-    'SELECT lag, updated_at FROM nudge.consumer_state WHERE id = 1'
+    'SELECT lag, updated_at FROM marketing.consumer_state WHERE id = 1'
   );
   return row ? { lag: Number(row.lag), updatedAt: row.updated_at } : null;
 }
@@ -32,7 +32,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await resetNudgeTables();
+  await resetMarketingTables();
 });
 
 afterAll(async () => {
@@ -87,9 +87,9 @@ describe('lag reporter', () => {
       const runId = randomUUID();
       const kafkaConfig = {
         brokers: (process.env.KAFKA_BROKERS ?? '127.0.0.1:23092').split(','),
-        clientId: `nudge-lag-${runId}`,
-        topic: `nudge-lag-${runId}`,
-        groupId: `nudge-lag-${runId}`,
+        clientId: `marketing-lag-${runId}`,
+        topic: `marketing-lag-${runId}`,
+        groupId: `marketing-lag-${runId}`,
         ssl: false as const,
       };
       const kafka = createKafka(kafkaConfig);

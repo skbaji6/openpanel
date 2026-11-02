@@ -1,23 +1,23 @@
-# Journey Nudge: setup and integration guide
+# Marketing: setup and integration guide
 
-This guide takes you from nothing to a working nudge. The reference for every environment variable, the operations notes and the upgrade notes are in [`../README.md`](../README.md). This guide does not repeat them.
+This guide takes you from nothing to a working marketing. The reference for every environment variable, the operations notes and the upgrade notes are in [`../README.md`](../README.md). This guide does not repeat them.
 
 ## 1. What it is
 
-Journey Nudge is an optional add-on for OpenPanel. It is a separate service (`op-nudge`) plus a few dashboard pages. It does not change OpenPanel's own code paths: it reads the same events topic as OpenPanel, with its own Kafka consumer group, and keeps its own tables in the Postgres schema `nudge`.
+Marketing is an optional add-on for OpenPanel. It is a separate service (`op-marketing`) plus a few dashboard pages. It does not change OpenPanel's own code paths: it reads the same events topic as OpenPanel, with its own Kafka consumer group, and keeps its own tables in the Postgres schema `marketing`.
 
 A **rule** says: *when event A happens for a person, and goal G does not happen within time T, send a message*. A rule has one or more timed **steps**; each step sends one message over one **channel** (email, webhook or Firebase push).
 
 ```
  your apps ──SDK──▶ OpenPanel /track ──▶ Kafka "events" topic
-                                              │ (own consumer group "nudge")
+                                              │ (own consumer group "marketing")
                                               ▼
-  your backend ──sync API──▶  op-nudge (consumer + ticker + HTTP API) ──▶ email (SMTP)
+  your backend ──sync API──▶  op-marketing (consumer + ticker + HTTP API) ──▶ email (SMTP)
   (contacts, devices,              │            │                      ├─▶ webhook (signed POST)
-   reference sets)                 │            └─ Postgres "nudge"    └─▶ Firebase push
+   reference sets)                 │            └─ Postgres "marketing"    └─▶ Firebase push
                                    ▲                Redis (interest set)
-  dashboard  ──/nudge-api/*────────┘
-  (Nudges pages, unsubscribe page)
+  dashboard  ──/marketing-api/*────────┘
+  (Marketing pages, unsubscribe page)
 ```
 
 Example: an ed-tech app. Rule "added a book to the cart, did not buy": trigger `add_to_cart`, goal `purchase`, matched on `item_id`, step 1 email after 1 hour, step 2 push after 1 day. If the person buys within the hour, nothing is sent.
@@ -34,8 +34,8 @@ Example: an ed-tech app. Rule "added a book to the cart, did not buy": trigger `
 | Reference set | A named list of values you register (for example the section ids of one book) that a `set` goal compares against. Snapshotted when a person is enrolled. |
 | Contact | A person's email and attributes, synced from your backend. Attributes feed `{{profile.*}}`. |
 | Device | A person's Firebase token, synced from your backend. |
-| Grace window | `NUDGE_GRACE_SECONDS` (default 300): a goal seen this late still cancels a pending step. |
-| Caps, quiet hours | Per project: at most N nudges per period per person, and no sends in a time window. |
+| Grace window | `MARKETING_GRACE_SECONDS` (default 300): a goal seen this late still cancels a pending step. |
+| Caps, quiet hours | Per project: at most N journey messages per period per person, and no sends in a time window. |
 
 Only **identified** events (events that carry a `profileId`) take part. Anonymous events are ignored.
 
@@ -50,23 +50,23 @@ Only **identified** events (events that carry a `profileId`) take part. Anonymou
 
 ### 4a. Self-hosted stack (Docker Compose)
 
-1. Get this fork's checkout next to your install, or set `NUDGE_BUILD_CONTEXT` to it.
-2. Copy `docker-compose.nudge.yml` next to your `docker-compose.yml`.
+1. Get this fork's checkout next to your install, or set `MARKETING_BUILD_CONTEXT` to it.
+2. Copy `docker-compose.marketing.yml` next to your `docker-compose.yml`.
 3. Add two values to your `.env`:
    ```
-   NUDGE_PROXY_SECRET=<output of: openssl rand -hex 32>
-   NUDGE_PUBLIC_URL=https://analytics.example.com   # the public dashboard origin
+   MARKETING_PROXY_SECRET=<output of: openssl rand -hex 32>
+   MARKETING_PUBLIC_URL=https://analytics.example.com   # the public dashboard origin
    ```
    `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` and `KAFKA_BROKERS` are already in an OpenPanel `.env`. Do not change `ENCRYPTION_KEY` later: channel secrets and unsubscribe links depend on it.
 4. Start:
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.nudge.yml up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.marketing.yml up -d --build
    ```
-5. Check it: `docker compose logs op-nudge` shows the migrations and the consumer joining, and `docker compose ps` shows `op-nudge` healthy.
+5. Check it: `docker compose logs op-marketing` shows the migrations and the consumer joining, and `docker compose ps` shows `op-marketing` healthy.
 
-The override also replaces the dashboard image with one built from this fork. The stock dashboard image has no Nudge pages and would 404 every unsubscribe link. Details: README, "Deploy".
+The override also replaces the dashboard image with one built from this fork. The stock dashboard image has no Marketing pages and would 404 every unsubscribe link. Details: README, "Deploy".
 
-Keep using `-f docker-compose.nudge.yml` on every later compose command, upgrades included (`openpanel init` does not know about it).
+Keep using `-f docker-compose.marketing.yml` on every later compose command, upgrades included (`openpanel init` does not know about it).
 
 ### 4b. From source (development)
 
@@ -74,13 +74,13 @@ Keep using `-f docker-compose.nudge.yml` on every later compose command, upgrade
 bun install
 bun run dock:up                       # Postgres, Redis, ClickHouse, Redpanda
 export DATABASE_URL=... REDIS_URL=... ENCRYPTION_KEY=... KAFKA_BROKERS=... KAFKA_EVENTS_TOPIC=events
-export NUDGE_PROXY_SECRET=$(openssl rand -hex 32) NUDGE_PUBLIC_URL=http://localhost:3000
-bun run --filter @openpanel/nudge start      # migrates, then serves on :4100
+export MARKETING_PROXY_SECRET=$(openssl rand -hex 32) MARKETING_PUBLIC_URL=http://localhost:3000
+bun run --filter @openpanel/marketing start      # migrates, then serves on :4100
 ```
 
-For the dashboard pages, give the dashboard process `NUDGE_URL=http://localhost:4100` and the same `NUDGE_PROXY_SECRET`. Without them `/nudge-api/*` and `/nudge/unsubscribe` answer 404.
+For the dashboard pages, give the dashboard process `MARKETING_URL=http://localhost:4100` and the same `MARKETING_PROXY_SECRET`. Without them `/marketing-api/*` and `/marketing/unsubscribe` answer 404.
 
-Run the tests with `cd packages/nudge && bun test --isolate` (needs Postgres, Redis and Kafka reachable; use a database whose name ends in `_test`).
+Run the tests with `cd packages/marketing && bun test --isolate` (needs Postgres, Redis and Kafka reachable; use a database whose name ends in `_test`).
 
 ## 5. Connect it
 
@@ -88,15 +88,15 @@ There are three connection points: events (already done by OpenPanel), the dashb
 
 ### 5a. Events
 
-Nothing to configure. The worker consumes the topic named by `KAFKA_EVENTS_TOPIC` with the consumer group `NUDGE_KAFKA_GROUP`. Make sure your SDK events carry the user's `profileId`, and use the same event names in your rules as you send (for example `add_to_cart`, `purchase`, `section_opened`).
+Nothing to configure. The worker consumes the topic named by `KAFKA_EVENTS_TOPIC` with the consumer group `MARKETING_KAFKA_GROUP`. Make sure your SDK events carry the user's `profileId`, and use the same event names in your rules as you send (for example `add_to_cart`, `purchase`, `section_opened`).
 
 ### 5b. Dashboard
 
-Open a project: the sidebar has **Nudges** with three tabs.
+Open a project: the sidebar has **Marketing** with three tabs.
 
 - **Rules**: create from a starter or from scratch, as a vertical timeline with one form per step. Activate or pause. Preview templates with sample data.
 - **Channels**: email (SMTP), push (Firebase service account) and webhook (URL plus secret), plus the project's caps, quiet hours and API keys.
-- **Results**: per rule: enrolled, nudged, sent, completed after send, conversion, skipped, failed.
+- **Results**: per rule: enrolled, messaged, sent, completed after send, conversion, skipped, failed.
 
 Organization owners and admins can change things; members can read and preview.
 
@@ -104,25 +104,25 @@ Organization owners and admins can change things; members can read and preview.
 
 Your backend talks to the worker with a project **API key**. Device registration is server-to-server only; apps never call these endpoints.
 
-Create a key on the Nudges, Channels tab. It is shown once and looks like `<id>.<secret>`. Send it as the header `x-nudge-api-key`. The worker's URL is `NUDGE_URL` (inside the compose network `http://op-nudge:4100`). To call it from outside the network, route `/nudge/contacts/*`, `/nudge/devices` and `/nudge/reference-sets/*` to the worker (README, "Deploy").
+Create a key on the Marketing, Channels tab. It is shown once and looks like `<id>.<secret>`. Send it as the header `x-marketing-api-key`. The worker's URL is `MARKETING_URL` (inside the compose network `http://op-marketing:4100`). To call it from outside the network, route `/marketing/contacts/*`, `/marketing/devices` and `/marketing/reference-sets/*` to the worker (README, "Deploy").
 
 ```bash
-H='x-nudge-api-key: <id>.<secret>'
-U=http://op-nudge:4100
+H='x-marketing-api-key: <id>.<secret>'
+U=http://op-marketing:4100
 
 # Contact: email and attributes used by {{profile.*}} (re-send whenever they change)
-curl -X PUT $U/nudge/contacts/user_123 -H "$H" -H 'content-type: application/json' \
+curl -X PUT $U/marketing/contacts/user_123 -H "$H" -H 'content-type: application/json' \
   -d '{"email":"ada@example.com","attributes":{"firstName":"Ada","plan":"free"}}'
 
 # Device: Firebase token (platform: android | ios). Re-registering moves a token to the new person.
-curl -X PUT $U/nudge/devices -H "$H" -H 'content-type: application/json' \
+curl -X PUT $U/marketing/devices -H "$H" -H 'content-type: application/json' \
   -d '{"profileId":"user_123","token":"<fcm token>","platform":"android"}'
 
 # Remove a device (for example at logout)
-curl -X DELETE $U/nudge/devices -H "$H" -H 'content-type: application/json' -d '{"token":"<fcm token>"}'
+curl -X DELETE $U/marketing/devices -H "$H" -H 'content-type: application/json' -d '{"token":"<fcm token>"}'
 
 # Reference set: for "opened every section of this book" goals
-curl -X PUT $U/nudge/reference-sets/book-42-sections -H "$H" -H 'content-type: application/json' \
+curl -X PUT $U/marketing/reference-sets/book-42-sections -H "$H" -H 'content-type: application/json' \
   -d '{"values":["intro","ch1","ch2","ch3"]}'
 ```
 
@@ -134,11 +134,11 @@ Notes:
 
 ## 6. Configure the channels
 
-Open Nudges, Channels. Saved secrets are shown masked (`********`); leave a masked field unchanged to keep it.
+Open Marketing, Channels. Saved secrets are shown masked (`********`); leave a masked field unchanged to keep it.
 
 ### Email
 
-SMTP `host`, `port`, `secure` (true for SMTPS on 465; false uses STARTTLS when the server offers it), `user`, `pass`, `from`. Every email carries an unsubscribe link and `List-Unsubscribe` headers, pointing at `NUDGE_PUBLIC_URL/nudge/unsubscribe`.
+SMTP `host`, `port`, `secure` (true for SMTPS on 465; false uses STARTTLS when the server offers it), `user`, `pass`, `from`. Every email carries an unsubscribe link and `List-Unsubscribe` headers, pointing at `MARKETING_PUBLIC_URL/marketing/unsubscribe`.
 
 ### Push (Firebase)
 
@@ -146,7 +146,7 @@ Paste the Firebase **service account JSON** (Firebase console, Project settings,
 
 ### Webhook (your backend delivers)
 
-Set the `url` (https only, or http for hosts in `NUDGE_WEBHOOK_ALLOW_HOSTS`) and one or two `secrets` (16+ characters; the first signs, a second is kept during rotation). The worker POSTs JSON:
+Set the `url` (https only, or http for hosts in `MARKETING_WEBHOOK_ALLOW_HOSTS`) and one or two `secrets` (16+ characters; the first signs, a second is kept during rotation). The worker POSTs JSON:
 
 ```json
 { "projectId": "...", "profileId": "user_123", "channel": "webhook",
@@ -154,7 +154,7 @@ Set the `url` (https only, or http for hosts in `NUDGE_WEBHOOK_ALLOW_HOSTS`) and
   "ruleId": "...", "enrollmentId": "...", "stepIndex": 0 }
 ```
 
-with headers `x-nudge-timestamp`, `x-nudge-signature` and `idempotency-key`. Verify like this before acting, and de-duplicate on `idempotency-key`:
+with headers `x-marketing-timestamp`, `x-marketing-signature` and `idempotency-key`. Verify like this before acting, and de-duplicate on `idempotency-key`:
 
 ```ts
 import { createHmac, timingSafeEqual } from 'node:crypto';
@@ -209,46 +209,46 @@ Starter rules ship for the four common cases: cart abandoned, registered but not
 
 ## 8. Project settings
 
-Nudges, Channels tab (or `PUT /nudge/settings`):
+Marketing, Channels tab (or `PUT /marketing/settings`):
 
 ```json
 { "caps": { "max": 3, "periodSeconds": 604800 },
   "quietHours": { "start": "21:00", "end": "08:00", "timezone": "Asia/Kolkata" } }
 ```
 
-`caps` limits nudges per person per period; `null` for none. Quiet hours hold messages until the window ends. A step that is held or capped is recorded as skipped (visible in Results).
+`caps` limits journey messages per person per period; `null` for none. Quiet hours hold messages until the window ends. A step that is held or capped is recorded as skipped (visible in Results).
 
 ## 9. Try it end to end
 
-With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/track`, and checks that one signed webhook arrives and that a person who reaches the goal is not nudged. Setup and variables: README, "End-to-end check". A manual check:
+With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/track`, and checks that one signed webhook arrives and that a person who reaches the goal is not messaged. Setup and variables: README, "End-to-end check". A manual check:
 
-1. Configure a webhook channel pointing at a request-catcher URL (use `NUDGE_WEBHOOK_ALLOW_HOSTS` for a local receiver).
-2. Create an active rule with a first step at 10 seconds and set `NUDGE_GRACE_SECONDS=1`, `NUDGE_TICK_MS=1000` in a test environment.
+1. Configure a webhook channel pointing at a request-catcher URL (use `MARKETING_WEBHOOK_ALLOW_HOSTS` for a local receiver).
+2. Create an active rule with a first step at 10 seconds and set `MARKETING_GRACE_SECONDS=1`, `MARKETING_TICK_MS=1000` in a test environment.
 3. Send `add_to_cart` with `item_id=1` for an identified profile (an SDK call, or `POST /track` with a `profileId`; see `scripts/e2e.ts` for a working payload) and watch the request arrive. Send `purchase` with the same `item_id` before the step is due to see it cancelled.
-4. Open Nudges, Results to see the counts.
+4. Open Marketing, Results to see the counts.
 
 ## 10. Operate it
 
-- **Logs**: `docker compose logs -f op-nudge`. `sending paused` means the consumer is behind `NUDGE_MAX_LAG`; nothing is lost, and sending resumes when it catches up.
-- **Health**: `GET /nudge/health` on the worker.
-- **Scale**: run more replicas of `op-nudge`; they share the consumer group and the work. Sizing, retention, history purge and key revocation are in the README, "Operations".
-- **Backups**: the `nudge` schema is in the same Postgres as OpenPanel and is covered by your existing backups.
+- **Logs**: `docker compose logs -f op-marketing`. `sending paused` means the consumer is behind `MARKETING_MAX_LAG`; nothing is lost, and sending resumes when it catches up.
+- **Health**: `GET /marketing/health` on the worker.
+- **Scale**: run more replicas of `op-marketing`; they share the consumer group and the work. Sizing, retention, history purge and key revocation are in the README, "Operations".
+- **Backups**: the `marketing` schema is in the same Postgres as OpenPanel and is covered by your existing backups.
 - **Upgrade OpenPanel**: merge upstream. Only the files in `TOUCHPOINTS.md` can conflict (README, "Upgrading from upstream"). Rebuild both images from the same release.
 
 ## 11. Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
-| No "Nudges" in the sidebar, or the pages 404 | The dashboard is the stock image, or `NUDGE_URL` / `NUDGE_PROXY_SECRET` are not set on it. |
-| Unsubscribe link 404s | The same, or `NUDGE_PUBLIC_URL` is not the dashboard's public origin. |
-| Rule is active but nobody is nudged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours or caps hold it back. Check Results (skipped / failed). |
-| Everyone is nudged though they reached the goal | A `matchOn` property is missing on the goal event, or the goal event name differs. For a `set` goal, the set does not contain the value the app sends. |
+| No "Marketing" in the sidebar, or the pages 404 | The dashboard is the stock image, or `MARKETING_URL` / `MARKETING_PROXY_SECRET` are not set on it. |
+| Unsubscribe link 404s | The same, or `MARKETING_PUBLIC_URL` is not the dashboard's public origin. |
+| Rule is active but nobody is messaged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours or caps hold it back. Check Results (skipped / failed). |
+| Everyone is messaged though they reached the goal | A `matchOn` property is missing on the goal event, or the goal event name differs. For a `set` goal, the set does not contain the value the app sends. |
 | `401` from the sync API | Wrong or revoked key. After revoking, a replica may accept the old key for up to 5 minutes. |
 | `429` from the sync API | Too many failed key attempts from one IP (30 per minute). |
 | Email fails | SMTP settings or TLS mode; check the failure reason in Results. |
 | Push has no effect | Service account JSON for another Firebase project, or the device token belongs to a different Firebase app. |
-| Webhook shows `blocked url` | Not https and the host is not in `NUDGE_WEBHOOK_ALLOW_HOSTS`, or it resolves to a private address. |
-| Worker will not start | A required variable is missing (the log names it), or `NUDGE_DB_POOL` is below `NUDGE_SEND_CONCURRENCY` + 3, or `NUDGE_LEASE_SECONDS` is 31 or less. |
+| Webhook shows `blocked url` | Not https and the host is not in `MARKETING_WEBHOOK_ALLOW_HOSTS`, or it resolves to a private address. |
+| Worker will not start | A required variable is missing (the log names it), or `MARKETING_DB_POOL` is below `MARKETING_SEND_CONCURRENCY` + 3, or `MARKETING_LEASE_SECONDS` is 31 or less. |
 
 ## 12. Limits worth knowing
 

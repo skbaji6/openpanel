@@ -37,11 +37,11 @@ describe('startWorker', () => {
         DATABASE_URL: process.env.DATABASE_URL,
         REDIS_URL: process.env.REDIS_URL,
         KAFKA_BROKERS: process.env.KAFKA_BROKERS ?? '127.0.0.1:23092',
-        KAFKA_EVENTS_TOPIC: `nudge-worker-${runId}`,
-        NUDGE_KAFKA_GROUP: `nudge-worker-${runId}`,
+        KAFKA_EVENTS_TOPIC: `marketing-worker-${runId}`,
+        MARKETING_KAFKA_GROUP: `marketing-worker-${runId}`,
         ENCRYPTION_KEY: 'test-encryption-key',
-        NUDGE_PROXY_SECRET: 'test-proxy-secret',
-        NUDGE_PUBLIC_URL: 'https://nudge.test',
+        MARKETING_PROXY_SECRET: 'test-proxy-secret',
+        MARKETING_PUBLIC_URL: 'https://marketing.test',
       });
       const admin = createKafka(cfg.kafka).admin();
       await admin.connect();
@@ -50,7 +50,7 @@ describe('startWorker', () => {
         waitForLeaders: true,
       });
       await migrate();
-      await sql.$executeRawUnsafe('DELETE FROM nudge.consumer_state');
+      await sql.$executeRawUnsafe('DELETE FROM marketing.consumer_state');
       const order: string[] = [];
       const startHttp = mock(() => {
         order.push('http started');
@@ -64,7 +64,7 @@ describe('startWorker', () => {
       const warn = spyOn(console, 'warn').mockImplementation(() => undefined);
       const worker = await startWorker(cfg, { startHttp });
       expect(warn).toHaveBeenCalledWith(
-        'nudge worker:',
+        'marketing worker:',
         'no unsubscribe link renderer; sending is off'
       );
       warn.mockRestore();
@@ -84,7 +84,7 @@ describe('startWorker', () => {
       while (rows.length === 0 && Date.now() < deadline) {
         await Bun.sleep(POLL_MS);
         rows = await sql.$queryRawUnsafe<{ lag: bigint }[]>(
-          'SELECT lag FROM nudge.consumer_state WHERE id = 1'
+          'SELECT lag FROM marketing.consumer_state WHERE id = 1'
         );
       }
 

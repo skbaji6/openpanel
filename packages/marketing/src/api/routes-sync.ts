@@ -51,24 +51,24 @@ const zReferenceSet = z.strictObject({
 });
 
 const UPSERT_CONTACT_SQL = `
-  INSERT INTO nudge.contacts (project_id, profile_id, email, attributes)
+  INSERT INTO marketing.contacts (project_id, profile_id, email, attributes)
   VALUES ($1, $2, $3, COALESCE($4::jsonb, '{}'::jsonb))
   ON CONFLICT (project_id, profile_id) DO UPDATE SET
-    email = COALESCE(EXCLUDED.email, nudge.contacts.email),
-    attributes = COALESCE($4::jsonb, nudge.contacts.attributes),
+    email = COALESCE(EXCLUDED.email, marketing.contacts.email),
+    attributes = COALESCE($4::jsonb, marketing.contacts.attributes),
     updated_at = now()`;
 
 // The token is the primary key: re-registering moves it to the new profile, but never into
 // another project, or one project's API key could take over another project's devices.
 const UPSERT_DEVICE_SQL = `
-  INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+  INSERT INTO marketing.devices (token, project_id, profile_id, platform)
   VALUES ($1, $2, $3, $4)
   ON CONFLICT (token) DO UPDATE SET
     profile_id = EXCLUDED.profile_id, platform = EXCLUDED.platform, updated_at = now()
-  WHERE nudge.devices.project_id = EXCLUDED.project_id`;
+  WHERE marketing.devices.project_id = EXCLUDED.project_id`;
 
 const UPSERT_REFERENCE_SET_SQL = `
-  INSERT INTO nudge.reference_sets (project_id, set_key, values)
+  INSERT INTO marketing.reference_sets (project_id, set_key, values)
   VALUES ($1, $2, $3::jsonb)
   ON CONFLICT (project_id, set_key) DO UPDATE SET values = EXCLUDED.values`;
 
@@ -81,7 +81,7 @@ function identifierParam(ctx: RouteContext): string {
 export function referenceSetRoute(sql: Queryable): Route {
   return {
     method: 'PUT',
-    pattern: new RegExp(`^/nudge/reference-sets/${PATH_SEGMENT}$`),
+    pattern: new RegExp(`^/marketing/reference-sets/${PATH_SEGMENT}$`),
     auth: 'apiKeyOrDashboard',
     async handle(ctx) {
       const setKey = identifierParam(ctx);
@@ -102,7 +102,7 @@ export function syncRoutes(sql: Queryable): Route[] {
   return [
     {
       method: 'PUT',
-      pattern: new RegExp(`^/nudge/contacts/${PATH_SEGMENT}$`),
+      pattern: new RegExp(`^/marketing/contacts/${PATH_SEGMENT}$`),
       auth: 'apiKey',
       async handle(ctx) {
         const profileId = identifierParam(ctx);
@@ -119,7 +119,7 @@ export function syncRoutes(sql: Queryable): Route[] {
     },
     {
       method: 'PUT',
-      pattern: /^\/nudge\/devices$/,
+      pattern: /^\/marketing\/devices$/,
       auth: 'apiKey',
       async handle(ctx) {
         const device = await parseJsonBody(ctx.req, zDevice);
@@ -138,7 +138,7 @@ export function syncRoutes(sql: Queryable): Route[] {
     },
     {
       method: 'DELETE',
-      pattern: /^\/nudge\/devices$/,
+      pattern: /^\/marketing\/devices$/,
       auth: 'apiKey',
       async handle(ctx) {
         const { token } = await parseJsonBody(
@@ -146,7 +146,7 @@ export function syncRoutes(sql: Queryable): Route[] {
           z.strictObject({ token: zDeviceToken })
         );
         await sql.$executeRawUnsafe(
-          'DELETE FROM nudge.devices WHERE token = $1 AND project_id = $2',
+          'DELETE FROM marketing.devices WHERE token = $1 AND project_id = $2',
           token,
           ctx.projectId
         );

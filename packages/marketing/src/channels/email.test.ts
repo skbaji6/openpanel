@@ -7,7 +7,7 @@ import {
 } from './email';
 import type { Recipient, RenderedMessage, SendOptions } from './types';
 
-const UNSUBSCRIBE_URL = 'https://nudge.test/unsubscribe?t=abc';
+const UNSUBSCRIBE_URL = 'https://marketing.test/unsubscribe?t=abc';
 const HANG_MS = 5000;
 const SLOW_REPLY_MS = 40;
 const SLOW_TIMEOUT_MS = 100;

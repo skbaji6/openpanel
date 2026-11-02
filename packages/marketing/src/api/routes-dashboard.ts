@@ -6,7 +6,7 @@ import {
 } from '@openpanel/shared/server';
 import { z } from 'zod';
 import { getAdapter } from '../channels/registry';
-import type { NudgeConfig } from '../config';
+import type { MarketingConfig } from '../config';
 import {
   lockProfiles,
   lockRules,
@@ -143,18 +143,18 @@ function toRule(row: RuleRow) {
 }
 
 const ACTIVE_PROFILES_SQL = `
-  SELECT DISTINCT profile_id FROM nudge.enrollments
+  SELECT DISTINCT profile_id FROM marketing.enrollments
   WHERE project_id = $1 AND rule_id = $2::uuid AND status = 'active'
   ORDER BY profile_id LIMIT ${CANCEL_CHUNK_PROFILES}`;
 
 const CANCEL_SQL = `
   WITH cancelled AS (
-    UPDATE nudge.enrollments SET status = 'cancelled', end_reason = 'rule_stopped'
+    UPDATE marketing.enrollments SET status = 'cancelled', end_reason = 'rule_stopped'
     WHERE project_id = $1 AND rule_id = $2::uuid AND status = 'active'
       AND profile_id IN (SELECT jsonb_array_elements_text($3::jsonb))
     RETURNING id
   )
-  UPDATE nudge.steps SET status = 'cancelled', outcome = '{"reason":"rule_stopped"}'
+  UPDATE marketing.steps SET status = 'cancelled', outcome = '{"reason":"rule_stopped"}'
   WHERE status = 'pending' AND enrollment_id IN (SELECT id FROM cancelled)`;
 
 // One row per rule of the project. Enrollments come from enrollments_rule_idx (project_id, rule_id),
@@ -163,18 +163,18 @@ const CANCEL_SQL = `
 const RESULTS_SQL = `
   SELECT r.id::text AS rule_id, r.name, r.definition->'goal'->>'kind' AS goal_kind,
     count(e.id)::int AS enrolled,
-    count(e.id) FILTER (WHERE s.sent > 0)::int AS nudged,
+    count(e.id) FILTER (WHERE s.sent > 0)::int AS messaged,
     count(e.id) FILTER (WHERE s.sent > 0 AND e.end_reason = 'goal')::int AS completed_after_send,
     COALESCE(sum(s.sent), 0)::int AS sent,
     COALESCE(sum(s.skipped), 0)::int AS skipped,
     COALESCE(sum(s.failed), 0)::int AS failed
-  FROM nudge.rules r
-  LEFT JOIN nudge.enrollments e ON e.project_id = r.project_id AND e.rule_id = r.id
+  FROM marketing.rules r
+  LEFT JOIN marketing.enrollments e ON e.project_id = r.project_id AND e.rule_id = r.id
   LEFT JOIN LATERAL (
     SELECT count(*) FILTER (WHERE status = 'sent') AS sent,
       count(*) FILTER (WHERE status = 'skipped') AS skipped,
       count(*) FILTER (WHERE status = 'failed') AS failed
-    FROM nudge.steps WHERE enrollment_id = e.id
+    FROM marketing.steps WHERE enrollment_id = e.id
   ) s ON true
   WHERE r.project_id = $1 AND ($2::uuid IS NULL OR r.id = $2::uuid)
   GROUP BY r.id, r.name, r.created_at
@@ -185,7 +185,7 @@ interface ResultRow {
   name: string;
   goal_kind: string | null;
   enrolled: number;
-  nudged: number;
+  messaged: number;
   completed_after_send: number;
   sent: number;
   skipped: number;
@@ -278,7 +278,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export interface DashboardDeps {
-  cfg: NudgeConfig;
+  cfg: MarketingConfig;
   sql: Sql;
   onRulesChanged: () => Promise<void>;
 }
@@ -348,7 +348,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
 
   async function storedChannelConfig(projectId: string, channel: string) {
     const [row] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
-      'SELECT config_encrypted FROM nudge.channel_configs WHERE project_id = $1 AND channel = $2',
+      'SELECT config_encrypted FROM marketing.channel_configs WHERE project_id = $1 AND channel = $2',
       projectId,
       channel
     );
@@ -369,11 +369,11 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
   return [
     {
       method: 'GET',
-      pattern: /^\/nudge\/rules$/,
+      pattern: /^\/marketing\/rules$/,
       auth: 'dashboard',
       async handle(ctx) {
         const rows = await sql.$queryRawUnsafe<RuleRow[]>(
-          `SELECT ${RULE_COLUMNS} FROM nudge.rules WHERE project_id = $1 ORDER BY created_at`,
+          `SELECT ${RULE_COLUMNS} FROM marketing.rules WHERE project_id = $1 ORDER BY created_at`,
           ctx.projectId
         );
         return json({ rules: rows.map(toRule) });
@@ -381,12 +381,12 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'POST',
-      pattern: /^\/nudge\/rules$/,
+      pattern: /^\/marketing\/rules$/,
       auth: 'dashboard',
       async handle(ctx) {
         const body = await parseJsonBody(ctx.req, zCreateRule);
         const [row] = await sql.$queryRawUnsafe<RuleRow[]>(
-          `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+          `INSERT INTO marketing.rules (id, project_id, name, status, definition)
            VALUES ($1::uuid, $2, $3, $4, $5::jsonb) RETURNING ${RULE_COLUMNS}`,
           randomUUID(),
           ctx.projectId,
@@ -400,7 +400,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'PATCH',
-      pattern: /^\/nudge\/rules\/([^/]+)$/,
+      pattern: /^\/marketing\/rules\/([^/]+)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const ruleId = ruleIdParam(ctx.params);
@@ -412,7 +412,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         const update = (tx: Queryable) =>
           tx
             .$queryRawUnsafe<RuleRow[]>(
-              `UPDATE nudge.rules SET
+              `UPDATE marketing.rules SET
                  definition = COALESCE($3::jsonb, definition),
                  name = COALESCE($4, name),
                  version = version + CASE WHEN $3::jsonb IS NULL THEN 0 ELSE 1 END,
@@ -440,7 +440,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'DELETE',
-      pattern: /^\/nudge\/rules\/([^/]+)$/,
+      pattern: /^\/marketing\/rules\/([^/]+)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const ruleId = ruleIdParam(ctx.params);
@@ -448,7 +448,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         const paused = await stopRule(ctx.projectId, ruleId, (tx) =>
           tx
             .$queryRawUnsafe<{ id: string }[]>(
-              `UPDATE nudge.rules SET status = 'paused', updated_at = now()
+              `UPDATE marketing.rules SET status = 'paused', updated_at = now()
                WHERE id = $1::uuid AND project_id = $2 RETURNING id::text`,
               ruleId,
               ctx.projectId
@@ -460,7 +460,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         }
         // A rule reactivated while its work was being cancelled has live enrollments again; keep it.
         const deleted = await sql.$executeRawUnsafe(
-          `DELETE FROM nudge.rules WHERE id = $1::uuid AND project_id = $2 AND status = 'paused'`,
+          `DELETE FROM marketing.rules WHERE id = $1::uuid AND project_id = $2 AND status = 'paused'`,
           ruleId,
           ctx.projectId
         );
@@ -473,7 +473,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/nudge\/starter-rules$/,
+      pattern: /^\/marketing\/starter-rules$/,
       auth: 'dashboard',
       handle() {
         return json({
@@ -488,7 +488,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/nudge\/channels\/(email|webhook|push)$/,
+      pattern: /^\/marketing\/channels\/(email|webhook|push)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const channel = ctx.params[0] ?? '';
@@ -502,7 +502,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'PUT',
-      pattern: /^\/nudge\/channels\/(email|webhook|push)$/,
+      pattern: /^\/marketing\/channels\/(email|webhook|push)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const channel = ctx.params[0] ?? '';
@@ -526,7 +526,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
           );
         }
         await sql.$executeRawUnsafe(
-          `INSERT INTO nudge.channel_configs (project_id, channel, config_encrypted)
+          `INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted)
            VALUES ($1, $2, $3)
            ON CONFLICT (project_id, channel) DO UPDATE SET config_encrypted = EXCLUDED.config_encrypted`,
           ctx.projectId,
@@ -542,13 +542,13 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/nudge\/settings$/,
+      pattern: /^\/marketing\/settings$/,
       auth: 'dashboard',
       async handle(ctx) {
         const [row] = await sql.$queryRawUnsafe<
           { caps: unknown; quiet_hours: unknown }[]
         >(
-          'SELECT caps, quiet_hours FROM nudge.project_settings WHERE project_id = $1',
+          'SELECT caps, quiet_hours FROM marketing.project_settings WHERE project_id = $1',
           ctx.projectId
         );
         return json({
@@ -559,12 +559,12 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'PUT',
-      pattern: /^\/nudge\/settings$/,
+      pattern: /^\/marketing\/settings$/,
       auth: 'dashboard',
       async handle(ctx) {
         const settings = await parseJsonBody(ctx.req, zSettings);
         await sql.$executeRawUnsafe(
-          `INSERT INTO nudge.project_settings (project_id, caps, quiet_hours)
+          `INSERT INTO marketing.project_settings (project_id, caps, quiet_hours)
            VALUES ($1, $2::jsonb, $3::jsonb)
            ON CONFLICT (project_id) DO UPDATE SET caps = EXCLUDED.caps, quiet_hours = EXCLUDED.quiet_hours`,
           ctx.projectId,
@@ -576,7 +576,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/nudge\/results$/,
+      pattern: /^\/marketing\/results$/,
       auth: 'dashboard',
       async handle(ctx) {
         const ruleIdFilter = ctx.url.searchParams.get('ruleId');
@@ -596,12 +596,12 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
             name: row.name,
             goalKind: row.goal_kind,
             enrolled: row.enrolled,
-            nudged: row.nudged,
+            messaged: row.messaged,
             sent: row.sent,
             completedAfterSend: row.completed_after_send,
-            // Share of nudged enrollments that later reached the goal.
+            // Share of messaged enrollments that later reached the goal.
             conversionRate:
-              row.nudged === 0 ? 0 : row.completed_after_send / row.nudged,
+              row.messaged === 0 ? 0 : row.completed_after_send / row.messaged,
             skipped: row.skipped,
             failed: row.failed,
           })),
@@ -610,7 +610,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'POST',
-      pattern: /^\/nudge\/api-keys$/,
+      pattern: /^\/marketing\/api-keys$/,
       auth: 'dashboard',
       async handle(ctx) {
         const { label } = await parseJsonBody(
@@ -620,7 +620,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         const id = randomUUID();
         const secret = randomBytes(API_KEY_SECRET_BYTES).toString('base64url');
         await sql.$executeRawUnsafe(
-          'INSERT INTO nudge.api_keys (id, project_id, key_hash, label) VALUES ($1::uuid, $2, $3, $4)',
+          'INSERT INTO marketing.api_keys (id, project_id, key_hash, label) VALUES ($1::uuid, $2, $3, $4)',
           id,
           ctx.projectId,
           await hashPassword(secret),
@@ -631,7 +631,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'POST',
-      pattern: /^\/nudge\/preview$/,
+      pattern: /^\/marketing\/preview$/,
       auth: 'dashboard',
       async handle(ctx) {
         const body = await parseJsonBody(ctx.req, zPreview);
@@ -655,14 +655,14 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/nudge\/reference-sets$/,
+      pattern: /^\/marketing\/reference-sets$/,
       auth: 'dashboard',
       async handle(ctx) {
         const rows = await sql.$queryRawUnsafe<
           { set_key: string; count: number }[]
         >(
           `SELECT set_key, jsonb_array_length(values)::int AS count
-           FROM nudge.reference_sets WHERE project_id = $1 ORDER BY set_key`,
+           FROM marketing.reference_sets WHERE project_id = $1 ORDER BY set_key`,
           ctx.projectId
         );
         return json({
@@ -675,12 +675,12 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/nudge\/reference-sets\/([^/]+)$/,
+      pattern: /^\/marketing\/reference-sets\/([^/]+)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const setKey = validate(zIdentifier, ctx.params[0]);
         const [row] = await sql.$queryRawUnsafe<{ values: unknown }[]>(
-          'SELECT values FROM nudge.reference_sets WHERE project_id = $1 AND set_key = $2',
+          'SELECT values FROM marketing.reference_sets WHERE project_id = $1 AND set_key = $2',
           ctx.projectId,
           setKey
         );

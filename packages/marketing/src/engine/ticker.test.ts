@@ -21,10 +21,10 @@ import type {
   SendOptions,
   SendResult,
 } from '../channels/types';
-import type { NudgeConfig } from '../config';
+import type { MarketingConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine, lockProfiles } from './engine';
 import {
@@ -48,12 +48,12 @@ const SECRET = 'sk-test-0123456789abcdef';
 const ENCRYPTION_KEY = 'a'.repeat(64);
 const DUE = new Date(NOW.getTime() - 10 * MINUTE_MS);
 
-const CFG: NudgeConfig = {
+const CFG: MarketingConfig = {
   databaseUrl: '',
   redisUrl: '',
   encryptionKey: ENCRYPTION_KEY,
   proxySecret: '',
-  publicUrl: 'https://nudge.test',
+  publicUrl: 'https://marketing.test',
   port: 4100,
   trustProxy: false,
   graceSeconds: 300,
@@ -93,14 +93,14 @@ function fakeAdapter(id: ChannelId): ChannelAdapter<{ secret: string }> {
   };
 }
 
-function tick(cfg: NudgeConfig = CFG, overrides: Partial<TickDeps> = {}) {
+function tick(cfg: MarketingConfig = CFG, overrides: Partial<TickDeps> = {}) {
   return runTick({
     sql,
     engine,
     now: () => clock,
     cfg,
     renderUnsubscribeUrl: (projectId, profileId, channel) =>
-      `https://nudge.test/u/${projectId}/${profileId}/${channel}`,
+      `https://marketing.test/u/${projectId}/${profileId}/${channel}`,
     logger: { warn: () => undefined },
     ...overrides,
   });
@@ -182,7 +182,7 @@ async function insertRule(
 ): Promise<string> {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, $2, $3, $4, $5::jsonb)`,
     id,
     PROJECT,
@@ -210,7 +210,7 @@ async function enroll(opts: {
 }): Promise<string> {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+    `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
      VALUES ($1::uuid, $2, $3::uuid, $4::jsonb, $5, 'active', $6::timestamptz)`,
     id,
     PROJECT,
@@ -221,7 +221,7 @@ async function enroll(opts: {
   );
   for (const [index, step] of opts.steps.entries()) {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status, attempt, lease_until, sent_at)
+      `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status, attempt, lease_until, sent_at)
        VALUES ($1::uuid, $2, $3::timestamptz, $4, $5, $6::timestamptz, $7::timestamptz)`,
       id,
       index,
@@ -246,7 +246,7 @@ async function enrollOne(
 
 async function setConsumerState(lag: number, updatedAt: Date = NOW) {
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.consumer_state (id, lag, updated_at) VALUES (1, $1, $2::timestamptz)
+    `INSERT INTO marketing.consumer_state (id, lag, updated_at) VALUES (1, $1, $2::timestamptz)
      ON CONFLICT (id) DO UPDATE SET lag = EXCLUDED.lag, updated_at = EXCLUDED.updated_at`,
     lag,
     updatedAt.toISOString()
@@ -259,7 +259,7 @@ async function addContact(
   profileId = PROFILE
 ) {
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.contacts (project_id, profile_id, email, attributes)
+    `INSERT INTO marketing.contacts (project_id, profile_id, email, attributes)
      VALUES ($1, $2, $3, $4::jsonb)`,
     PROJECT,
     profileId,
@@ -270,7 +270,7 @@ async function addContact(
 
 async function setChannelConfig(channel: ChannelId, config: unknown) {
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.channel_configs (project_id, channel, config_encrypted) VALUES ($1, $2, $3)
+    `INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted) VALUES ($1, $2, $3)
      ON CONFLICT (project_id, channel) DO UPDATE SET config_encrypted = EXCLUDED.config_encrypted`,
     PROJECT,
     channel,
@@ -280,7 +280,7 @@ async function setChannelConfig(channel: ChannelId, config: unknown) {
 
 async function setSettings(caps: unknown, quietHours: unknown) {
   await sql.$executeRawUnsafe(
-    'INSERT INTO nudge.project_settings (project_id, caps, quiet_hours) VALUES ($1, $2::jsonb, $3::jsonb)',
+    'INSERT INTO marketing.project_settings (project_id, caps, quiet_hours) VALUES ($1, $2::jsonb, $3::jsonb)',
     PROJECT,
     JSON.stringify(caps),
     JSON.stringify(quietHours)
@@ -300,14 +300,14 @@ interface StepRow {
 function steps(enrollmentId: string): Promise<StepRow[]> {
   return sql.$queryRawUnsafe<StepRow[]>(
     `SELECT step_index, status, due_at, attempt, lease_until, sent_at, outcome
-     FROM nudge.steps WHERE enrollment_id = $1::uuid ORDER BY step_index`,
+     FROM marketing.steps WHERE enrollment_id = $1::uuid ORDER BY step_index`,
     enrollmentId
   );
 }
 
 async function enrollmentStatus(enrollmentId: string): Promise<string> {
   const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
-    'SELECT status FROM nudge.enrollments WHERE id = $1::uuid',
+    'SELECT status FROM marketing.enrollments WHERE id = $1::uuid',
     enrollmentId
   );
   return row?.status ?? 'missing';
@@ -315,7 +315,7 @@ async function enrollmentStatus(enrollmentId: string): Promise<string> {
 
 async function endReason(enrollmentId: string): Promise<string | null> {
   const [row] = await sql.$queryRawUnsafe<{ end_reason: string | null }[]>(
-    'SELECT end_reason FROM nudge.enrollments WHERE id = $1::uuid',
+    'SELECT end_reason FROM marketing.enrollments WHERE id = $1::uuid',
     enrollmentId
   );
   return row?.end_reason ?? null;
@@ -333,7 +333,7 @@ describe('runTick', () => {
     respond = async () => ({ ok: true });
     errorLog?.mockRestore();
     errorLog = spyOn(console, 'error').mockImplementation(() => undefined);
-    await resetNudgeTables();
+    await resetMarketingTables();
     for (const id of ['email', 'webhook', 'push'] as const) {
       registerAdapter(fakeAdapter(id));
       await setChannelConfig(id, { secret: SECRET });
@@ -344,7 +344,7 @@ describe('runTick', () => {
   afterAll(async () => {
     errorLog?.mockRestore();
     // The index test leaves 20,000 enrollments behind, which would skew scripts/load.ts.
-    await resetNudgeTables();
+    await resetMarketingTables();
     await sql.$disconnect();
   });
 
@@ -360,7 +360,7 @@ describe('runTick', () => {
 
   it('REVIEW FOCUS lag: a missing consumer_state row blocks sending', async () => {
     const { enrollmentId } = await enrollOne();
-    await sql.$executeRawUnsafe('DELETE FROM nudge.consumer_state');
+    await sql.$executeRawUnsafe('DELETE FROM marketing.consumer_state');
     expect(await tick()).toEqual(ZERO);
     expect((await steps(enrollmentId))[0]?.status).toBe('pending');
   });
@@ -405,7 +405,7 @@ describe('runTick', () => {
       steps: [{ dueAt: DUE }, { dueAt: new Date(NOW.getTime() + DAY * 1000) }],
     });
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.events (project_id, event_id, profile_id, name, event_time)
+      `INSERT INTO marketing.events (project_id, event_id, profile_id, name, event_time)
        VALUES ($1, 'e1', $2, 'opened', $3::timestamptz)`,
       PROJECT,
       PROFILE,
@@ -437,7 +437,7 @@ describe('runTick', () => {
       { dueAt: later },
     ]);
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.opt_outs (project_id, profile_id, channel) VALUES ($1, $2, 'email')`,
+      `INSERT INTO marketing.opt_outs (project_id, profile_id, channel) VALUES ($1, $2, 'email')`,
       PROJECT,
       PROFILE
     );
@@ -460,7 +460,7 @@ describe('runTick', () => {
   });
 
   it('email step with no synced email is skipped', async () => {
-    await sql.$executeRawUnsafe('UPDATE nudge.contacts SET email = NULL');
+    await sql.$executeRawUnsafe('UPDATE marketing.contacts SET email = NULL');
     const { enrollmentId } = await enrollOne();
     expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
     const [step] = await steps(enrollmentId);
@@ -487,7 +487,7 @@ describe('runTick', () => {
 
   it('push step goes to the profile device tokens with title and plain-text body', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+      `INSERT INTO marketing.devices (token, project_id, profile_id, platform)
        VALUES ('t1', $1, $2, 'ios'), ('t2', $1, $2, 'android'), ('t3', $1, 'other', 'ios')`,
       PROJECT,
       PROFILE
@@ -507,7 +507,7 @@ describe('runTick', () => {
       })
     );
     await sql.$executeRawUnsafe(
-      `UPDATE nudge.contacts SET attributes = '{"firstName":"<Ada>"}'`
+      `UPDATE marketing.contacts SET attributes = '{"firstName":"<Ada>"}'`
     );
     expect(await tick()).toEqual({ ...ZERO, sent: 1 });
     expect(calls[0]?.to.deviceTokens).toEqual(['t1', 't2']);
@@ -517,7 +517,7 @@ describe('runTick', () => {
 
   it('invalid tokens returned by the push adapter are deleted from devices', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+      `INSERT INTO marketing.devices (token, project_id, profile_id, platform)
        VALUES ('t1', $1, $2, 'ios'), ('t2', $1, $2, 'android'),
               ('t3', $1, 'other', 'ios'), ('t4', 'project-b', $2, 'ios')`,
       PROJECT,
@@ -534,7 +534,7 @@ describe('runTick', () => {
     respond = async () => ({ ok: true, invalidTokens: ['t1', 't3', 't4'] });
     expect(await tick()).toEqual({ ...ZERO, sent: 1 });
     const remaining = await sql.$queryRawUnsafe<{ token: string }[]>(
-      'SELECT token FROM nudge.devices ORDER BY token'
+      'SELECT token FROM marketing.devices ORDER BY token'
     );
     expect(remaining.map((row) => row.token)).toEqual(['t2', 't3', 't4']);
     expect((await steps(enrollmentId))[0]?.status).toBe('sent');
@@ -542,7 +542,7 @@ describe('runTick', () => {
 
   it('a failing invalid-token deletion neither fails nor requeues a sent step', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+      `INSERT INTO marketing.devices (token, project_id, profile_id, platform)
        VALUES ('t1', $1, $2, 'ios')`,
       PROJECT,
       PROFILE
@@ -563,7 +563,7 @@ describe('runTick', () => {
         }
         return (...args: unknown[]) =>
           prop === '$executeRawUnsafe' &&
-          String(args[0]).includes('DELETE FROM nudge.devices')
+          String(args[0]).includes('DELETE FROM marketing.devices')
             ? Promise.reject(new Error('injected database failure'))
             : value.apply(target, args);
       },
@@ -576,7 +576,7 @@ describe('runTick', () => {
     expect(step?.status).toBe('sent');
     expect(step?.attempt).toBe(1);
     expect(errorLog).toHaveBeenCalledWith(
-      'nudge ticker:',
+      'marketing ticker:',
       'pruning invalid device tokens:',
       expect.stringContaining('injected database failure')
     );
@@ -584,7 +584,7 @@ describe('runTick', () => {
 
   it('invalid tokens on a failed push result are deleted too', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.devices (token, project_id, profile_id, platform)
+      `INSERT INTO marketing.devices (token, project_id, profile_id, platform)
        VALUES ('t1', $1, $2, 'ios'), ('t2', $1, $2, 'android')`,
       PROJECT,
       PROFILE
@@ -604,7 +604,7 @@ describe('runTick', () => {
     });
     expect(await tick()).toEqual({ ...ZERO, failed: 1 });
     const remaining = await sql.$queryRawUnsafe<{ token: string }[]>(
-      'SELECT token FROM nudge.devices'
+      'SELECT token FROM marketing.devices'
     );
     expect(remaining).toEqual([]);
     expect((await steps(enrollmentId))[0]?.status).toBe('failed');
@@ -702,7 +702,7 @@ describe('runTick', () => {
 
     // The fifth attempt is the last one.
     await sql.$executeRawUnsafe(
-      'UPDATE nudge.steps SET attempt = 4, due_at = $1::timestamptz',
+      'UPDATE marketing.steps SET attempt = 4, due_at = $1::timestamptz',
       DUE.toISOString()
     );
     expect(await tick()).toEqual({ ...ZERO, failed: 1 });
@@ -782,7 +782,7 @@ describe('runTick', () => {
       steps: [{ dueAt: DUE, status: 'sent', sentAt: DUE }, { dueAt: DUE }],
     });
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.events (project_id, event_id, profile_id, name, properties, event_time)
+      `INSERT INTO marketing.events (project_id, event_id, profile_id, name, properties, event_time)
        VALUES ($1, 'trigger', $2, 'purchase', $3::jsonb, $4::timestamptz)`,
       PROJECT,
       PROFILE,
@@ -794,7 +794,7 @@ describe('runTick', () => {
     const [call] = calls;
     expect(call?.opts.idempotencyKey).toBe(`${enrollmentId}:1`);
     expect(call?.opts.unsubscribeUrl).toBe(
-      `https://nudge.test/u/${PROJECT}/${PROFILE}/email`
+      `https://marketing.test/u/${PROJECT}/${PROFILE}/email`
     );
     expect(call?.msg.subject).toBe('Re: <Dune> for Ada');
     expect(call?.msg.body).toBe('<p>&lt;Dune&gt;  Ada</p>');
@@ -828,7 +828,7 @@ describe('runTick', () => {
 
   it('a missing or invalid channel config skips the step', async () => {
     await sql.$executeRawUnsafe(
-      `DELETE FROM nudge.channel_configs WHERE channel = 'email'`
+      `DELETE FROM marketing.channel_configs WHERE channel = 'email'`
     );
     const missing = await enrollOne(rule({ name: 'missing' }));
     expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
@@ -881,7 +881,7 @@ describe('runTick', () => {
     expect(await enrollmentStatus(enrollmentId)).toBe('completed');
   });
 
-  it('PERF a tick claims at most NUDGE_CLAIM_BATCH steps even with 1,000 due', async () => {
+  it('PERF a tick claims at most MARKETING_CLAIM_BATCH steps even with 1,000 due', async () => {
     const definition = rule({
       steps: [
         { delaySeconds: HOUR, channel: 'webhook', template: { body: 'w' } },
@@ -890,11 +890,11 @@ describe('runTick', () => {
     const ruleId = await insertRule(definition);
     await sql.$executeRawUnsafe(
       `WITH e AS (
-         INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+         INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
          SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, 'p' || g, 'active', $4::timestamptz - interval '1 hour'
          FROM generate_series(1, 1000) g
          RETURNING id)
-       INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+       INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
        SELECT id, 0, $4::timestamptz, 'pending' FROM e`,
       PROJECT,
       ruleId,
@@ -903,7 +903,7 @@ describe('runTick', () => {
     );
     expect(await tick()).toEqual({ ...ZERO, sent: CFG.claimBatch });
     const counts = await sql.$queryRawUnsafe<{ status: string; n: number }[]>(
-      'SELECT status, count(*)::int AS n FROM nudge.steps GROUP BY status ORDER BY status'
+      'SELECT status, count(*)::int AS n FROM marketing.steps GROUP BY status ORDER BY status'
     );
     expect(counts).toEqual([
       { status: 'pending', n: 1000 - CFG.claimBatch },
@@ -912,7 +912,7 @@ describe('runTick', () => {
     expect(calls).toHaveLength(CFG.claimBatch);
   });
 
-  it('sends run with at most NUDGE_SEND_CONCURRENCY in flight', async () => {
+  it('sends run with at most MARKETING_SEND_CONCURRENCY in flight', async () => {
     const definition = rule({
       steps: [
         { delaySeconds: HOUR, channel: 'webhook', template: { body: 'w' } },
@@ -1078,12 +1078,12 @@ describe('runTick', () => {
     };
     const completed = await enrollOne(rule({ name: 'completed' }), [expired]);
     await sql.$executeRawUnsafe(
-      `UPDATE nudge.enrollments SET status = 'completed' WHERE id = $1::uuid`,
+      `UPDATE marketing.enrollments SET status = 'completed' WHERE id = $1::uuid`,
       completed.enrollmentId
     );
     const paused = await enrollOne(rule({ name: 'paused' }), [expired]);
     await sql.$executeRawUnsafe(
-      `UPDATE nudge.rules SET status = 'paused' WHERE id = $1::uuid`,
+      `UPDATE marketing.rules SET status = 'paused' WHERE id = $1::uuid`,
       paused.ruleId
     );
     expect(await tick()).toEqual(ZERO);
@@ -1102,7 +1102,7 @@ describe('runTick', () => {
       ...engine,
       async evaluateEnrollment(id: string) {
         await sql.$executeRawUnsafe(
-          `UPDATE nudge.rules SET status = 'paused' WHERE id = $1::uuid`,
+          `UPDATE marketing.rules SET status = 'paused' WHERE id = $1::uuid`,
           ruleId
         );
         return await engine.evaluateEnrollment(id);
@@ -1228,11 +1228,11 @@ describe('runTick', () => {
     const ruleId = await insertRule(definition);
     await sql.$executeRawUnsafe(
       `WITH e AS (
-         INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+         INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
          SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, 'p' || g, 'active', $4::timestamptz
          FROM generate_series(1, 20000) g
          RETURNING id)
-       INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+       INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
        SELECT id, 0, $4::timestamptz + random() * interval '30 days', 'pending' FROM e`,
       PROJECT,
       ruleId,
@@ -1240,7 +1240,7 @@ describe('runTick', () => {
       NOW.toISOString()
     );
     await sql.$executeRawUnsafe(
-      'ANALYZE nudge.steps, nudge.enrollments, nudge.rules'
+      'ANALYZE marketing.steps, marketing.enrollments, marketing.rules'
     );
     const plan = await sql.$transaction(async (tx) => {
       const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(

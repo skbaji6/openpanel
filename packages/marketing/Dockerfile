@@ -1,5 +1,5 @@
-# Nudge worker image: consumes the events topic, runs the ticker and serves /nudge/* on NUDGE_PORT.
-# Build from the repository root: docker build -f packages/nudge/Dockerfile .
+# Marketing worker image: consumes the events topic, runs the ticker and serves /marketing/* on MARKETING_PORT.
+# Build from the repository root: docker build -f packages/marketing/Dockerfile .
 #
 # Bun is pinned exactly; keep this ARG in sync with `.bun-version` (and with apps/api/Dockerfile).
 ARG BUN_VERSION=1.4.0
@@ -40,21 +40,21 @@ COPY . .
 # Prisma only reads DATABASE_URL's presence at generate time; a placeholder keeps real credentials out of the layers.
 RUN DATABASE_URL=postgresql://build:build@localhost:5432/build bun run --filter @openpanel/db codegen
 
-# The shipped node_modules: production-only, limited to @openpanel/nudge's workspace closure.
+# The shipped node_modules: production-only, limited to @openpanel/marketing's workspace closure.
 FROM build AS prod-deps
 
 RUN find . -maxdepth 4 -type d -name node_modules -prune -exec rm -rf {} + && \
-    bun install --production --frozen-lockfile --linker=isolated --filter '@openpanel/nudge'
+    bun install --production --frozen-lockfile --linker=isolated --filter '@openpanel/marketing'
 
 RUN find /app/node_modules/.bun -maxdepth 1 -name '*musl*' -prune -exec rm -rf {} + && \
     find /app/packages -type f -name '*.test.ts' -delete && \
-    rm -rf /app/packages/sdks /app/packages/nudge/scripts
+    rm -rf /app/packages/sdks /app/packages/marketing/scripts
 
 FROM base AS runtime
 
 ENV NODE_ENV=production
 ENV HOME=/home/bun
-ENV NUDGE_PORT=4100
+ENV MARKETING_PORT=4100
 
 WORKDIR /app
 
@@ -64,17 +64,17 @@ COPY --from=prod-deps --chown=bun:bun /app/packages ./packages
 COPY --from=prod-deps --chown=bun:bun /app/tooling/typescript ./tooling/typescript
 
 # The worker applies these at start (src/db/migrate.ts); fail the build, not the boot, if they are missing.
-RUN test -f /app/packages/nudge/src/worker.ts && \
-    test -d /app/packages/nudge/migrations && \
+RUN test -f /app/packages/marketing/src/worker.ts && \
+    test -d /app/packages/marketing/migrations && \
     test -d /app/packages/db/src/generated
 
 USER bun
 
-WORKDIR /app/packages/nudge
+WORKDIR /app/packages/marketing
 
 EXPOSE 4100
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
-    CMD curl -fsS "http://localhost:${NUDGE_PORT}/nudge/health" || exit 1
+    CMD curl -fsS "http://localhost:${MARKETING_PORT}/marketing/health" || exit 1
 
 CMD ["bun", "src/worker.ts"]

@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sql } from './client';
 import { migrate } from './migrate';
-import { resetNudgeTables } from './test-helpers';
+import { resetMarketingTables } from './test-helpers';
 
 const TABLES = [
   'rules',
@@ -27,22 +27,22 @@ const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', 'migrations');
 
 async function insertEnrollment(status: string) {
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time)
+    `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time)
      VALUES (gen_random_uuid(), 'p1', $1::uuid, '{}'::jsonb, 'u1', '', $2, now())`,
     RULE_ID,
     status
   );
 }
 
-describe('nudge schema', () => {
+describe('marketing schema', () => {
   beforeAll(async () => {
     await migrate();
   });
-  beforeEach(resetNudgeTables);
+  beforeEach(resetMarketingTables);
 
-  it('migrate creates schema nudge and every listed table', async () => {
+  it('migrate creates schema marketing and every listed table', async () => {
     const rows = await sql.$queryRawUnsafe<{ table_name: string }[]>(
-      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'nudge'`
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'marketing'`
     );
     const names = rows.map((r) => r.table_name);
     for (const table of TABLES) {
@@ -66,27 +66,27 @@ describe('nudge schema', () => {
     await insertEnrollment('active');
     await expect(insertEnrollment('active')).rejects.toThrow();
     await sql.$executeRawUnsafe(
-      `UPDATE nudge.enrollments SET status = 'completed'`
+      `UPDATE marketing.enrollments SET status = 'completed'`
     );
     await insertEnrollment('active');
     const [row] = await sql.$queryRawUnsafe<{ count: number }[]>(
-      'SELECT count(*)::int AS count FROM nudge.enrollments'
+      'SELECT count(*)::int AS count FROM marketing.enrollments'
     );
     expect(row?.count).toBe(2);
   });
 
   it('PERF claim query uses the partial pending-due index', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+      `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
        SELECT gen_random_uuid(), 0, now() + (g || ' seconds')::interval - interval '5 hours',
               CASE WHEN g % 10 = 0 THEN 'sent' ELSE 'pending' END
        FROM generate_series(1, 20000) g`
     );
-    await sql.$executeRawUnsafe('ANALYZE nudge.steps');
+    await sql.$executeRawUnsafe('ANALYZE marketing.steps');
     const plan = await sql.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
       const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
-        `EXPLAIN SELECT enrollment_id, step_index FROM nudge.steps
+        `EXPLAIN SELECT enrollment_id, step_index FROM marketing.steps
          WHERE status = 'pending' AND due_at <= $1
          ORDER BY due_at LIMIT 200 FOR UPDATE SKIP LOCKED`,
         new Date()
@@ -98,15 +98,15 @@ describe('nudge schema', () => {
 
   it('PERF events lookup by (project_id, profile_id, name, event_time) uses its index', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.events (project_id, event_id, profile_id, name, properties, event_time)
+      `INSERT INTO marketing.events (project_id, event_id, profile_id, name, properties, event_time)
        SELECT 'p1', 'e' || g, 'u' || (g % 500), 'view', '{}'::jsonb, now() - (g || ' seconds')::interval
        FROM generate_series(1, 20000) g`
     );
-    await sql.$executeRawUnsafe('ANALYZE nudge.events');
+    await sql.$executeRawUnsafe('ANALYZE marketing.events');
     const plan = await sql.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
       const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
-        `EXPLAIN SELECT 1 FROM nudge.events
+        `EXPLAIN SELECT 1 FROM marketing.events
          WHERE project_id = 'p1' AND profile_id = 'u7' AND name = 'view' AND event_time >= now() - interval '1 day'`
       );
       return rows.map((r) => r['QUERY PLAN']).join('\n');
@@ -115,16 +115,16 @@ describe('nudge schema', () => {
   });
 });
 
-describe('nudge migrations under concurrency', () => {
+describe('marketing migrations under concurrency', () => {
   it('two replicas migrating a fresh schema at once apply every file exactly once', async () => {
-    await sql.$executeRawUnsafe('DROP SCHEMA IF EXISTS nudge CASCADE');
+    await sql.$executeRawUnsafe('DROP SCHEMA IF EXISTS marketing CASCADE');
     const runs = await Promise.all([migrate(), migrate()]);
     const files = (await readdir(MIGRATIONS_DIR))
       .filter((file) => file.endsWith('.sql'))
       .sort();
     expect(runs.flat().sort()).toEqual(files);
     const [row] = await sql.$queryRawUnsafe<{ count: number }[]>(
-      'SELECT count(*)::int AS count FROM nudge.schema_migrations'
+      'SELECT count(*)::int AS count FROM marketing.schema_migrations'
     );
     expect(row?.count).toBe(files.length);
   });

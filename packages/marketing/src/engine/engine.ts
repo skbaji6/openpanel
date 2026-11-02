@@ -1,4 +1,4 @@
-import type { sql as nudgeSql } from '../db/client';
+import type { sql as marketingSql } from '../db/client';
 import type { NormalizedEvent } from '../events/normalize';
 import { sanitizeText } from '../events/sanitize';
 import {
@@ -18,7 +18,7 @@ export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
 // after a time budget so one run cannot occupy the database; the next hourly run continues.
 const PURGE_DEFAULTS = { chunkSize: 10_000, pauseMs: 100, budgetMs: 600_000 };
 
-export type Sql = typeof nudgeSql;
+export type Sql = typeof marketingSql;
 export type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;
 
 export interface GoalResult {
@@ -87,13 +87,13 @@ export function evaluateGoal(goal: Goal, facts: GoalFacts): GoalResult {
 
 // Params: project, profile, goal event, trigger time, matchOn (or null), match value, set property (or null).
 export const GOAL_FACTS_SQL = `
-  SELECT DISTINCT properties->>($7::text) AS value FROM nudge.events
+  SELECT DISTINCT properties->>($7::text) AS value FROM marketing.events
   WHERE project_id = $1 AND profile_id = $2 AND name = $3
     AND event_time >= $4::timestamptz
     AND ($5::text IS NULL OR properties->>($5::text) = $6::text)`;
 
 const INSERT_EVENTS_SQL = `
-  INSERT INTO nudge.events (project_id, event_id, profile_id, name, properties, event_time)
+  INSERT INTO marketing.events (project_id, event_id, profile_id, name, properties, event_time)
   SELECT project_id, event_id, profile_id, name, properties, event_time
   FROM jsonb_to_recordset($1::jsonb) AS e(
     project_id text, event_id text, profile_id text, name text, properties jsonb, event_time timestamptz)
@@ -103,11 +103,11 @@ const INSERT_EVENTS_SQL = `
 // Params: project, rule id, snapshot, profile, match value, trigger time, now, reentry enabled, cooldown seconds.
 export const ENROLL_SQL = `
   WITH enrollment AS (
-    INSERT INTO nudge.enrollments
+    INSERT INTO marketing.enrollments
       (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time, created_at)
     SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, $4, $5, 'active', $6::timestamptz, $7::timestamptz
     WHERE NOT EXISTS (
-      SELECT 1 FROM nudge.enrollments
+      SELECT 1 FROM marketing.enrollments
       WHERE project_id = $1 AND profile_id = $4 AND rule_id = $2::uuid AND match_value = $5
         AND (status = 'active'
              OR (status = 'completed' AND (NOT $8::boolean
@@ -115,7 +115,7 @@ export const ENROLL_SQL = `
     ON CONFLICT (project_id, rule_id, profile_id, match_value) WHERE status = 'active' DO NOTHING
     RETURNING id, trigger_time
   ), new_steps AS (
-    INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+    INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
     SELECT enrollment.id, (step.ordinality - 1)::int,
            enrollment.trigger_time + make_interval(secs => (step.value->>'delaySeconds')::double precision), 'pending'
     FROM enrollment, jsonb_array_elements($3::jsonb->'steps') WITH ORDINALITY AS step
@@ -124,15 +124,15 @@ export const ENROLL_SQL = `
 
 const COMPLETE_SQL = `
   WITH done AS (
-    UPDATE nudge.enrollments SET status = 'completed', end_reason = 'goal'
+    UPDATE marketing.enrollments SET status = 'completed', end_reason = 'goal'
     WHERE id = $1::uuid AND status = 'active' RETURNING id
   )
-  UPDATE nudge.steps SET status = 'cancelled'
+  UPDATE marketing.steps SET status = 'cancelled'
   WHERE enrollment_id IN (SELECT id FROM done) AND status = 'pending'`;
 
 // Params: project, profile, event name, event time.
 const GOAL_CANDIDATES_SQL = `
-  SELECT id::text FROM nudge.enrollments
+  SELECT id::text FROM marketing.enrollments
   WHERE project_id = $1 AND profile_id = $2 AND status = 'active'
     AND trigger_time <= $4::timestamptz AND rule_snapshot->'goal'->>'event' = $3`;
 
@@ -141,8 +141,8 @@ const NOT_EXCLUDED = `NOT (COALESCE(e.rule_snapshot->'goal'->'excludeEvents', '[
 
 // GREATEST keeps the debounce order-independent: an older event never pulls due_at back.
 const DEBOUNCE_SQL = `
-  UPDATE nudge.steps s SET due_at = GREATEST(s.due_at, $4::timestamptz + ${STEP_DELAY})
-  FROM nudge.enrollments e
+  UPDATE marketing.steps s SET due_at = GREATEST(s.due_at, $4::timestamptz + ${STEP_DELAY})
+  FROM marketing.enrollments e
   WHERE s.enrollment_id = e.id AND s.status = 'pending'
     AND e.project_id = $1 AND e.profile_id = $2 AND e.status = 'active'
     AND e.rule_snapshot->'goal'->>'kind' = 'inactivity'
@@ -151,10 +151,10 @@ const DEBOUNCE_SQL = `
 
 // Activity stored before the trigger arrived but later in event time counts too.
 const DEBOUNCE_FROM_STORED_SQL = `
-  UPDATE nudge.steps s SET due_at = GREATEST(s.due_at, activity.last + ${STEP_DELAY})
-  FROM nudge.enrollments e
+  UPDATE marketing.steps s SET due_at = GREATEST(s.due_at, activity.last + ${STEP_DELAY})
+  FROM marketing.enrollments e
   CROSS JOIN LATERAL (
-    SELECT max(ev.event_time) AS last FROM nudge.events ev
+    SELECT max(ev.event_time) AS last FROM marketing.events ev
     WHERE ev.project_id = e.project_id AND ev.profile_id = e.profile_id
       AND ev.event_time >= e.trigger_time AND ${NOT_EXCLUDED} ev.name)
   ) activity
@@ -163,13 +163,13 @@ const DEBOUNCE_FROM_STORED_SQL = `
 
 const INTEREST_NAMES_SQL = `
   SELECT DISTINCT name FROM (
-    SELECT definition->'trigger'->>'event' AS name FROM nudge.rules
+    SELECT definition->'trigger'->>'event' AS name FROM marketing.rules
     WHERE status = 'active' AND ($1::text IS NULL OR project_id = $1::text)
     UNION
-    SELECT definition->'goal'->>'event' FROM nudge.rules
+    SELECT definition->'goal'->>'event' FROM marketing.rules
     WHERE status = 'active' AND ($1::text IS NULL OR project_id = $1::text)
     UNION
-    SELECT rule_snapshot->'goal'->>'event' FROM nudge.enrollments
+    SELECT rule_snapshot->'goal'->>'event' FROM marketing.enrollments
     WHERE status = 'active' AND ($1::text IS NULL OR project_id = $1::text)
   ) names WHERE name IS NOT NULL`;
 
@@ -183,15 +183,15 @@ const LOCK_PROFILES_SQL = `
     ORDER BY key_hash
   ) ordered_keys`;
 
-const RULES_LOCK_KEY = 'nudge:rules';
+const RULES_LOCK_KEY = 'marketing:rules';
 
 // Params: cutoff, chunk size. An event at or after an active enrollment's trigger can still decide
 // its goal or debounce, so it outlives the retention window until that enrollment ends.
 export const PURGE_CHUNK_SQL = `
-  DELETE FROM nudge.events WHERE ctid IN (
-    SELECT ev.ctid FROM nudge.events ev
+  DELETE FROM marketing.events WHERE ctid IN (
+    SELECT ev.ctid FROM marketing.events ev
     WHERE ev.event_time < $1::timestamptz
-      AND NOT EXISTS (SELECT 1 FROM nudge.enrollments e
+      AND NOT EXISTS (SELECT 1 FROM marketing.enrollments e
         WHERE e.project_id = ev.project_id AND e.profile_id = ev.profile_id
           AND e.status = 'active' AND e.trigger_time <= ev.event_time)
     LIMIT $2::int)`;
@@ -245,7 +245,7 @@ async function loadActiveRules(
   projectId: string
 ): Promise<RuleRow[]> {
   const rows = await db.$queryRawUnsafe<{ id: string; definition: unknown }[]>(
-    `SELECT id::text, definition FROM nudge.rules
+    `SELECT id::text, definition FROM marketing.rules
      WHERE project_id = $1 AND status = 'active'`,
     projectId
   );
@@ -292,7 +292,7 @@ async function loadReferenceSet(
   setKey: string
 ): Promise<string[]> {
   const [row] = await db.$queryRawUnsafe<{ values: unknown }[]>(
-    'SELECT values FROM nudge.reference_sets WHERE project_id = $1 AND set_key = $2',
+    'SELECT values FROM marketing.reference_sets WHERE project_id = $1 AND set_key = $2',
     projectId,
     setKey
   );
@@ -306,7 +306,7 @@ async function evaluate(
 ): Promise<GoalResult> {
   const [enrollment] = await db.$queryRawUnsafe<EnrollmentRow[]>(
     `SELECT project_id, profile_id, match_value, trigger_time, rule_snapshot
-     FROM nudge.enrollments WHERE id = $1::uuid`,
+     FROM marketing.enrollments WHERE id = $1::uuid`,
     enrollmentId
   );
   if (!enrollment) {

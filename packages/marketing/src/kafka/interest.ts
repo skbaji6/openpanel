@@ -1,7 +1,7 @@
 import type { Redis } from '@openpanel/redis';
 import type { createEngine, Queryable } from '../engine/engine';
 
-export const INTEREST_PROFILES_KEY = 'nudge:interest:profiles';
+export const INTEREST_PROFILES_KEY = 'marketing:interest:profiles';
 const REDIS_ZADD_CHUNK = 1000;
 const MICROSECONDS_PER_MS = 1000;
 
@@ -37,12 +37,12 @@ interface ProfileStore {
 
 // Walks the partial index enrollments_active_uniq, never the completed rows.
 const ACTIVE_PROFILES_SQL = `
-  SELECT DISTINCT project_id, profile_id FROM nudge.enrollments WHERE status = 'active'`;
+  SELECT DISTINCT project_id, profile_id FROM marketing.enrollments WHERE status = 'active'`;
 
 // Activity for an inactivity goal can reach a replica before the trigger does (other partition),
 // so these projects keep every identified event instead of guessing which profiles matter.
 const INACTIVITY_PROJECTS_SQL = `
-  SELECT DISTINCT project_id FROM nudge.rules
+  SELECT DISTINCT project_id FROM marketing.rules
   WHERE status = 'active' AND definition->'goal'->>'kind' = 'inactivity'`;
 
 // Uses the Redis clock so adds from every replica and the refresh cutoff share one clock.
@@ -151,7 +151,7 @@ export function createRedisInterestSet(
       );
     },
     async hasMany(members) {
-      // Fail open: letting an event through costs a Postgres write, dropping it can send a wrong nudge.
+      // Fail open: letting an event through costs a Postgres write, dropping it can send a wrong marketing.
       try {
         const pipeline = redis.pipeline();
         for (const value of members) {

@@ -1,24 +1,24 @@
-name: Nudge plugin
+name: Marketing plugin
 
 on:
   pull_request:
     paths:
-      - "packages/nudge/**"
-      - "apps/start/src/components/nudge/**"
-      - "apps/start/src/routes/**nudge**"
+      - "packages/marketing/**"
+      - "apps/start/src/components/marketing/**"
+      - "apps/start/src/routes/**marketing**"
       - "apps/start/src/components/sidebar-project-menu.tsx"
-      - "docker-compose.nudge.yml"
-      - ".github/workflows/nudge.yml"
+      - "docker-compose.marketing.yml"
+      - ".github/workflows/marketing.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: nudge-${{ github.ref }}
+  group: marketing-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  nudge-tests:
+  marketing-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
@@ -29,7 +29,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: nudge_test
+          POSTGRES_DB: marketing_test
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -45,7 +45,7 @@ jobs:
           --health-timeout 3s
           --health-retries 20
     env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:23432/nudge_test
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:23432/marketing_test
       REDIS_URL: redis://127.0.0.1:23379
       KAFKA_BROKERS: 127.0.0.1:23092
     steps:
@@ -73,10 +73,10 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Typecheck
-        run: bun run --filter @openpanel/nudge typecheck
+        run: bun run --filter @openpanel/marketing typecheck
 
       - name: Test
-        run: bun run --filter @openpanel/nudge test
+        run: bun run --filter @openpanel/marketing test
 
   dashboard-tests:
     runs-on: ubuntu-latest
@@ -88,9 +88,9 @@ jobs:
 
       - uses: ./.github/actions/setup
 
-      - name: Test the nudge dashboard module
+      - name: Test the marketing dashboard module
         working-directory: apps/start
-        run: bunx vitest run src/components/nudge
+        run: bunx vitest run src/components/marketing
 
   image:
     runs-on: ubuntu-latest
@@ -102,10 +102,10 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build the nudge image
+      - name: Build the marketing image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: packages/nudge/Dockerfile
+          file: packages/marketing/Dockerfile
           push: false
-          tags: openpanel-nudge:ci
+          tags: openpanel-marketing:ci

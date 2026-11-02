@@ -8,7 +8,7 @@ const NO_COMMITTED_OFFSET = -1;
 
 // updated_at is written from the same JS clock runTick compares it against.
 const UPSERT_LAG_SQL = `
-  INSERT INTO nudge.consumer_state (id, lag, updated_at) VALUES (1, $1::bigint, $2::timestamptz)
+  INSERT INTO marketing.consumer_state (id, lag, updated_at) VALUES (1, $1::bigint, $2::timestamptz)
   ON CONFLICT (id) DO UPDATE SET lag = EXCLUDED.lag, updated_at = EXCLUDED.updated_at`;
 
 // A partition the group has never committed is measured from the end offset it had when first

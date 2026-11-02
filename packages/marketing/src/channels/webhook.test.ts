@@ -48,7 +48,7 @@ const recipient: Recipient = {
 };
 const opts: SendOptions = {
   idempotencyKey: 'e1:2',
-  unsubscribeUrl: 'https://nudge.test/u',
+  unsubscribeUrl: 'https://marketing.test/u',
 };
 
 const allowlisted = createWebhookAdapter({ allowHosts: ['127.0.0.1'] });
@@ -75,13 +75,13 @@ describe('webhook adapter', () => {
   it('signature equals HMAC of timestamp.body with the first secret', async () => {
     expect(await sendLocal()).toEqual({ ok: true });
     const [request] = received;
-    const timestamp = request?.headers.get('x-nudge-timestamp') ?? '';
+    const timestamp = request?.headers.get('x-marketing-timestamp') ?? '';
     expect(timestamp).toMatch(/^\d+$/);
     expect(Math.abs(Number(timestamp) - Date.now() / 1000)).toBeLessThan(5);
     const expected = createHmac('sha256', SECRET)
       .update(`${timestamp}.${request?.body}`)
       .digest('hex');
-    expect(request?.headers.get('x-nudge-signature')).toBe(
+    expect(request?.headers.get('x-marketing-signature')).toBe(
       `sha256=${expected}`
     );
     expect(request?.headers.get('content-type')).toBe('application/json');

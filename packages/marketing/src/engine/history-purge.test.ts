@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 
 const README = readFileSync(
   join(import.meta.dir, '..', '..', 'README.md'),
@@ -35,7 +35,7 @@ function recipe(): string {
 async function insertRule(reentryEnabled: boolean): Promise<string> {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, 'proj', 'r', 'active', $2::jsonb)`,
     id,
     JSON.stringify({ reentry: { enabled: reentryEnabled, cooldownSeconds: 0 } })
@@ -51,7 +51,7 @@ async function insertEnrollment(
   const id = randomUUID();
   const createdAt = new Date(Date.now() - ageDays * DAY_MS).toISOString();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time, created_at)
+    `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time, created_at)
      VALUES ($1::uuid, 'proj', $2::uuid, '{}'::jsonb, $1, $3, $4::timestamptz, $4::timestamptz)`,
     id,
     ruleId,
@@ -59,7 +59,7 @@ async function insertEnrollment(
     createdAt
   );
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+    `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
      VALUES ($1::uuid, 0, now(), 'sent')`,
     id
   );
@@ -69,7 +69,7 @@ async function insertEnrollment(
 async function remaining(table: 'enrollments' | 'steps'): Promise<string[]> {
   const column = table === 'enrollments' ? 'id' : 'enrollment_id';
   const rows = await sql.$queryRawUnsafe<{ id: string }[]>(
-    `SELECT ${column}::text AS id FROM nudge.${table} ORDER BY 1`
+    `SELECT ${column}::text AS id FROM marketing.${table} ORDER BY 1`
   );
   return rows.map((row) => row.id);
 }
@@ -79,10 +79,10 @@ describe('README history purge recipe', () => {
     await migrate();
   });
   beforeEach(async () => {
-    await resetNudgeTables();
+    await resetMarketingTables();
   });
   afterAll(async () => {
-    await resetNudgeTables();
+    await resetMarketingTables();
     await sql.$disconnect();
   });
 

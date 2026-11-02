@@ -1,5 +1,5 @@
-// End-to-end proof against a running stack: API (POST /track) -> Kafka -> nudge worker -> webhook.
-// Usage and prerequisites: packages/nudge/README.md, "End-to-end check".
+// End-to-end proof against a running stack: API (POST /track) -> Kafka -> marketing worker -> webhook.
+// Usage and prerequisites: packages/marketing/README.md, "End-to-end check".
 
 import { SQL } from 'bun';
 import {
@@ -19,7 +19,7 @@ const DUPLICATE_WINDOW_MS = 15_000;
 const CANCEL_WAIT_MS = 40_000;
 const POLL_MS = 1000;
 const GOAL_AFTER_TRIGGER_MS = 1000;
-const E2E_USER_ID = 'nudge-e2e';
+const E2E_USER_ID = 'marketing-e2e';
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128.0 Safari/537.36';
 
@@ -40,13 +40,13 @@ function requireEnv(name: string): string {
 }
 
 const env = {
-  nudgeUrl: process.env.NUDGE_URL?.trim() || 'http://localhost:4100',
-  proxySecret: requireEnv('NUDGE_PROXY_SECRET'),
+  marketingUrl: process.env.MARKETING_URL?.trim() || 'http://localhost:4100',
+  proxySecret: requireEnv('MARKETING_PROXY_SECRET'),
   apiUrl: requireEnv('API_URL'),
   projectId: requireEnv('E2E_PROJECT_ID'),
   clientId: requireEnv('E2E_CLIENT_ID'),
   clientSecret: requireEnv('E2E_CLIENT_SECRET'),
-  // Must be listed in the worker's NUDGE_WEBHOOK_ALLOW_HOSTS (plain http is only allowed for those).
+  // Must be listed in the worker's MARKETING_WEBHOOK_ALLOW_HOSTS (plain http is only allowed for those).
   receiverHost: process.env.E2E_RECEIVER_HOST?.trim() || 'localhost',
   databaseUrl: process.env.DATABASE_URL?.trim() || undefined,
   allowWebhookOverwrite: process.env.E2E_ALLOW_WEBHOOK_OVERWRITE === 'true',
@@ -54,24 +54,29 @@ const env = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function nudge(method: string, path: string, body?: unknown) {
+async function marketing(method: string, path: string, body?: unknown) {
   const headers: Record<string, string> = {
-    'x-nudge-proxy-secret': env.proxySecret,
-    'x-nudge-project-id': env.projectId,
-    'x-nudge-user-id': E2E_USER_ID,
+    'x-marketing-proxy-secret': env.proxySecret,
+    'x-marketing-project-id': env.projectId,
+    'x-marketing-user-id': E2E_USER_ID,
   };
   if (method !== 'GET') {
-    headers['x-nudge-csrf'] = '1';
+    headers['x-marketing-csrf'] = '1';
     headers['content-type'] = 'application/json';
   }
-  const response = await fetch(new URL(`/nudge/${path}`, env.nudgeUrl), {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const response = await fetch(
+    new URL(`/marketing/${path}`, env.marketingUrl),
+    {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }
+  );
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`${method} /nudge/${path} -> ${response.status} ${text}`);
+    throw new Error(
+      `${method} /marketing/${path} -> ${response.status} ${text}`
+    );
   }
   return JSON.parse(text) as Record<string, unknown>;
 }
@@ -120,8 +125,8 @@ function startReceiver(deliveries: Delivery[], malformed: string[]) {
         return new Response('body is not a JSON object', { status: 400 });
       }
       deliveries.push({
-        timestamp: req.headers.get('x-nudge-timestamp') ?? '',
-        signature: req.headers.get('x-nudge-signature') ?? '',
+        timestamp: req.headers.get('x-marketing-timestamp') ?? '',
+        signature: req.headers.get('x-marketing-signature') ?? '',
         rawBody,
         profileId: parsed.profileId,
         ruleId: parsed.ruleId,
@@ -158,19 +163,19 @@ function assert(condition: boolean, message: string): asserts condition {
 }
 
 // The API cannot remove enrollments, steps or stored events, so they go by SQL when DATABASE_URL is given.
-async function deleteNudgeRows(ruleId: string, profileIds: string[]) {
+async function deleteMarketingRows(ruleId: string, profileIds: string[]) {
   if (!env.databaseUrl) {
     console.warn(
-      'cleanup: DATABASE_URL unset; nudge rows for the e2e profiles stay until retention'
+      'cleanup: DATABASE_URL unset; marketing rows for the e2e profiles stay until retention'
     );
     return;
   }
   const db = new SQL(env.databaseUrl);
   try {
-    await db`DELETE FROM nudge.steps WHERE enrollment_id IN
-      (SELECT id FROM nudge.enrollments WHERE rule_id = ${ruleId}::uuid)`;
-    await db`DELETE FROM nudge.enrollments WHERE rule_id = ${ruleId}::uuid`;
-    await db`DELETE FROM nudge.events WHERE project_id = ${env.projectId}
+    await db`DELETE FROM marketing.steps WHERE enrollment_id IN
+      (SELECT id FROM marketing.enrollments WHERE rule_id = ${ruleId}::uuid)`;
+    await db`DELETE FROM marketing.enrollments WHERE rule_id = ${ruleId}::uuid`;
+    await db`DELETE FROM marketing.events WHERE project_id = ${env.projectId}
       AND profile_id IN ${db(profileIds)}`;
   } finally {
     await db.close();
@@ -195,8 +200,8 @@ function messageOf(error: unknown): string {
 // Never throws: every step runs even if an earlier one failed, and a failed assertion stays the reported error.
 async function cleanUp(ruleId: string, profileIds: string[]): Promise<boolean> {
   const steps: [string, () => Promise<unknown>][] = [
-    ['delete rule', () => nudge('DELETE', `rules/${ruleId}`)],
-    ['delete nudge rows', () => deleteNudgeRows(ruleId, profileIds)],
+    ['delete rule', () => marketing('DELETE', `rules/${ruleId}`)],
+    ['delete marketing rows', () => deleteMarketingRows(ruleId, profileIds)],
   ];
   let clean = true;
   for (const [label, step] of steps) {
@@ -211,7 +216,7 @@ async function cleanUp(ruleId: string, profileIds: string[]): Promise<boolean> {
 }
 
 async function main() {
-  const existing = await nudge('GET', 'channels/webhook');
+  const existing = await marketing('GET', 'channels/webhook');
   if (existing.configured === true && !env.allowWebhookOverwrite) {
     throw new Error(
       'project already has a webhook channel; use a dedicated project or set E2E_ALLOW_WEBHOOK_OVERWRITE=true'
@@ -228,19 +233,19 @@ async function main() {
     );
   const webhookSecret = randomBytes(24).toString('hex');
   const runId = randomUUID().slice(0, 8);
-  const deliveredProfile = `nudge-e2e-${runId}-a`;
-  const cancelledProfile = `nudge-e2e-${runId}-b`;
+  const deliveredProfile = `marketing-e2e-${runId}-a`;
+  const cancelledProfile = `marketing-e2e-${runId}-b`;
   let ruleId: string | undefined;
   let cleanedUp = true;
 
   try {
-    await nudge('PUT', 'channels/webhook', {
+    await marketing('PUT', 'channels/webhook', {
       config: {
         url: `http://${env.receiverHost}:${receiver.port}/hook`,
         secrets: [webhookSecret],
       },
     });
-    const rule = await nudge('POST', 'rules', {
+    const rule = await marketing('POST', 'rules', {
       status: 'active',
       definition: {
         name: `e2e ${runId}`,
@@ -250,7 +255,7 @@ async function main() {
           {
             delaySeconds: STEP_DELAY_SECONDS,
             channel: 'webhook',
-            template: { body: 'nudge e2e' },
+            template: { body: 'marketing e2e' },
           },
         ],
         reentry: { enabled: false, cooldownSeconds: 0 },
@@ -278,7 +283,7 @@ async function main() {
     console.log('PASS delivered once');
     assert(
       signatureVerifies(delivery, webhookSecret),
-      'x-nudge-signature does not verify against the channel secret'
+      'x-marketing-signature does not verify against the channel secret'
     );
     console.log('PASS signature verifies');
 
@@ -286,7 +291,7 @@ async function main() {
     await sleep(GOAL_AFTER_TRIGGER_MS);
     await track(GOAL_EVENT, cancelledProfile);
     await sleep(CANCEL_WAIT_MS);
-    const results = await nudge('GET', `results?ruleId=${ruleId}`);
+    const results = await marketing('GET', `results?ruleId=${ruleId}`);
     const [ruleResult] = results.results as { enrolled: number }[];
     // Two enrollments prove the second trigger arrived, so zero deliveries is the goal's doing.
     assert(

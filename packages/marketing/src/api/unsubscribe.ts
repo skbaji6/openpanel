@@ -1,11 +1,11 @@
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import type { NudgeConfig } from '../config';
+import type { MarketingConfig } from '../config';
 import type { Queryable } from '../engine/engine';
 import { HttpError } from './http';
 import type { RateLimiter } from './rate-limit';
 
-const HKDF_INFO = 'nudge-unsubscribe';
+const HKDF_INFO = 'marketing-unsubscribe';
 const KEY_BYTES = 32;
 // Bounds the work done on an unauthenticated input; covers profile ids up to about 2,900 characters.
 const MAX_TOKEN_LENGTH = 4096;
@@ -88,7 +88,7 @@ export function verifyUnsubscribeToken(
 }
 
 export function createUnsubscribeUrlRenderer(
-  cfg: Pick<NudgeConfig, 'encryptionKey' | 'publicUrl'>
+  cfg: Pick<MarketingConfig, 'encryptionKey' | 'publicUrl'>
 ) {
   const key = unsubscribeKey(cfg.encryptionKey);
   const base = cfg.publicUrl.replace(/\/+$/, '');
@@ -98,7 +98,7 @@ export function createUnsubscribeUrlRenderer(
       profileId,
       channel: z.enum(CHANNELS).parse(channel),
     });
-    return `${base}/nudge/unsubscribe?t=${token}`;
+    return `${base}/marketing/unsubscribe?t=${token}`;
   };
 }
 
@@ -161,7 +161,7 @@ export function createUnsubscribeHandlers(deps: {
     async optOut(url: URL, ip: string): Promise<Response> {
       const target = targetOf(url, ip);
       await deps.sql.$executeRawUnsafe(
-        `INSERT INTO nudge.opt_outs (project_id, profile_id, channel)
+        `INSERT INTO marketing.opt_outs (project_id, profile_id, channel)
          VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
         target.projectId,
         target.profileId,

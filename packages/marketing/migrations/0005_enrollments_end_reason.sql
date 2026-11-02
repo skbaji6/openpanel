@@ -1,1 +1,1 @@
-ALTER TABLE nudge.enrollments ADD COLUMN end_reason text;
+ALTER TABLE marketing.enrollments ADD COLUMN end_reason text;

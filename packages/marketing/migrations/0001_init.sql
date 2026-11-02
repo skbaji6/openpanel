@@ -1,4 +1,4 @@
-CREATE TABLE nudge.rules (
+CREATE TABLE marketing.rules (
   id uuid PRIMARY KEY,
   project_id text NOT NULL,
   name text NOT NULL,
@@ -9,7 +9,7 @@ CREATE TABLE nudge.rules (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE nudge.enrollments (
+CREATE TABLE marketing.enrollments (
   id uuid PRIMARY KEY,
   project_id text NOT NULL,
   rule_id uuid NOT NULL,
@@ -22,10 +22,10 @@ CREATE TABLE nudge.enrollments (
 );
 
 CREATE UNIQUE INDEX enrollments_active_uniq
-  ON nudge.enrollments (project_id, rule_id, profile_id, match_value)
+  ON marketing.enrollments (project_id, rule_id, profile_id, match_value)
   WHERE status = 'active';
 
-CREATE TABLE nudge.steps (
+CREATE TABLE marketing.steps (
   enrollment_id uuid NOT NULL,
   step_index int NOT NULL,
   due_at timestamptz NOT NULL,
@@ -37,9 +37,9 @@ CREATE TABLE nudge.steps (
   PRIMARY KEY (enrollment_id, step_index)
 );
 
-CREATE INDEX steps_pending_due_idx ON nudge.steps (due_at) WHERE status = 'pending';
+CREATE INDEX steps_pending_due_idx ON marketing.steps (due_at) WHERE status = 'pending';
 
-CREATE TABLE nudge.events (
+CREATE TABLE marketing.events (
   project_id text NOT NULL,
   event_id text NOT NULL,
   profile_id text NOT NULL,
@@ -49,16 +49,16 @@ CREATE TABLE nudge.events (
   PRIMARY KEY (project_id, event_id)
 );
 
-CREATE INDEX events_lookup_idx ON nudge.events (project_id, profile_id, name, event_time);
+CREATE INDEX events_lookup_idx ON marketing.events (project_id, profile_id, name, event_time);
 
-CREATE TABLE nudge.reference_sets (
+CREATE TABLE marketing.reference_sets (
   project_id text NOT NULL,
   set_key text NOT NULL,
   values jsonb NOT NULL,
   PRIMARY KEY (project_id, set_key)
 );
 
-CREATE TABLE nudge.contacts (
+CREATE TABLE marketing.contacts (
   project_id text NOT NULL,
   profile_id text NOT NULL,
   email text,
@@ -67,7 +67,7 @@ CREATE TABLE nudge.contacts (
   PRIMARY KEY (project_id, profile_id)
 );
 
-CREATE TABLE nudge.devices (
+CREATE TABLE marketing.devices (
   token text PRIMARY KEY,
   project_id text NOT NULL,
   profile_id text NOT NULL,
@@ -75,7 +75,7 @@ CREATE TABLE nudge.devices (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE nudge.opt_outs (
+CREATE TABLE marketing.opt_outs (
   project_id text NOT NULL,
   profile_id text NOT NULL,
   channel text NOT NULL,
@@ -83,14 +83,14 @@ CREATE TABLE nudge.opt_outs (
   PRIMARY KEY (project_id, profile_id, channel)
 );
 
-CREATE TABLE nudge.channel_configs (
+CREATE TABLE marketing.channel_configs (
   project_id text NOT NULL,
   channel text NOT NULL,
   config_encrypted text NOT NULL,
   PRIMARY KEY (project_id, channel)
 );
 
-CREATE TABLE nudge.api_keys (
+CREATE TABLE marketing.api_keys (
   id uuid PRIMARY KEY,
   project_id text NOT NULL,
   key_hash text NOT NULL,
@@ -98,13 +98,13 @@ CREATE TABLE nudge.api_keys (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE nudge.project_settings (
+CREATE TABLE marketing.project_settings (
   project_id text PRIMARY KEY,
   caps jsonb,
   quiet_hours jsonb
 );
 
-CREATE TABLE nudge.consumer_state (
+CREATE TABLE marketing.consumer_state (
   id int PRIMARY KEY CHECK (id = 1),
   lag bigint NOT NULL DEFAULT 0,
   updated_at timestamptz NOT NULL DEFAULT now()

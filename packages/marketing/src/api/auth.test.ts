@@ -59,11 +59,11 @@ describe('unsubscribe token', () => {
   it('the URL the ticker renders carries a token that verifies', () => {
     const render = createUnsubscribeUrlRenderer({
       encryptionKey: ENCRYPTION_KEY,
-      publicUrl: 'https://nudge.test/',
+      publicUrl: 'https://marketing.test/',
     });
     const url = new URL(render('proj-a', 'user|with|pipes', 'email'));
     expect(`${url.origin}${url.pathname}`).toBe(
-      'https://nudge.test/nudge/unsubscribe'
+      'https://marketing.test/marketing/unsubscribe'
     );
     expect(verifyUnsubscribeToken(KEY, url.searchParams.get('t'))).toEqual(
       TARGET

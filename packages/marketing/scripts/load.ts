@@ -1,13 +1,13 @@
 // Load check against the Global Constraints targets: claim query time with 1,000,000 pending steps,
 // consumer throughput with 95% of events pre-filtered out, and one 200-step tick.
 // Usage: DATABASE_URL=<..._test database> REDIS_URL=... bun scripts/load.ts
-// Seeds into schema nudge only, under project ids starting with LOAD_PREFIX, and removes them at the end
-// (NUDGE_LOAD_KEEP=1 keeps them). Refuses any database whose name does not end in _test unless NUDGE_LOAD_ALLOW=1.
+// Seeds into schema marketing only, under project ids starting with LOAD_PREFIX, and removes them at the end
+// (MARKETING_LOAD_KEEP=1 keeps them). Refuses any database whose name does not end in _test unless MARKETING_LOAD_ALLOW=1.
 
 import { randomUUID } from 'node:crypto';
-import type { NudgeConfig } from '../src/config';
+import type { MarketingConfig } from '../src/config';
 
-const LOAD_PREFIX = 'nudge-load-';
+const LOAD_PREFIX = 'marketing-load-';
 const FILTER_PROJECT = `${LOAD_PREFIX}filter`;
 const KEEP_ALL_PROJECT = `${LOAD_PREFIX}keep-all`;
 const TRIGGER_EVENT = 'load_trigger';
@@ -37,12 +37,12 @@ const CLAIM_TARGET_MS = 50;
 const THROUGHPUT_TARGET = 2000;
 
 const ENCRYPTION_KEY = 'a'.repeat(64);
-const CFG: NudgeConfig = {
+const CFG: MarketingConfig = {
   databaseUrl: '',
   redisUrl: '',
   encryptionKey: ENCRYPTION_KEY,
   proxySecret: '',
-  publicUrl: 'https://nudge.load',
+  publicUrl: 'https://marketing.load',
   port: 0,
   trustProxy: false,
   graceSeconds: 300,
@@ -66,10 +66,10 @@ function assertTestDatabase(): void {
   }
   const database = new URL(url).pathname.replace(/^\//, '');
   const allowed =
-    database.endsWith('_test') || process.env.NUDGE_LOAD_ALLOW === '1';
+    database.endsWith('_test') || process.env.MARKETING_LOAD_ALLOW === '1';
   if (!allowed) {
     throw new Error(
-      `refusing to seed database "${database}": its name must end in _test (or set NUDGE_LOAD_ALLOW=1)`
+      `refusing to seed database "${database}": its name must end in _test (or set MARKETING_LOAD_ALLOW=1)`
     );
   }
 }
@@ -129,7 +129,7 @@ function ruleDefinition(trigger: string, goal: unknown) {
 async function insertRule(projectId: string, definition: unknown) {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, $2, 'load', 'active', $3::jsonb)`,
     id,
     projectId,
@@ -141,7 +141,7 @@ async function insertRule(projectId: string, definition: unknown) {
 // Params: project, rule, snapshot, now, first g, last g. Enrollments g <= DUE_ENROLLMENTS start due.
 const SEED_CHUNK_SQL = `
   WITH enrollment AS (
-    INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+    INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
     SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, 'load-profile-' || g, 'active',
       CASE WHEN g <= ${DUE_ENROLLMENTS}
         THEN $4::timestamptz - interval '2 hours' - g * interval '1 second'
@@ -149,7 +149,7 @@ const SEED_CHUNK_SQL = `
     FROM generate_series($5::int, $6::int) g
     RETURNING id, trigger_time
   )
-  INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+  INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
   SELECT enrollment.id, step,
     enrollment.trigger_time + (step + 1) * interval '${STEP_SPACING_HOURS} hour', 'pending'
   FROM enrollment, generate_series(0, ${STEPS_PER_ENROLLMENT - 1}) step`;
@@ -180,18 +180,18 @@ async function seed(now: Date) {
     );
   }
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.channel_configs (project_id, channel, config_encrypted) VALUES ($1, 'webhook', $2)`,
+    `INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted) VALUES ($1, 'webhook', $2)`,
     FILTER_PROJECT,
     encryptCredential(ENCRYPTION_KEY, '{}')
   );
   for (const table of ['steps', 'enrollments', 'rules', 'events']) {
-    await sql.$executeRawUnsafe(`ANALYZE nudge.${table}`);
+    await sql.$executeRawUnsafe(`ANALYZE marketing.${table}`);
   }
   const [counts] = await sql.$queryRawUnsafe<
     { pending: number; active: number }[]
   >(
-    `SELECT (SELECT count(*) FROM nudge.steps WHERE status = 'pending')::int AS pending,
-            (SELECT count(*) FROM nudge.enrollments WHERE status = 'active')::int AS active`
+    `SELECT (SELECT count(*) FROM marketing.steps WHERE status = 'pending')::int AS pending,
+            (SELECT count(*) FROM marketing.enrollments WHERE status = 'active')::int AS active`
   );
   console.log(
     `seeded ${counts?.pending} pending steps, ${counts?.active} active enrollments in ${((performance.now() - started) / 1000).toFixed(1)} s (ANALYZE done)`
@@ -320,7 +320,7 @@ async function measureTick() {
   const lines: string[] = [];
   for (let run = 0; run < TICK_RUNS; run++) {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.consumer_state (id, lag, updated_at) VALUES (1, 0, $1::timestamptz)
+      `INSERT INTO marketing.consumer_state (id, lag, updated_at) VALUES (1, 0, $1::timestamptz)
        ON CONFLICT (id) DO UPDATE SET lag = 0, updated_at = EXCLUDED.updated_at`,
       new Date().toISOString()
     );
@@ -335,7 +335,7 @@ async function measureTick() {
       engine,
       cfg: CFG,
       now: () => new Date(),
-      renderUnsubscribeUrl: () => 'https://nudge.load/u',
+      renderUnsubscribeUrl: () => 'https://marketing.load/u',
       state: healSweep,
     });
     const ended = performance.now();
@@ -468,13 +468,13 @@ async function measureThroughput() {
 async function cleanup() {
   const like = `${LOAD_PREFIX}%`;
   await sql.$executeRawUnsafe(
-    `DELETE FROM nudge.steps s USING nudge.enrollments e
+    `DELETE FROM marketing.steps s USING marketing.enrollments e
      WHERE e.id = s.enrollment_id AND e.project_id LIKE $1`,
     like
   );
   for (const table of ['enrollments', 'rules', 'events', 'channel_configs']) {
     await sql.$executeRawUnsafe(
-      `DELETE FROM nudge.${table} WHERE project_id LIKE $1`,
+      `DELETE FROM marketing.${table} WHERE project_id LIKE $1`,
       like
     );
   }
@@ -484,12 +484,12 @@ async function cleanup() {
 // Rows of other projects (e.g. left by a test run) would be claimed by the measured ticks.
 async function assertNoForeignRows() {
   const [row] = await sql.$queryRawUnsafe<{ other_rows: number }[]>(
-    'SELECT count(*)::int AS other_rows FROM nudge.enrollments WHERE project_id NOT LIKE $1',
+    'SELECT count(*)::int AS other_rows FROM marketing.enrollments WHERE project_id NOT LIKE $1',
     `${LOAD_PREFIX}%`
   );
   if (row?.other_rows) {
     throw new Error(
-      `nudge.enrollments holds ${row.other_rows} rows of other projects; empty the test schema's tables before a load run`
+      `marketing.enrollments holds ${row.other_rows} rows of other projects; empty the test schema's tables before a load run`
     );
   }
 }
@@ -499,7 +499,7 @@ async function main() {
   await cleanup();
   await assertNoForeignRows();
   const [consumerState] = await sql.$queryRawUnsafe<unknown[]>(
-    'SELECT 1 FROM nudge.consumer_state WHERE id = 1'
+    'SELECT 1 FROM marketing.consumer_state WHERE id = 1'
   );
   try {
     await seed(new Date());
@@ -525,12 +525,12 @@ async function main() {
       `runTick, 200-step batch, no-op adapter        ${ms(tick.median).padEnd(15)} (no target)`
     );
   } finally {
-    if (process.env.NUDGE_LOAD_KEEP === '1') {
-      console.log('\nNUDGE_LOAD_KEEP=1: seeded rows kept');
+    if (process.env.MARKETING_LOAD_KEEP === '1') {
+      console.log('\nMARKETING_LOAD_KEEP=1: seeded rows kept');
     } else {
       await cleanup();
       if (!consumerState) {
-        await sql.$executeRawUnsafe('DELETE FROM nudge.consumer_state');
+        await sql.$executeRawUnsafe('DELETE FROM marketing.consumer_state');
       }
       console.log('\ncleaned up seeded rows');
     }

@@ -120,8 +120,8 @@ export function createWebhookAdapter(
       const timestamp = String(Math.floor(Date.now() / 1000));
       const headers = {
         'content-type': 'application/json',
-        'x-nudge-timestamp': timestamp,
-        'x-nudge-signature': sign(config.secrets[0] ?? '', timestamp, body),
+        'x-marketing-timestamp': timestamp,
+        'x-marketing-signature': sign(config.secrets[0] ?? '', timestamp, body),
         'idempotency-key': opts.idempotencyKey,
       };
       return withSendTimeout(timeoutMs, async (signal) => {

@@ -9,7 +9,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 import { type NormalizedEvent, normalizeEvent } from '../events/normalize';
 import type { Goal, RuleDefinition } from '../rules/rule.schema';
 import {
@@ -61,7 +61,7 @@ async function insertRule(
 ): Promise<string> {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, $2, $3, $4, $5::jsonb)`,
     id,
     projectId,
@@ -102,7 +102,7 @@ interface EnrollmentRow {
 function enrollments(): Promise<EnrollmentRow[]> {
   return sql.$queryRawUnsafe<EnrollmentRow[]>(
     `SELECT id::text, project_id, match_value, status, end_reason, trigger_time, rule_snapshot
-     FROM nudge.enrollments ORDER BY match_value, created_at, trigger_time`
+     FROM marketing.enrollments ORDER BY match_value, created_at, trigger_time`
   );
 }
 
@@ -110,7 +110,7 @@ function steps(
   enrollmentId?: string
 ): Promise<{ step_index: number; due_at: Date; status: string }[]> {
   return sql.$queryRawUnsafe(
-    `SELECT step_index, due_at, status FROM nudge.steps
+    `SELECT step_index, due_at, status FROM marketing.steps
      WHERE $1::uuid IS NULL OR enrollment_id = $1::uuid
      ORDER BY enrollment_id, step_index`,
     enrollmentId ?? null
@@ -163,7 +163,7 @@ async function waitForBlockedSession() {
 
 async function insertReferenceSet(setKey: string, values: string[]) {
   await sql.$executeRawUnsafe(
-    'INSERT INTO nudge.reference_sets (project_id, set_key, values) VALUES ($1, $2, $3::jsonb)',
+    'INSERT INTO marketing.reference_sets (project_id, set_key, values) VALUES ($1, $2, $3::jsonb)',
     PROJECT_A,
     setKey,
     JSON.stringify(values)
@@ -172,7 +172,7 @@ async function insertReferenceSet(setKey: string, values: string[]) {
 
 async function count(table: string): Promise<number> {
   const [row] = await sql.$queryRawUnsafe<{ count: number }[]>(
-    `SELECT count(*)::int AS count FROM nudge.${table}`
+    `SELECT count(*)::int AS count FROM marketing.${table}`
   );
   return row?.count ?? 0;
 }
@@ -292,10 +292,10 @@ describe('engine', () => {
   });
   beforeEach(async () => {
     clock = NOW;
-    await resetNudgeTables();
+    await resetMarketingTables();
   });
   afterAll(async () => {
-    await resetNudgeTables();
+    await resetMarketingTables();
     await sql.$disconnect();
   });
 
@@ -474,7 +474,7 @@ describe('engine', () => {
       })
     );
     await sql.$executeRawUnsafe(
-      'INSERT INTO nudge.reference_sets (project_id, set_key, values) VALUES ($1, $2, $3::jsonb)',
+      'INSERT INTO marketing.reference_sets (project_id, set_key, values) VALUES ($1, $2, $3::jsonb)',
       PROJECT_A,
       BOOK_A,
       JSON.stringify(['s1', 's2', 's3'])
@@ -533,7 +533,7 @@ describe('engine', () => {
     });
 
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.reference_sets (project_id, set_key, values) VALUES ($1, 'none', '[]'::jsonb)`,
+      `INSERT INTO marketing.reference_sets (project_id, set_key, values) VALUES ($1, 'none', '[]'::jsonb)`,
       PROJECT_A
     );
     await engine.handleEvent(
@@ -546,12 +546,12 @@ describe('engine', () => {
     await insertRule(
       rule({
         trigger: { event: 'app_opened' },
-        goal: { kind: 'inactivity', excludeEvents: ['nudge_clicked'] },
+        goal: { kind: 'inactivity', excludeEvents: ['marketing_clicked'] },
       })
     );
     await engine.handleEvent(event('app_opened', at(0)));
     await engine.handleEvent(event('page_view', at(30)));
-    await engine.handleEvent(event('nudge_clicked', at(60)));
+    await engine.handleEvent(event('marketing_clicked', at(60)));
     await engine.handleEvent(event('page_view', at(20)));
 
     const enrollment = await onlyEnrollment();
@@ -566,12 +566,12 @@ describe('engine', () => {
     await insertRule(
       rule({
         trigger: { event: 'app_opened' },
-        goal: { kind: 'inactivity', excludeEvents: ['nudge_clicked'] },
+        goal: { kind: 'inactivity', excludeEvents: ['marketing_clicked'] },
       })
     );
     await engine.handleEvent(event('page_view', at(-5)));
     await engine.handleEvent(event('page_view', at(30)));
-    await engine.handleEvent(event('nudge_clicked', at(60)));
+    await engine.handleEvent(event('marketing_clicked', at(60)));
     await engine.handleEvent(event('app_opened', at(0)));
 
     expect((await steps()).map((s) => s.due_at.getTime())).toEqual([
@@ -674,7 +674,7 @@ describe('engine', () => {
     await insertReferenceSet('k', ['s1', 's2']);
     await engine.handleEvent(event('purchase', at(0), {}, { profileId: 'u1' }));
     await sql.$executeRawUnsafe(
-      `UPDATE nudge.reference_sets SET values = '["s1"]'::jsonb WHERE project_id = $1 AND set_key = 'k'`,
+      `UPDATE marketing.reference_sets SET values = '["s1"]'::jsonb WHERE project_id = $1 AND set_key = 'k'`,
       PROJECT_A
     );
     await engine.handleEvent(event('purchase', at(0), {}, { profileId: 'u2' }));
@@ -689,7 +689,7 @@ describe('engine', () => {
       { id: string; profile_id: string; status: string; values: string[] }[]
     >(
       `SELECT id::text, profile_id, status, rule_snapshot->'referenceValues' AS values
-       FROM nudge.enrollments ORDER BY profile_id`
+       FROM marketing.enrollments ORDER BY profile_id`
     );
     expect(rows.map((r) => [r.profile_id, r.status, r.values])).toEqual([
       ['u1', 'active', ['s1', 's2']],
@@ -706,7 +706,7 @@ describe('engine', () => {
     await insertRule(rule());
     await engine.handleEvent(event('purchase', at(0)));
     await sql.$executeRawUnsafe(
-      `UPDATE nudge.enrollments SET status = 'cancelled'`
+      `UPDATE marketing.enrollments SET status = 'cancelled'`
     );
     await engine.handleEvent(event('purchase', at(1)));
 
@@ -735,13 +735,13 @@ describe('engine', () => {
   it('PERF re-entry lookup in the enrollment insert uses enrollments_reentry_idx', async () => {
     const ruleId = randomUUID();
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time, created_at)
+      `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time, created_at)
        SELECT gen_random_uuid(), $1, $2::uuid, '{}'::jsonb, 'u' || (g % 2000), 'm' || g, 'completed', now(), now()
        FROM generate_series(1, 20000) g`,
       PROJECT_A,
       ruleId
     );
-    await sql.$executeRawUnsafe('ANALYZE nudge.enrollments');
+    await sql.$executeRawUnsafe('ANALYZE marketing.enrollments');
     const plan = await sql.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
       const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
@@ -826,7 +826,7 @@ describe('engine', () => {
     const rows = await sql.$queryRawUnsafe<
       { name: string; profile_id: string; properties: unknown }[]
     >(
-      'SELECT name, profile_id, properties FROM nudge.events ORDER BY event_time'
+      'SELECT name, profile_id, properties FROM marketing.events ORDER BY event_time'
     );
     expect(rows).toEqual([
       { name: 'purchase', profile_id: 'u�', properties: { book_id: 'ab' } },
@@ -883,7 +883,7 @@ describe('engine', () => {
     expect((await onlyEnrollment()).status).toBe('active');
     expect(await engine.purgeOldEvents(30)).toBe(1);
     const left = await sql.$queryRawUnsafe<{ profile_id: string }[]>(
-      'SELECT profile_id FROM nudge.events'
+      'SELECT profile_id FROM marketing.events'
     );
     expect(left.map((row) => row.profile_id)).toEqual([PROFILE, PROFILE]);
   });
@@ -921,14 +921,16 @@ describe('engine', () => {
   it('PERF a purge chunk checks enrollments through an index and old events have an event_time index', async () => {
     const ruleId = await insertRule(rule());
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+      `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
        SELECT gen_random_uuid(), $1, $2::uuid, '{}'::jsonb, 'p' || g,
          CASE WHEN g % 2 = 0 THEN 'active' ELSE 'completed' END, now()
        FROM generate_series(1, 5000) g`,
       PROJECT_A,
       ruleId
     );
-    await sql.$executeRawUnsafe('ANALYZE nudge.enrollments, nudge.events');
+    await sql.$executeRawUnsafe(
+      'ANALYZE marketing.enrollments, marketing.events'
+    );
     const plan = await sql.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
       const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
@@ -942,10 +944,10 @@ describe('engine', () => {
     // On test-sized tables the planner may prefer another index; the purge needs this one at scale.
     const indexes = await sql.$queryRawUnsafe<{ indexdef: string }[]>(
       `SELECT indexdef FROM pg_indexes
-       WHERE schemaname = 'nudge' AND indexname = 'events_event_time_idx'`
+       WHERE schemaname = 'marketing' AND indexname = 'events_event_time_idx'`
     );
     expect(indexes.map((row) => row.indexdef)).toEqual([
-      'CREATE INDEX events_event_time_idx ON nudge.events USING btree (event_time)',
+      'CREATE INDEX events_event_time_idx ON marketing.events USING btree (event_time)',
     ]);
   });
 
@@ -958,7 +960,7 @@ describe('engine', () => {
       })
     );
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.reference_sets (project_id, set_key, values) VALUES ($1, 'k', '["s1"]'::jsonb)`,
+      `INSERT INTO marketing.reference_sets (project_id, set_key, values) VALUES ($1, 'k', '["s1"]'::jsonb)`,
       PROJECT_B
     );
     const inB = { projectId: PROJECT_B };
@@ -997,7 +999,7 @@ describe('engine', () => {
     expect(await count('events')).toBe(3);
     expect((await onlyEnrollment()).status).toBe('completed');
 
-    await resetNudgeTables();
+    await resetMarketingTables();
     await insertRule(rule());
     let enrollInserts = 0;
     const failOnSecondEnrollment = (tx: object) =>
@@ -1009,7 +1011,7 @@ describe('engine', () => {
           }
           return (query: string, ...args: unknown[]) => {
             if (
-              query.includes('INSERT INTO nudge.enrollments') &&
+              query.includes('INSERT INTO marketing.enrollments') &&
               ++enrollInserts === 2
             ) {
               throw new Error('injected failure');
@@ -1104,7 +1106,7 @@ describe('engine', () => {
     const ruleId = await insertRule(rule());
     await engine.handleEvent(event('purchase', at(0)));
     await sql.$executeRawUnsafe(
-      'UPDATE nudge.rules SET definition = $2::jsonb, version = version + 1 WHERE id = $1::uuid',
+      'UPDATE marketing.rules SET definition = $2::jsonb, version = version + 1 WHERE id = $1::uuid',
       ruleId,
       JSON.stringify(rule({ goal: { kind: 'event', event: 'renamed_goal' } }))
     );
@@ -1115,12 +1117,12 @@ describe('engine', () => {
 
   it('PERF goal facts query uses the events lookup index', async () => {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.events (project_id, event_id, profile_id, name, properties, event_time)
+      `INSERT INTO marketing.events (project_id, event_id, profile_id, name, properties, event_time)
        SELECT $1, 'e' || g, 'u' || (g % 500), 'section_opened', '{"section_id":"s1"}'::jsonb, now() - (g || ' seconds')::interval
        FROM generate_series(1, 20000) g`,
       PROJECT_A
     );
-    await sql.$executeRawUnsafe('ANALYZE nudge.events');
+    await sql.$executeRawUnsafe('ANALYZE marketing.events');
     const plan = await sql.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
       const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(

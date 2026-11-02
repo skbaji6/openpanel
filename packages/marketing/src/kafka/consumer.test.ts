@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { EachBatchPayload } from 'kafkajs';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 import { createEngine, type Queryable } from '../engine/engine';
 import type { NormalizedEvent } from '../events/normalize';
 import type { Goal } from '../rules/rule.schema';
@@ -68,7 +68,7 @@ const fakeInterest: InterestSet = {
 
 async function insertRule(projectId: string, goal: Goal): Promise<void> {
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, $2, 'r', 'active', $3::jsonb)`,
     randomUUID(),
     projectId,
@@ -218,7 +218,7 @@ describe('batch handler', () => {
   });
 
   it('an identified event of an uninteresting name in a project with an inactivity rule is kept and stored', async () => {
-    await resetNudgeTables();
+    await resetMarketingTables();
     await insertRule(PROJECT, { kind: 'inactivity', excludeEvents: [] });
     const engine = createEngine({ sql });
     const interest = createMemoryInterestSet({ engine, sql });
@@ -226,7 +226,7 @@ describe('batch handler', () => {
     const handle = createBatchHandler({ engine, interest, logger });
     await handle([payload('page_view', 'stranger')]);
     const rows = await sql.$queryRawUnsafe<{ name: string }[]>(
-      `SELECT name FROM nudge.events WHERE project_id = $1 AND profile_id = 'stranger'`,
+      `SELECT name FROM marketing.events WHERE project_id = $1 AND profile_id = 'stranger'`,
       PROJECT
     );
     expect(rows.map((row) => row.name)).toEqual(['page_view']);
@@ -375,16 +375,16 @@ describe('heartbeat', () => {
 
 describe('real broker', () => {
   it(
-    'an IncomingEventPayload published to the topic lands in nudge.events',
+    'an IncomingEventPayload published to the topic lands in marketing.events',
     async () => {
-      await resetNudgeTables();
+      await resetMarketingTables();
       await insertRule(PROJECT, { kind: 'event', event: 'opened' });
       const runId = randomUUID();
       const kafkaConfig = {
         brokers: (process.env.KAFKA_BROKERS ?? '127.0.0.1:23092').split(','),
-        clientId: `nudge-test-${runId}`,
-        topic: `nudge-test-${runId}`,
-        groupId: `nudge-test-${runId}`,
+        clientId: `marketing-test-${runId}`,
+        topic: `marketing-test-${runId}`,
+        groupId: `marketing-test-${runId}`,
         ssl: false as const,
       };
       const kafka = createKafka(kafkaConfig);
@@ -415,7 +415,7 @@ describe('real broker', () => {
           });
           await Bun.sleep(POLL_MS);
           rows = await sql.$queryRawUnsafe<{ profile_id: string }[]>(
-            'SELECT profile_id FROM nudge.events WHERE project_id = $1 AND name = $2',
+            'SELECT profile_id FROM marketing.events WHERE project_id = $1 AND name = $2',
             PROJECT,
             RULE_EVENT
           );

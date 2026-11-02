@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { getRedisCache, type Redis } from '@openpanel/redis';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 import { createEngine, type Queryable } from '../engine/engine';
 import type { NormalizedEvent } from '../events/normalize';
 import type { RuleDefinition } from '../rules/rule.schema';
@@ -44,7 +44,7 @@ function rule(overrides: Partial<RuleDefinition> = {}): RuleDefinition {
 
 async function insertRule(definition: RuleDefinition): Promise<void> {
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, $2, $3, 'active', $4::jsonb)`,
     randomUUID(),
     PROJECT,
@@ -69,7 +69,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await resetNudgeTables();
+  await resetMarketingTables();
   await getRedisCache().del(INTEREST_PROFILES_KEY);
 });
 
@@ -142,7 +142,7 @@ function sqlAddingDuringSelect(addFresh: () => Promise<void>): Queryable {
   return {
     $queryRawUnsafe: async (query: string, ...values: unknown[]) => {
       const rows = await sql.$queryRawUnsafe(query, ...values);
-      if (query.includes('FROM nudge.enrollments')) {
+      if (query.includes('FROM marketing.enrollments')) {
         await addFresh();
       }
       return rows;

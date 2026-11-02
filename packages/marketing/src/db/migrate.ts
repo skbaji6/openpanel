@@ -27,9 +27,9 @@ export async function migrate(): Promise<string[]> {
       await tx.$executeRawUnsafe(
         `SELECT pg_advisory_xact_lock(${MIGRATION_LOCK_KEY})`
       );
-      await tx.$executeRawUnsafe('CREATE SCHEMA IF NOT EXISTS nudge');
+      await tx.$executeRawUnsafe('CREATE SCHEMA IF NOT EXISTS marketing');
       await tx.$executeRawUnsafe(
-        `CREATE TABLE IF NOT EXISTS nudge.schema_migrations (
+        `CREATE TABLE IF NOT EXISTS marketing.schema_migrations (
            name text PRIMARY KEY,
            applied_at timestamptz NOT NULL DEFAULT now()
          )`
@@ -37,7 +37,7 @@ export async function migrate(): Promise<string[]> {
       const done = new Set(
         (
           await tx.$queryRawUnsafe<{ name: string }[]>(
-            'SELECT name FROM nudge.schema_migrations'
+            'SELECT name FROM marketing.schema_migrations'
           )
         ).map((row) => row.name)
       );
@@ -55,7 +55,7 @@ export async function migrate(): Promise<string[]> {
           await tx.$executeRawUnsafe(statement);
         }
         await tx.$executeRawUnsafe(
-          'INSERT INTO nudge.schema_migrations (name) VALUES ($1)',
+          'INSERT INTO marketing.schema_migrations (name) VALUES ($1)',
           file
         );
         applied.push(file);

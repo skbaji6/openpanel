@@ -44,12 +44,12 @@ export function clientIp(
 }
 
 export function authenticateDashboard(req: Request, proxySecret: string) {
-  const given = req.headers.get('x-nudge-proxy-secret');
+  const given = req.headers.get('x-marketing-proxy-secret');
   if (given === null || !secretsMatch(given, proxySecret)) {
     throw new HttpError(401, 'unauthorized');
   }
-  const projectId = req.headers.get('x-nudge-project-id') ?? '';
-  const userId = req.headers.get('x-nudge-user-id') ?? '';
+  const projectId = req.headers.get('x-marketing-project-id') ?? '';
+  const userId = req.headers.get('x-marketing-user-id') ?? '';
   const validIdentity =
     DASHBOARD_ID_PATTERN.test(projectId) && DASHBOARD_ID_PATTERN.test(userId);
   if (!validIdentity) {
@@ -57,7 +57,7 @@ export function authenticateDashboard(req: Request, proxySecret: string) {
   }
   if (
     MUTATING_METHODS.has(req.method) &&
-    req.headers.get('x-nudge-csrf') !== '1'
+    req.headers.get('x-marketing-csrf') !== '1'
   ) {
     throw new HttpError(403, 'csrf_header_required');
   }
@@ -103,7 +103,7 @@ export function createApiKeyVerifier(deps: {
     const [row] = await deps.sql.$queryRawUnsafe<
       { project_id: string; key_hash: string }[]
     >(
-      'SELECT project_id, key_hash FROM nudge.api_keys WHERE id = $1::uuid',
+      'SELECT project_id, key_hash FROM marketing.api_keys WHERE id = $1::uuid',
       id
     );
     if (!(row && secret && (await verifySecret(secret, row.key_hash)))) {

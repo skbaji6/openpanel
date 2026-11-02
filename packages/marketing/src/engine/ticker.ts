@@ -7,7 +7,7 @@ import type {
   RenderedMessage,
   SendResult,
 } from '../channels/types';
-import type { NudgeConfig } from '../config';
+import type { MarketingConfig } from '../config';
 import { redactSecrets } from '../redact';
 import type { Step } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
@@ -33,7 +33,7 @@ const RETRY_BACKOFF_MS = 60_000;
 const MARK_RETRY_DELAYS_MS = [100, 400];
 // A locked write may wait on the engine's profile lock, which a consumer batch holds for up to 60 s.
 const LOCKED_TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
-const LOG_PREFIX = 'nudge ticker:';
+const LOG_PREFIX = 'marketing ticker:';
 // Shorter config strings (flags, ports) would blank out unrelated words in the log.
 const MIN_SECRET_LENGTH = 4;
 // The sweep only heals completions whose best-effort write failed, so it need not run every tick.
@@ -46,7 +46,7 @@ export interface TickDeps {
   sql: Sql;
   engine: Engine;
   now: () => Date;
-  cfg: NudgeConfig;
+  cfg: MarketingConfig;
   renderUnsubscribeUrl: (
     projectId: string,
     profileId: string,
@@ -107,17 +107,17 @@ const zQuietHours = z
   .object({ start: z.string(), end: z.string(), timezone: z.string() })
   .nullable();
 
-const ACTIVE = `EXISTS (SELECT 1 FROM nudge.enrollments ae JOIN nudge.rules ar ON ar.id = ae.rule_id
+const ACTIVE = `EXISTS (SELECT 1 FROM marketing.enrollments ae JOIN marketing.rules ar ON ar.id = ae.rule_id
   WHERE ae.id = s.enrollment_id AND ae.status = 'active' AND ar.status = 'active')`;
 // Steps go out in order: a step is claimable only once every earlier step of its enrollment is final.
-const EARLIER_STEPS_FINAL = `NOT EXISTS (SELECT 1 FROM nudge.steps earlier
+const EARLIER_STEPS_FINAL = `NOT EXISTS (SELECT 1 FROM marketing.steps earlier
   WHERE earlier.enrollment_id = s.enrollment_id AND earlier.step_index < s.step_index
     AND earlier.status IN ('pending', 'sending'))`;
 
 // Params: now. Expired leases of ended enrollments or inactive rules are cancelled, never resent.
 // Set-based without the profile lock: it only touches 'sending' rows, which the engine never writes.
 const CANCEL_ORPHANED_SQL = `
-  UPDATE nudge.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
+  UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
     lease_until = NULL, sent_at = NULL
   WHERE s.status = 'sending' AND s.lease_until < $1::timestamptz AND NOT ${ACTIVE}`;
 
@@ -125,16 +125,16 @@ const CANCEL_ORPHANED_SQL = `
 // Both arms walk a partial index; the joins keep paused rules and ended enrollments out of the batch.
 export const CLAIM_SQL = `
   WITH expired AS (
-    SELECT s.enrollment_id, s.step_index FROM nudge.steps s
-    JOIN nudge.enrollments e ON e.id = s.enrollment_id AND e.status = 'active'
-    JOIN nudge.rules r ON r.id = e.rule_id AND r.status = 'active'
+    SELECT s.enrollment_id, s.step_index FROM marketing.steps s
+    JOIN marketing.enrollments e ON e.id = s.enrollment_id AND e.status = 'active'
+    JOIN marketing.rules r ON r.id = e.rule_id AND r.status = 'active'
     WHERE s.status = 'sending' AND s.lease_until < $1::timestamptz
     ORDER BY s.lease_until LIMIT $3::int
     FOR UPDATE OF s SKIP LOCKED
   ), due AS (
-    SELECT s.enrollment_id, s.step_index FROM nudge.steps s
-    JOIN nudge.enrollments e ON e.id = s.enrollment_id AND e.status = 'active'
-    JOIN nudge.rules r ON r.id = e.rule_id AND r.status = 'active'
+    SELECT s.enrollment_id, s.step_index FROM marketing.steps s
+    JOIN marketing.enrollments e ON e.id = s.enrollment_id AND e.status = 'active'
+    JOIN marketing.rules r ON r.id = e.rule_id AND r.status = 'active'
     WHERE s.status = 'pending' AND s.due_at <= $2::timestamptz AND ${EARLIER_STEPS_FINAL}
     ORDER BY s.due_at LIMIT $3::int
     FOR UPDATE OF s SKIP LOCKED
@@ -143,30 +143,30 @@ export const CLAIM_SQL = `
     FROM (SELECT * FROM expired UNION ALL SELECT * FROM due) candidates
     ORDER BY enrollment_id, step_index
   )
-  UPDATE nudge.steps s
+  UPDATE marketing.steps s
   SET status = 'sending', lease_until = $4::timestamptz, attempt = s.attempt + 1
   FROM (SELECT * FROM picked LIMIT $3::int) chosen
   WHERE s.enrollment_id = chosen.enrollment_id AND s.step_index = chosen.step_index
   RETURNING s.enrollment_id::text, s.step_index, s.attempt,
-    NOT EXISTS (SELECT 1 FROM nudge.steps later
+    NOT EXISTS (SELECT 1 FROM marketing.steps later
                 WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last`;
 
 // Params: enrollment id, step index.
 const CONTEXT_SQL = `
   WITH en AS (
     SELECT e.*, e.rule_snapshot->'steps'->$2::int->>'channel' AS channel
-    FROM nudge.enrollments e WHERE e.id = $1::uuid
+    FROM marketing.enrollments e WHERE e.id = $1::uuid
   )
   SELECT en.project_id, en.profile_id, en.rule_id::text, en.rule_snapshot,
     c.email, c.attributes,
-    EXISTS (SELECT 1 FROM nudge.opt_outs o
+    EXISTS (SELECT 1 FROM marketing.opt_outs o
             WHERE o.project_id = en.project_id AND o.profile_id = en.profile_id
               AND o.channel = en.channel) AS opted_out,
-    ARRAY (SELECT d.token FROM nudge.devices d
+    ARRAY (SELECT d.token FROM marketing.devices d
            WHERE d.project_id = en.project_id AND d.profile_id = en.profile_id
            ORDER BY d.token) AS device_tokens,
     ps.caps, ps.quiet_hours, cc.config_encrypted,
-    (SELECT ev.properties FROM nudge.events ev
+    (SELECT ev.properties FROM marketing.events ev
      WHERE ev.project_id = en.project_id AND ev.profile_id = en.profile_id
        AND ev.name = en.rule_snapshot->'trigger'->>'event'
        AND ev.event_time = en.trigger_time
@@ -174,9 +174,9 @@ const CONTEXT_SQL = `
             OR ev.properties->>(en.rule_snapshot->>'matchOn') = en.match_value)
      ORDER BY ev.event_id LIMIT 1) AS trigger_properties
   FROM en
-  LEFT JOIN nudge.contacts c ON c.project_id = en.project_id AND c.profile_id = en.profile_id
-  LEFT JOIN nudge.project_settings ps ON ps.project_id = en.project_id
-  LEFT JOIN nudge.channel_configs cc ON cc.project_id = en.project_id AND cc.channel = en.channel`;
+  LEFT JOIN marketing.contacts c ON c.project_id = en.project_id AND c.profile_id = en.profile_id
+  LEFT JOIN marketing.project_settings ps ON ps.project_id = en.project_id
+  LEFT JOIN marketing.channel_configs cc ON cc.project_id = en.project_id AND cc.channel = en.channel`;
 
 // Every write is fenced by status and attempt: a tick whose lease was reclaimed changes nothing.
 const OWNED = `s.enrollment_id = $1::uuid AND s.step_index = $2::int AND s.status = 'sending' AND s.attempt = $3::int`;
@@ -184,31 +184,31 @@ const OWNED = `s.enrollment_id = $1::uuid AND s.step_index = $2::int AND s.statu
 // Params: enrollment, step, attempt, status, outcome, sent_at. One statement, no profile lock,
 // so a send's result is recorded even while the engine holds the profile.
 export const MARK_SQL = `
-  UPDATE nudge.steps s SET status = $4, outcome = $5::jsonb, sent_at = $6::timestamptz, lease_until = NULL
+  UPDATE marketing.steps s SET status = $4, outcome = $5::jsonb, sent_at = $6::timestamptz, lease_until = NULL
   WHERE ${OWNED}`;
 
 // Params: enrollment, step, attempt, now, new lease end.
 const EXTEND_LEASE_SQL = `
-  UPDATE nudge.steps s SET lease_until = $5::timestamptz
+  UPDATE marketing.steps s SET lease_until = $5::timestamptz
   WHERE ${OWNED} AND s.lease_until > $4::timestamptz AND ${ACTIVE}`;
 
 // Params: enrollment, step, attempt.
 const CANCEL_IF_INACTIVE_SQL = `
-  UPDATE nudge.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
+  UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
     lease_until = NULL, sent_at = NULL
   WHERE ${OWNED} AND NOT ${ACTIVE}`;
 
 // Params: enrollment, step, attempt.
 const GOAL_MET_SQL = `
   WITH step AS (
-    UPDATE nudge.steps s SET status = 'cancelled', outcome = '{"reason":"goal_met"}',
+    UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"goal_met"}',
       lease_until = NULL, sent_at = NULL
     WHERE ${OWNED} RETURNING s.enrollment_id
   ), rest AS (
-    UPDATE nudge.steps SET status = 'cancelled'
+    UPDATE marketing.steps SET status = 'cancelled'
     WHERE enrollment_id = $1::uuid AND status = 'pending' RETURNING 1
   ), done AS (
-    UPDATE nudge.enrollments SET status = 'completed', end_reason = 'goal'
+    UPDATE marketing.enrollments SET status = 'completed', end_reason = 'goal'
     WHERE id = $1::uuid AND status = 'active' RETURNING 1
   )
   SELECT count(*)::int AS updated FROM step`;
@@ -216,47 +216,47 @@ const GOAL_MET_SQL = `
 // Params: enrollment, step, attempt, due_at, outcome, attempts to give back.
 // Under an enrollment that ended meanwhile the step is cancelled instead of orphaned as pending.
 const REQUEUE_SQL = `
-  UPDATE nudge.steps s SET
+  UPDATE marketing.steps s SET
     status = CASE WHEN e.status = 'active' THEN 'pending' ELSE 'cancelled' END,
     due_at = $4::timestamptz, outcome = $5::jsonb,
     attempt = s.attempt - $6::int, lease_until = NULL, sent_at = NULL
-  FROM nudge.enrollments e
+  FROM marketing.enrollments e
   WHERE e.id = s.enrollment_id AND ${OWNED}
   RETURNING s.status`;
 
 // A reserved step carries sent_at while it is still sending, so concurrent sends count against the cap.
-const RESERVE_SQL = `UPDATE nudge.steps s SET sent_at = $4::timestamptz WHERE ${OWNED}`;
+const RESERVE_SQL = `UPDATE marketing.steps s SET sent_at = $4::timestamptz WHERE ${OWNED}`;
 
 const PROFILE_OF_SQL = `
   SELECT project_id AS "projectId", profile_id AS "profileId"
-  FROM nudge.enrollments WHERE id = $1::uuid`;
+  FROM marketing.enrollments WHERE id = $1::uuid`;
 
 const COMPLETE_IF_DONE_SQL = `
-  UPDATE nudge.enrollments e SET status = 'completed', end_reason = 'exhausted'
+  UPDATE marketing.enrollments e SET status = 'completed', end_reason = 'exhausted'
   WHERE e.id = $1::uuid AND e.status = 'active'
-    AND NOT EXISTS (SELECT 1 FROM nudge.steps s
+    AND NOT EXISTS (SELECT 1 FROM marketing.steps s
                     WHERE s.enrollment_id = e.id AND s.status IN ('pending', 'sending'))`;
 
 // Params: batch size. Heals completions that failed after a step's final mark.
 const UNFINISHED_COMPLETIONS_SQL = `
-  SELECT e.id::text FROM nudge.enrollments e
+  SELECT e.id::text FROM marketing.enrollments e
   WHERE e.status = 'active'
-    AND EXISTS (SELECT 1 FROM nudge.steps s WHERE s.enrollment_id = e.id)
-    AND NOT EXISTS (SELECT 1 FROM nudge.steps s
+    AND EXISTS (SELECT 1 FROM marketing.steps s WHERE s.enrollment_id = e.id)
+    AND NOT EXISTS (SELECT 1 FROM marketing.steps s
                     WHERE s.enrollment_id = e.id AND s.status IN ('pending', 'sending'))
   LIMIT $1::int`;
 
 // Params: project, profile, tokens. Scoped to the recipient so an adapter result cannot touch other profiles.
 const DELETE_INVALID_TOKENS_SQL = `
-  DELETE FROM nudge.devices
+  DELETE FROM marketing.devices
   WHERE project_id = $1 AND profile_id = $2 AND token = ANY($3::text[])`;
 
 const CAP_LOCK_SQL = 'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))';
 
 // Params: project, profile, channel, window start, enrollment, step.
 const CAP_COUNT_SQL = `
-  SELECT count(*)::int AS n FROM nudge.enrollments e
-  JOIN nudge.steps s ON s.enrollment_id = e.id
+  SELECT count(*)::int AS n FROM marketing.enrollments e
+  JOIN marketing.steps s ON s.enrollment_id = e.id
   WHERE e.project_id = $1 AND e.profile_id = $2
     AND e.rule_snapshot->'steps'->s.step_index->>'channel' = $3
     AND s.status IN ('sent', 'sending') AND s.sent_at > $4::timestamptz
@@ -309,7 +309,7 @@ async function runPool<T>(
 async function readLagState(sql: Sql) {
   const [row] = await sql.$queryRawUnsafe<
     { lag: bigint | number; updated_at: Date }[]
-  >('SELECT lag, updated_at FROM nudge.consumer_state WHERE id = 1');
+  >('SELECT lag, updated_at FROM marketing.consumer_state WHERE id = 1');
   return row ? { lag: Number(row.lag), updatedAt: row.updated_at } : null;
 }
 

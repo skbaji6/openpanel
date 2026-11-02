@@ -5,8 +5,8 @@ const required = {
   DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
   REDIS_URL: 'redis://localhost:6379',
   ENCRYPTION_KEY: 'k'.repeat(32),
-  NUDGE_PROXY_SECRET: 'proxy-secret',
-  NUDGE_PUBLIC_URL: 'https://nudge.example.com',
+  MARKETING_PROXY_SECRET: 'proxy-secret',
+  MARKETING_PUBLIC_URL: 'https://marketing.example.com',
   KAFKA_BROKERS: 'localhost:9092',
   KAFKA_EVENTS_TOPIC: 'events',
 };
@@ -29,39 +29,41 @@ describe('loadConfig', () => {
     expect(config.kafka.sasl).toBeUndefined();
   });
 
-  it('NUDGE_DB_POOL=13 yields connection_limit=13 and replaces an existing connection_limit param', () => {
+  it('MARKETING_DB_POOL=13 yields connection_limit=13 and replaces an existing connection_limit param', () => {
     const config = loadConfig({
       ...required,
       DATABASE_URL: `${required.DATABASE_URL}?connection_limit=50&schema=public`,
-      NUDGE_DB_POOL: '13',
+      MARKETING_DB_POOL: '13',
     });
     const url = new URL(config.databaseUrl);
     expect(url.searchParams.getAll('connection_limit')).toEqual(['13']);
     expect(url.searchParams.get('schema')).toBe('public');
   });
 
-  it('NUDGE_TRUST_PROXY=true trusts x-forwarded-for; a typo throws', () => {
+  it('MARKETING_TRUST_PROXY=true trusts x-forwarded-for; a typo throws', () => {
     expect(
-      loadConfig({ ...required, NUDGE_TRUST_PROXY: 'true' }).trustProxy
+      loadConfig({ ...required, MARKETING_TRUST_PROXY: 'true' }).trustProxy
     ).toBe(true);
-    expect(() => loadConfig({ ...required, NUDGE_TRUST_PROXY: 'yes' })).toThrow(
-      /NUDGE_TRUST_PROXY/
-    );
+    expect(() =>
+      loadConfig({ ...required, MARKETING_TRUST_PROXY: 'yes' })
+    ).toThrow(/MARKETING_TRUST_PROXY/);
   });
 
-  it('NUDGE_PUBLIC_URL must be an http(s) URL and loses its trailing slash', () => {
+  it('MARKETING_PUBLIC_URL must be an http(s) URL and loses its trailing slash', () => {
     expect(
-      loadConfig({ ...required, NUDGE_PUBLIC_URL: 'https://n.example.com/' })
-        .publicUrl
+      loadConfig({
+        ...required,
+        MARKETING_PUBLIC_URL: 'https://n.example.com/',
+      }).publicUrl
     ).toBe('https://n.example.com');
     for (const bad of [
       'n.example.com',
       'ftp://n.example.com',
       'javascript:x',
     ]) {
-      expect(() => loadConfig({ ...required, NUDGE_PUBLIC_URL: bad })).toThrow(
-        /NUDGE_PUBLIC_URL: must be an http\(s\) URL/
-      );
+      expect(() =>
+        loadConfig({ ...required, MARKETING_PUBLIC_URL: bad })
+      ).toThrow(/MARKETING_PUBLIC_URL: must be an http\(s\) URL/);
     }
   });
 
@@ -72,25 +74,25 @@ describe('loadConfig', () => {
     expect(attempt).not.toThrow(/hunter2/);
   });
 
-  it('NUDGE_DB_POOL must leave room for every concurrent send plus 3', () => {
-    expect(() => loadConfig({ ...required, NUDGE_DB_POOL: '12' })).toThrow(
-      /NUDGE_DB_POOL: must be at least NUDGE_SEND_CONCURRENCY \+ 3 \(13\)/
+  it('MARKETING_DB_POOL must leave room for every concurrent send plus 3', () => {
+    expect(() => loadConfig({ ...required, MARKETING_DB_POOL: '12' })).toThrow(
+      /MARKETING_DB_POOL: must be at least MARKETING_SEND_CONCURRENCY \+ 3 \(13\)/
     );
     expect(
       loadConfig({
         ...required,
-        NUDGE_DB_POOL: '6',
-        NUDGE_SEND_CONCURRENCY: '3',
+        MARKETING_DB_POOL: '6',
+        MARKETING_SEND_CONCURRENCY: '3',
       }).dbPool
     ).toBe(6);
   });
 
-  it('NUDGE_LEASE_SECONDS must exceed the send timeout plus mark retries', () => {
+  it('MARKETING_LEASE_SECONDS must exceed the send timeout plus mark retries', () => {
     expect(() =>
-      loadConfig({ ...required, NUDGE_LEASE_SECONDS: '31' })
-    ).toThrow(/NUDGE_LEASE_SECONDS: must be greater than 31/);
+      loadConfig({ ...required, MARKETING_LEASE_SECONDS: '31' })
+    ).toThrow(/MARKETING_LEASE_SECONDS: must be greater than 31/);
     expect(
-      loadConfig({ ...required, NUDGE_LEASE_SECONDS: '32' }).leaseSeconds
+      loadConfig({ ...required, MARKETING_LEASE_SECONDS: '32' }).leaseSeconds
     ).toBe(32);
   });
 
@@ -103,7 +105,7 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...required, KAFKA_EVENTS_TOPIC: '  ' })).toThrow(
       /KAFKA_EVENTS_TOPIC/
     );
-    expect(loadConfig({ ...required, NUDGE_PORT: '' }).port).toBe(4100);
+    expect(loadConfig({ ...required, MARKETING_PORT: '' }).port).toBe(4100);
   });
 
   it('KAFKA_SASL_USERNAME without password throws', () => {
@@ -126,15 +128,15 @@ describe('loadConfig', () => {
     expect(config.kafka.ssl).toBeTruthy();
   });
 
-  it('NUDGE_WEBHOOK_ALLOW_HOSTS "a.internal, b.internal" parses to two hosts', () => {
+  it('MARKETING_WEBHOOK_ALLOW_HOSTS "a.internal, b.internal" parses to two hosts', () => {
     const config = loadConfig({
       ...required,
-      NUDGE_WEBHOOK_ALLOW_HOSTS: 'a.internal, b.internal',
+      MARKETING_WEBHOOK_ALLOW_HOSTS: 'a.internal, b.internal',
     });
     expect(config.webhookAllowHosts).toEqual(['a.internal', 'b.internal']);
   });
 
-  it('NUDGE_WEBHOOK_ALLOW_HOSTS rejects entries with a scheme, port, path or IPv6 literal', () => {
+  it('MARKETING_WEBHOOK_ALLOW_HOSTS rejects entries with a scheme, port, path or IPv6 literal', () => {
     for (const entry of [
       'https://a.internal',
       'a.internal:8080',
@@ -144,9 +146,9 @@ describe('loadConfig', () => {
       expect(() =>
         loadConfig({
           ...required,
-          NUDGE_WEBHOOK_ALLOW_HOSTS: `ok.internal,${entry}`,
+          MARKETING_WEBHOOK_ALLOW_HOSTS: `ok.internal,${entry}`,
         })
-      ).toThrow(/NUDGE_WEBHOOK_ALLOW_HOSTS/);
+      ).toThrow(/MARKETING_WEBHOOK_ALLOW_HOSTS/);
     }
   });
 });

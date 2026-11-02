@@ -1,4 +1,4 @@
-import type { NudgeConfig } from '../config';
+import type { MarketingConfig } from '../config';
 import type { Sql } from '../engine/engine';
 import { redactSecrets } from '../redact';
 import type { WorkerContext } from '../worker';
@@ -14,12 +14,12 @@ import { dashboardRoutes } from './routes-dashboard';
 import { syncRoutes } from './routes-sync';
 import { createUnsubscribeHandlers } from './unsubscribe';
 
-const LOG_PREFIX = 'nudge api:';
+const LOG_PREFIX = 'marketing api:';
 const RATE_LIMIT = 30;
 const RATE_WINDOW_MS = 60_000;
 
 export interface ServerDeps {
-  cfg: NudgeConfig;
+  cfg: MarketingConfig;
   sql: Sql;
   // Lets the worker refresh its interest set as soon as rules change instead of on the next interval.
   onRulesChanged?: () => Promise<void>;
@@ -84,7 +84,7 @@ export function createServer(deps: ServerDeps) {
   const routes: Route[] = [
     {
       method: 'GET',
-      pattern: /^\/nudge\/health$/,
+      pattern: /^\/marketing\/health$/,
       auth: 'public',
       handle: () => json({ ok: true }),
     },
@@ -92,13 +92,13 @@ export function createServer(deps: ServerDeps) {
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),
     {
       method: 'GET',
-      pattern: /^\/nudge\/unsubscribe$/,
+      pattern: /^\/marketing\/unsubscribe$/,
       auth: 'public',
       handle: (ctx) => unsubscribe.confirm(ctx.url, ctx.ip),
     },
     {
       method: 'POST',
-      pattern: /^\/nudge\/unsubscribe$/,
+      pattern: /^\/marketing\/unsubscribe$/,
       auth: 'public',
       handle: (ctx) => unsubscribe.optOut(ctx.url, ctx.ip),
     },
@@ -106,7 +106,7 @@ export function createServer(deps: ServerDeps) {
 
   // A recently verified key skips the limiter, so a caller behind a shared IP is not locked out by others.
   async function authenticateApiKey(req: Request, ip: string): Promise<string> {
-    const header = req.headers.get('x-nudge-api-key');
+    const header = req.headers.get('x-marketing-api-key');
     const cachedProjectId = apiKeys.cached(header);
     if (cachedProjectId) {
       return cachedProjectId;
@@ -126,7 +126,7 @@ export function createServer(deps: ServerDeps) {
     const usesApiKey =
       route.auth === 'apiKey' ||
       (route.auth === 'apiKeyOrDashboard' &&
-        req.headers.has('x-nudge-api-key'));
+        req.headers.has('x-marketing-api-key'));
     if (route.auth === 'public') {
       return '';
     }

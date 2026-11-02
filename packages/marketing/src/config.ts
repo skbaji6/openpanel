@@ -57,29 +57,29 @@ const rawSchema = z
     DATABASE_URL: requiredString,
     REDIS_URL: requiredString,
     ENCRYPTION_KEY: requiredString,
-    NUDGE_PROXY_SECRET: requiredString,
-    NUDGE_PUBLIC_URL: requiredString,
-    NUDGE_PORT: positiveInt(4100),
+    MARKETING_PROXY_SECRET: requiredString,
+    MARKETING_PUBLIC_URL: requiredString,
+    MARKETING_PORT: positiveInt(4100),
     // Only behind a reverse proxy that appends the client address to x-forwarded-for.
-    NUDGE_TRUST_PROXY: optionalBoolean,
-    NUDGE_GRACE_SECONDS: positiveInt(300),
-    NUDGE_MAX_LAG: positiveInt(1000),
-    NUDGE_TICK_MS: positiveInt(5000),
-    NUDGE_LEASE_SECONDS: positiveInt(120),
-    NUDGE_EVENT_RETENTION_DAYS: positiveInt(30),
-    NUDGE_CLAIM_BATCH: positiveInt(200),
-    NUDGE_SEND_CONCURRENCY: positiveInt(10),
-    NUDGE_DB_POOL: positiveInt(15),
+    MARKETING_TRUST_PROXY: optionalBoolean,
+    MARKETING_GRACE_SECONDS: positiveInt(300),
+    MARKETING_MAX_LAG: positiveInt(1000),
+    MARKETING_TICK_MS: positiveInt(5000),
+    MARKETING_LEASE_SECONDS: positiveInt(120),
+    MARKETING_EVENT_RETENTION_DAYS: positiveInt(30),
+    MARKETING_CLAIM_BATCH: positiveInt(200),
+    MARKETING_SEND_CONCURRENCY: positiveInt(10),
+    MARKETING_DB_POOL: positiveInt(15),
     // Hostnames only, any port; IPv6 literals are unsupported because they contain ':'.
-    NUDGE_WEBHOOK_ALLOW_HOSTS: list.refine(
+    MARKETING_WEBHOOK_ALLOW_HOSTS: list.refine(
       (hosts) => hosts.every((host) => !/[:/]/.test(host)),
       { message: 'entries must be bare hostnames (no scheme, port or path)' }
     ),
-    NUDGE_KAFKA_GROUP: stringWithDefault('nudge'),
+    MARKETING_KAFKA_GROUP: stringWithDefault('marketing'),
     KAFKA_BROKERS: list.refine((brokers) => brokers.length > 0, {
       message: 'at least one broker is required',
     }),
-    KAFKA_CLIENT_ID: stringWithDefault('openpanel-nudge'),
+    KAFKA_CLIENT_ID: stringWithDefault('openpanel-marketing'),
     KAFKA_EVENTS_TOPIC: requiredString,
     KAFKA_SSL: optionalBoolean,
     KAFKA_SSL_CA_PATH: optionalString,
@@ -101,21 +101,24 @@ const rawSchema = z
         'must be a URL such as postgresql://user:password@host:5432/database'
       );
     }
-    const publicUrl = URL.canParse(raw.NUDGE_PUBLIC_URL)
-      ? new URL(raw.NUDGE_PUBLIC_URL)
+    const publicUrl = URL.canParse(raw.MARKETING_PUBLIC_URL)
+      ? new URL(raw.MARKETING_PUBLIC_URL)
       : null;
     if (!(publicUrl && WEB_PROTOCOLS.has(publicUrl.protocol))) {
-      issue('NUDGE_PUBLIC_URL', 'must be an http(s) URL');
+      issue('MARKETING_PUBLIC_URL', 'must be an http(s) URL');
     }
-    if (raw.NUDGE_DB_POOL < raw.NUDGE_SEND_CONCURRENCY + DB_POOL_HEADROOM) {
+    if (
+      raw.MARKETING_DB_POOL <
+      raw.MARKETING_SEND_CONCURRENCY + DB_POOL_HEADROOM
+    ) {
       issue(
-        'NUDGE_DB_POOL',
-        `must be at least NUDGE_SEND_CONCURRENCY + ${DB_POOL_HEADROOM} (${raw.NUDGE_SEND_CONCURRENCY + DB_POOL_HEADROOM})`
+        'MARKETING_DB_POOL',
+        `must be at least MARKETING_SEND_CONCURRENCY + ${DB_POOL_HEADROOM} (${raw.MARKETING_SEND_CONCURRENCY + DB_POOL_HEADROOM})`
       );
     }
-    if (raw.NUDGE_LEASE_SECONDS <= MIN_LEASE_SECONDS) {
+    if (raw.MARKETING_LEASE_SECONDS <= MIN_LEASE_SECONDS) {
       issue(
-        'NUDGE_LEASE_SECONDS',
+        'MARKETING_LEASE_SECONDS',
         `must be greater than ${MIN_LEASE_SECONDS} (the ${SEND_TIMEOUT_MS / 1000} s send timeout plus mark retries)`
       );
     }
@@ -145,7 +148,7 @@ export interface KafkaConfig {
   };
 }
 
-export interface NudgeConfig {
+export interface MarketingConfig {
   databaseUrl: string;
   redisUrl: string;
   encryptionKey: string;
@@ -173,13 +176,13 @@ function withConnectionLimit(databaseUrl: string, limit: number) {
 
 export function loadConfig(
   env: Record<string, string | undefined>
-): NudgeConfig {
+): MarketingConfig {
   const parsed = rawSchema.safeParse(env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join('; ');
-    throw new Error(`Invalid nudge configuration: ${issues}`);
+    throw new Error(`Invalid marketing configuration: ${issues}`);
   }
   const raw = parsed.data;
   const hasSasl =
@@ -197,27 +200,27 @@ export function loadConfig(
   const sslEnabled = raw.KAFKA_SSL ?? hasSasl;
 
   return {
-    databaseUrl: withConnectionLimit(raw.DATABASE_URL, raw.NUDGE_DB_POOL),
+    databaseUrl: withConnectionLimit(raw.DATABASE_URL, raw.MARKETING_DB_POOL),
     redisUrl: raw.REDIS_URL,
     encryptionKey: raw.ENCRYPTION_KEY,
-    proxySecret: raw.NUDGE_PROXY_SECRET,
-    publicUrl: raw.NUDGE_PUBLIC_URL.replace(TRAILING_SLASHES, ''),
-    port: raw.NUDGE_PORT,
-    trustProxy: raw.NUDGE_TRUST_PROXY ?? false,
-    graceSeconds: raw.NUDGE_GRACE_SECONDS,
-    maxLag: raw.NUDGE_MAX_LAG,
-    tickMs: raw.NUDGE_TICK_MS,
-    leaseSeconds: raw.NUDGE_LEASE_SECONDS,
-    retentionDays: raw.NUDGE_EVENT_RETENTION_DAYS,
-    claimBatch: raw.NUDGE_CLAIM_BATCH,
-    sendConcurrency: raw.NUDGE_SEND_CONCURRENCY,
-    dbPool: raw.NUDGE_DB_POOL,
-    webhookAllowHosts: raw.NUDGE_WEBHOOK_ALLOW_HOSTS,
+    proxySecret: raw.MARKETING_PROXY_SECRET,
+    publicUrl: raw.MARKETING_PUBLIC_URL.replace(TRAILING_SLASHES, ''),
+    port: raw.MARKETING_PORT,
+    trustProxy: raw.MARKETING_TRUST_PROXY ?? false,
+    graceSeconds: raw.MARKETING_GRACE_SECONDS,
+    maxLag: raw.MARKETING_MAX_LAG,
+    tickMs: raw.MARKETING_TICK_MS,
+    leaseSeconds: raw.MARKETING_LEASE_SECONDS,
+    retentionDays: raw.MARKETING_EVENT_RETENTION_DAYS,
+    claimBatch: raw.MARKETING_CLAIM_BATCH,
+    sendConcurrency: raw.MARKETING_SEND_CONCURRENCY,
+    dbPool: raw.MARKETING_DB_POOL,
+    webhookAllowHosts: raw.MARKETING_WEBHOOK_ALLOW_HOSTS,
     kafka: {
       brokers: raw.KAFKA_BROKERS,
       clientId: raw.KAFKA_CLIENT_ID,
       topic: raw.KAFKA_EVENTS_TOPIC,
-      groupId: raw.NUDGE_KAFKA_GROUP,
+      groupId: raw.MARKETING_KAFKA_GROUP,
       ssl: sslEnabled ? tlsOptions : false,
       sasl: hasSasl
         ? {

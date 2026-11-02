@@ -91,7 +91,7 @@ export function appFor(serviceAccountJson: string): Promise<App> {
   }
   const app = import('firebase-admin/app').then(
     ({ cert, getApps, initializeApp }) => {
-      const name = `nudge-${hash}`;
+      const name = `marketing-${hash}`;
       const account = zServiceAccount.parse(JSON.parse(serviceAccountJson));
       return (
         getApps().find((existing) => existing.name === name) ??

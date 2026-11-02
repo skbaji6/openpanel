@@ -13,7 +13,7 @@ import { type NormalizedEvent, normalizeEvent } from '../events/normalize';
 import { redactSecrets } from '../redact';
 import type { InterestSet, ProfileKey } from './interest';
 
-const LOG_PREFIX = 'nudge consumer:';
+const LOG_PREFIX = 'marketing consumer:';
 const DEFAULT_RETRY_DELAYS_MS = [100, 400, 1600];
 // Well inside kafkajs's 30 s session timeout, so a long batch transaction does not cost the partition.
 const HEARTBEAT_INTERVAL_MS = 3000;

@@ -24,7 +24,7 @@ const message: RenderedMessage = {
 };
 const opts: SendOptions = {
   idempotencyKey: 'e1:0',
-  unsubscribeUrl: 'https://nudge.test/u',
+  unsubscribeUrl: 'https://marketing.test/u',
 };
 
 function recipient(deviceTokens: string[]): Recipient {

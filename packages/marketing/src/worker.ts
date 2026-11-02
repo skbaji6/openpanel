@@ -1,10 +1,10 @@
 import { createUnsubscribeUrlRenderer } from './api/unsubscribe';
-import { loadConfig, type NudgeConfig } from './config';
+import { loadConfig, type MarketingConfig } from './config';
 import type { createEngine, Sql } from './engine/engine';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
 
-const LOG_PREFIX = 'nudge worker:';
+const LOG_PREFIX = 'marketing worker:';
 const INTEREST_REFRESH_MS = 10_000;
 // Hourly with a time budget per run, so a project that stores every event still keeps up.
 const PURGE_INTERVAL_MS = 3_600_000;
@@ -14,7 +14,7 @@ export interface Stoppable {
 }
 
 export interface WorkerContext {
-  cfg: NudgeConfig;
+  cfg: MarketingConfig;
   sql: Sql;
   engine: ReturnType<typeof createEngine>;
   refreshInterest: () => Promise<void>;
@@ -29,7 +29,7 @@ export interface WorkerDeps {
   onFatal?: () => void;
 }
 
-function secretsOf(cfg: NudgeConfig): string[] {
+function secretsOf(cfg: MarketingConfig): string[] {
   return [
     cfg.encryptionKey,
     cfg.proxySecret,
@@ -99,10 +99,10 @@ export function createStopAll(
 }
 
 export async function startWorker(
-  cfg: NudgeConfig,
+  cfg: MarketingConfig,
   deps: WorkerDeps = {}
 ): Promise<Stoppable> {
-  // Must precede the first import of @openpanel/db so the pool honours NUDGE_DB_POOL.
+  // Must precede the first import of @openpanel/db so the pool honours MARKETING_DB_POOL.
   process.env.DATABASE_URL = cfg.databaseUrl;
   const [
     { sql },
@@ -212,7 +212,7 @@ export async function startWorker(
 }
 
 // What the process runs in production: the HTTP API and signed unsubscribe links (which turn the ticker on).
-export function defaultWorkerDeps(cfg: NudgeConfig): WorkerDeps {
+export function defaultWorkerDeps(cfg: MarketingConfig): WorkerDeps {
   return {
     renderUnsubscribeUrl: createUnsubscribeUrlRenderer(cfg),
     // Imported lazily so @openpanel/db is first loaded after startWorker sets DATABASE_URL.

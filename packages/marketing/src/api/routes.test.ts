@@ -14,14 +14,14 @@ import { registerDefaultAdapters } from '../channels/registry';
 import { loadConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetNudgeTables } from '../db/test-helpers';
+import { resetMarketingTables } from '../db/test-helpers';
 import { createEngine, lockProfiles } from '../engine/engine';
 import { STARTER_RULES } from '../rules/starter-rules';
 import { createServer } from './server';
 import { createUnsubscribeUrlRenderer } from './unsubscribe';
 
 const PROXY_SECRET = 'proxy-secret-for-tests';
-const BASE = 'http://nudge.internal';
+const BASE = 'http://marketing.internal';
 const MASK = '********';
 const MIB = 1024 * 1024;
 
@@ -31,8 +31,8 @@ const cfg = loadConfig({
   KAFKA_BROKERS: '127.0.0.1:1',
   KAFKA_EVENTS_TOPIC: 'unused',
   ENCRYPTION_KEY: 'cd'.repeat(32),
-  NUDGE_PROXY_SECRET: PROXY_SECRET,
-  NUDGE_PUBLIC_URL: 'https://nudge.test',
+  MARKETING_PROXY_SECRET: PROXY_SECRET,
+  MARKETING_PUBLIC_URL: 'https://marketing.test',
 });
 
 let onRulesChanged = mock(() => Promise.resolve());
@@ -71,25 +71,25 @@ function dashboard(
   return call(method, path, {
     body,
     headers: {
-      'x-nudge-proxy-secret': PROXY_SECRET,
-      'x-nudge-project-id': 'proj-a',
-      'x-nudge-user-id': 'user-1',
-      'x-nudge-csrf': '1',
+      'x-marketing-proxy-secret': PROXY_SECRET,
+      'x-marketing-project-id': 'proj-a',
+      'x-marketing-user-id': 'user-1',
+      'x-marketing-csrf': '1',
       ...overrides,
     },
   });
 }
 
 function sync(method: string, path: string, key: string, body?: unknown) {
-  return call(method, path, { body, headers: { 'x-nudge-api-key': key } });
+  return call(method, path, { body, headers: { 'x-marketing-api-key': key } });
 }
 
 async function createKey(projectId: string): Promise<string> {
   const response = await dashboard(
     'POST',
-    '/nudge/api-keys',
+    '/marketing/api-keys',
     { label: 'backend' },
-    { 'x-nudge-project-id': projectId }
+    { 'x-marketing-project-id': projectId }
   );
   if (response.status !== 201) {
     throw new Error(`api key creation failed with ${response.status}`);
@@ -105,7 +105,7 @@ function ruleDefinition(overrides: Record<string, unknown> = {}) {
 async function insertRule(projectId: string, status = 'active') {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.rules (id, project_id, name, status, definition)
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
      VALUES ($1::uuid, $2, 'r', $3, $4::jsonb)`,
     id,
     projectId,
@@ -125,7 +125,7 @@ async function insertEnrollment(
 ) {
   const id = randomUUID();
   await sql.$executeRawUnsafe(
-    `INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time, end_reason)
+    `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time, end_reason)
      VALUES ($1::uuid, $2, $3::uuid, $4::jsonb, $5, $6, now(), $7)`,
     id,
     projectId,
@@ -137,7 +137,7 @@ async function insertEnrollment(
   );
   for (const [index, stepStatus] of stepStatuses.entries()) {
     await sql.$executeRawUnsafe(
-      `INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+      `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
        VALUES ($1::uuid, $2, now(), $3)`,
       id,
       index,
@@ -149,11 +149,11 @@ async function insertEnrollment(
 
 async function statusesOf(enrollmentId: string) {
   const [enrollment] = await sql.$queryRawUnsafe<{ status: string }[]>(
-    'SELECT status FROM nudge.enrollments WHERE id = $1::uuid',
+    'SELECT status FROM marketing.enrollments WHERE id = $1::uuid',
     enrollmentId
   );
   const steps = await sql.$queryRawUnsafe<{ status: string }[]>(
-    'SELECT status FROM nudge.steps WHERE enrollment_id = $1::uuid ORDER BY step_index',
+    'SELECT status FROM marketing.steps WHERE enrollment_id = $1::uuid ORDER BY step_index',
     enrollmentId
   );
   return {
@@ -192,7 +192,7 @@ const ONE_CLICK = {
 async function optOuts() {
   return await sql.$queryRawUnsafe<
     { project_id: string; profile_id: string; channel: string }[]
-  >('SELECT project_id, profile_id, channel FROM nudge.opt_outs');
+  >('SELECT project_id, profile_id, channel FROM marketing.opt_outs');
 }
 
 beforeAll(async () => {
@@ -201,7 +201,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  await resetNudgeTables();
+  await resetMarketingTables();
   onRulesChanged = mock(() => Promise.resolve());
   app = createServer({ cfg, sql, onRulesChanged });
 });
@@ -211,14 +211,14 @@ afterAll(async () => {
 });
 
 describe('health', () => {
-  it('GET /nudge/health returns ok without auth', async () => {
-    const response = await call('GET', '/nudge/health');
+  it('GET /marketing/health returns ok without auth', async () => {
+    const response = await call('GET', '/marketing/health');
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
   });
 
   it('unknown routes return a JSON 404', async () => {
-    const response = await dashboard('GET', '/nudge/nope');
+    const response = await dashboard('GET', '/marketing/nope');
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: 'not_found' });
   });
@@ -228,25 +228,25 @@ describe('sync routes', () => {
   it('sync routes reject a missing or wrong api key with 401', async () => {
     const key = await createKey('proj-a');
     const [id] = key.split('.');
-    const missing = await call('PUT', '/nudge/contacts/u1', {
+    const missing = await call('PUT', '/marketing/contacts/u1', {
       body: { email: 'a@b.co' },
     });
     const wrong = await sync(
       'PUT',
-      '/nudge/contacts/u1',
+      '/marketing/contacts/u1',
       `${id}.${'x'.repeat(43)}`,
       {
         email: 'a@b.co',
       }
     );
-    const garbage = await sync('PUT', '/nudge/contacts/u1', 'garbage', {
+    const garbage = await sync('PUT', '/marketing/contacts/u1', 'garbage', {
       email: 'a@b.co',
     });
     expect([missing.status, wrong.status, garbage.status]).toEqual([
       401, 401, 401,
     ]);
     expect(await wrong.json()).toEqual({ error: 'unauthorized' });
-    const ok = await sync('PUT', '/nudge/contacts/u1', key, {
+    const ok = await sync('PUT', '/marketing/contacts/u1', key, {
       email: 'a@b.co',
     });
     expect(ok.status).toBe(200);
@@ -254,14 +254,17 @@ describe('sync routes', () => {
 
   it('a key for project A cannot write contacts for project B', async () => {
     const keyA = await createKey('proj-a');
-    const response = await call('PUT', '/nudge/contacts/u1', {
+    const response = await call('PUT', '/marketing/contacts/u1', {
       body: { email: 'a@b.co', attributes: { firstName: 'Ada' } },
-      headers: { 'x-nudge-api-key': keyA, 'x-nudge-project-id': 'proj-b' },
+      headers: {
+        'x-marketing-api-key': keyA,
+        'x-marketing-project-id': 'proj-b',
+      },
     });
     expect(response.status).toBe(200);
     const rows = await sql.$queryRawUnsafe<
       { project_id: string; email: string; attributes: unknown }[]
-    >('SELECT project_id, email, attributes FROM nudge.contacts');
+    >('SELECT project_id, email, attributes FROM marketing.contacts');
     expect(rows).toEqual([
       {
         project_id: 'proj-a',
@@ -273,33 +276,35 @@ describe('sync routes', () => {
 
   it('PUT contacts keeps omitted fields and rejects a bad email', async () => {
     const key = await createKey('proj-a');
-    await sync('PUT', '/nudge/contacts/u1', key, {
+    await sync('PUT', '/marketing/contacts/u1', key, {
       email: 'a@b.co',
       attributes: { plan: 'pro' },
     });
-    await sync('PUT', '/nudge/contacts/u1', key, {
+    await sync('PUT', '/marketing/contacts/u1', key, {
       attributes: { plan: 'free' },
     });
     const [row] = await sql.$queryRawUnsafe<
       { email: string; attributes: unknown }[]
-    >('SELECT email, attributes FROM nudge.contacts');
+    >('SELECT email, attributes FROM marketing.contacts');
     expect(row).toEqual({ email: 'a@b.co', attributes: { plan: 'free' } });
-    const bad = await sync('PUT', '/nudge/contacts/u1', key, {
+    const bad = await sync('PUT', '/marketing/contacts/u1', key, {
       email: 'not an email',
     });
     expect(bad.status).toBe(400);
-    const extra = await sync('PUT', '/nudge/contacts/u1', key, { admin: true });
+    const extra = await sync('PUT', '/marketing/contacts/u1', key, {
+      admin: true,
+    });
     expect(extra.status).toBe(400);
   });
 
   it('PUT devices moves an existing token to the new profile', async () => {
     const key = await createKey('proj-a');
-    await sync('PUT', '/nudge/devices', key, {
+    await sync('PUT', '/marketing/devices', key, {
       profileId: 'u1',
       token: 'tok-1',
       platform: 'android',
     });
-    const moved = await sync('PUT', '/nudge/devices', key, {
+    const moved = await sync('PUT', '/marketing/devices', key, {
       profileId: 'u2',
       token: 'tok-1',
       platform: 'ios',
@@ -307,7 +312,7 @@ describe('sync routes', () => {
     expect(moved.status).toBe(200);
     const rows = await sql.$queryRawUnsafe<
       { token: string; profile_id: string; platform: string }[]
-    >('SELECT token, profile_id, platform FROM nudge.devices');
+    >('SELECT token, profile_id, platform FROM marketing.devices');
     expect(rows).toEqual([
       { token: 'tok-1', profile_id: 'u2', platform: 'ios' },
     ]);
@@ -316,12 +321,12 @@ describe('sync routes', () => {
   it('SECURITY PUT devices never moves a token registered in another project', async () => {
     const keyA = await createKey('proj-a');
     const keyB = await createKey('proj-b');
-    await sync('PUT', '/nudge/devices', keyA, {
+    await sync('PUT', '/marketing/devices', keyA, {
       profileId: 'u1',
       token: 'tok-1',
       platform: 'android',
     });
-    const taken = await sync('PUT', '/nudge/devices', keyB, {
+    const taken = await sync('PUT', '/marketing/devices', keyB, {
       profileId: 'attacker',
       token: 'tok-1',
       platform: 'ios',
@@ -332,51 +337,56 @@ describe('sync routes', () => {
     expect(text).not.toContain('u1');
     const rows = await sql.$queryRawUnsafe<
       { project_id: string; profile_id: string }[]
-    >('SELECT project_id, profile_id FROM nudge.devices');
+    >('SELECT project_id, profile_id FROM marketing.devices');
     expect(rows).toEqual([{ project_id: 'proj-a', profile_id: 'u1' }]);
   });
 
   it('DELETE devices removes it', async () => {
     const keyA = await createKey('proj-a');
     const keyB = await createKey('proj-b');
-    await sync('PUT', '/nudge/devices', keyA, {
+    await sync('PUT', '/marketing/devices', keyA, {
       profileId: 'u1',
       token: 'tok-1',
       platform: 'android',
     });
-    await sync('DELETE', '/nudge/devices', keyB, { token: 'tok-1' });
+    await sync('DELETE', '/marketing/devices', keyB, { token: 'tok-1' });
     const afterOtherProject = await sql.$queryRawUnsafe<unknown[]>(
-      'SELECT 1 FROM nudge.devices'
+      'SELECT 1 FROM marketing.devices'
     );
     expect(afterOtherProject).toHaveLength(1);
-    const response = await sync('DELETE', '/nudge/devices', keyA, {
+    const response = await sync('DELETE', '/marketing/devices', keyA, {
       token: 'tok-1',
     });
     expect(response.status).toBe(200);
     const rows = await sql.$queryRawUnsafe<unknown[]>(
-      'SELECT 1 FROM nudge.devices'
+      'SELECT 1 FROM marketing.devices'
     );
     expect(rows).toHaveLength(0);
   });
 
   it('PUT reference-sets replaces the values and bounds their count', async () => {
     const key = await createKey('proj-a');
-    await sync('PUT', '/nudge/reference-sets/book-1', key, {
+    await sync('PUT', '/marketing/reference-sets/book-1', key, {
       values: ['s1', 's2'],
     });
-    const replaced = await sync('PUT', '/nudge/reference-sets/book-1', key, {
-      values: ['s3', 's3'],
-    });
+    const replaced = await sync(
+      'PUT',
+      '/marketing/reference-sets/book-1',
+      key,
+      {
+        values: ['s3', 's3'],
+      }
+    );
     expect(await replaced.json()).toEqual({ setKey: 'book-1', count: 1 });
-    const listed = await dashboard('GET', '/nudge/reference-sets');
+    const listed = await dashboard('GET', '/marketing/reference-sets');
     expect(await listed.json()).toEqual({
       referenceSets: [{ setKey: 'book-1', count: 1 }],
     });
-    const one = await dashboard('GET', '/nudge/reference-sets/book-1');
+    const one = await dashboard('GET', '/marketing/reference-sets/book-1');
     expect(await one.json()).toEqual({ setKey: 'book-1', values: ['s3'] });
-    const missing = await dashboard('GET', '/nudge/reference-sets/other');
+    const missing = await dashboard('GET', '/marketing/reference-sets/other');
     expect(missing.status).toBe(404);
-    const tooMany = await sync('PUT', '/nudge/reference-sets/book-1', key, {
+    const tooMany = await sync('PUT', '/marketing/reference-sets/book-1', key, {
       values: Array.from({ length: 100_001 }, (_, index) => String(index)),
     });
     expect(tooMany.status).toBe(400);
@@ -384,9 +394,12 @@ describe('sync routes', () => {
 
   it('invalid JSON returns 400', async () => {
     const key = await createKey('proj-a');
-    const response = await call('PUT', '/nudge/devices', {
+    const response = await call('PUT', '/marketing/devices', {
       rawBody: '{not json',
-      headers: { 'x-nudge-api-key': key, 'content-type': 'application/json' },
+      headers: {
+        'x-marketing-api-key': key,
+        'content-type': 'application/json',
+      },
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'invalid_json' });
@@ -394,23 +407,26 @@ describe('sync routes', () => {
 });
 
 describe('dashboard routes', () => {
-  it('dashboard routes reject a missing or wrong proxy secret with 401 and a mutating call without x-nudge-csrf with 403', async () => {
-    const missing = await call('GET', '/nudge/rules', {
-      headers: { 'x-nudge-project-id': 'proj-a', 'x-nudge-user-id': 'u' },
-    });
-    const wrong = await dashboard('GET', '/nudge/rules', undefined, {
-      'x-nudge-proxy-secret': 'wrong',
-    });
-    const noCsrf = await call('POST', '/nudge/rules', {
-      body: { definition: ruleDefinition() },
+  it('dashboard routes reject a missing or wrong proxy secret with 401 and a mutating call without x-marketing-csrf with 403', async () => {
+    const missing = await call('GET', '/marketing/rules', {
       headers: {
-        'x-nudge-proxy-secret': PROXY_SECRET,
-        'x-nudge-project-id': 'proj-a',
-        'x-nudge-user-id': 'user-1',
+        'x-marketing-project-id': 'proj-a',
+        'x-marketing-user-id': 'u',
       },
     });
-    const badProject = await dashboard('GET', '/nudge/rules', undefined, {
-      'x-nudge-project-id': 'proj a; drop',
+    const wrong = await dashboard('GET', '/marketing/rules', undefined, {
+      'x-marketing-proxy-secret': 'wrong',
+    });
+    const noCsrf = await call('POST', '/marketing/rules', {
+      body: { definition: ruleDefinition() },
+      headers: {
+        'x-marketing-proxy-secret': PROXY_SECRET,
+        'x-marketing-project-id': 'proj-a',
+        'x-marketing-user-id': 'user-1',
+      },
+    });
+    const badProject = await dashboard('GET', '/marketing/rules', undefined, {
+      'x-marketing-project-id': 'proj a; drop',
     });
     expect([
       missing.status,
@@ -419,13 +435,13 @@ describe('dashboard routes', () => {
       badProject.status,
     ]).toEqual([401, 401, 403, 400]);
     const rows = await sql.$queryRawUnsafe<unknown[]>(
-      'SELECT 1 FROM nudge.rules'
+      'SELECT 1 FROM marketing.rules'
     );
     expect(rows).toHaveLength(0);
   });
 
   it('POST rules validates with zRuleDefinition and returns 400 on invalid', async () => {
-    const invalid = await dashboard('POST', '/nudge/rules', {
+    const invalid = await dashboard('POST', '/marketing/rules', {
       definition: ruleDefinition({ steps: [] }),
     });
     expect(invalid.status).toBe(400);
@@ -433,7 +449,7 @@ describe('dashboard routes', () => {
     expect(body.error).toBe('invalid_body');
     expect(body.issues.length).toBeGreaterThan(0);
 
-    const created = await dashboard('POST', '/nudge/rules', {
+    const created = await dashboard('POST', '/marketing/rules', {
       definition: ruleDefinition(),
       status: 'active',
     });
@@ -441,7 +457,9 @@ describe('dashboard routes', () => {
     const rule = (await created.json()) as { id: string; version: number };
     expect(rule.version).toBe(1);
     expect(onRulesChanged).toHaveBeenCalledTimes(1);
-    const listed = (await (await dashboard('GET', '/nudge/rules')).json()) as {
+    const listed = (await (
+      await dashboard('GET', '/marketing/rules')
+    ).json()) as {
       rules: { id: string; status: string }[];
     };
     expect(listed.rules.map((r) => [r.id, r.status])).toEqual([
@@ -451,7 +469,7 @@ describe('dashboard routes', () => {
 
   it('editing a rule bumps its version', async () => {
     const ruleId = await insertRule('proj-a');
-    const response = await dashboard('PATCH', `/nudge/rules/${ruleId}`, {
+    const response = await dashboard('PATCH', `/marketing/rules/${ruleId}`, {
       definition: ruleDefinition({ name: 'Renamed' }),
     });
     expect(response.status).toBe(200);
@@ -474,7 +492,7 @@ describe('dashboard routes', () => {
       'pending',
     ]);
 
-    const response = await dashboard('PATCH', `/nudge/rules/${ruleId}`, {
+    const response = await dashboard('PATCH', `/marketing/rules/${ruleId}`, {
       status: 'paused',
     });
     expect(response.status).toBe(200);
@@ -496,14 +514,14 @@ describe('dashboard routes', () => {
   it('deleting a rule cancels its work and removes it', async () => {
     const ruleId = await insertRule('proj-a');
     const active = await insertEnrollment(ruleId, 'u1', 'active', ['pending']);
-    const response = await dashboard('DELETE', `/nudge/rules/${ruleId}`);
+    const response = await dashboard('DELETE', `/marketing/rules/${ruleId}`);
     expect(response.status).toBe(200);
     expect(await statusesOf(active)).toEqual({
       enrollment: 'cancelled',
       steps: ['cancelled'],
     });
     const rows = await sql.$queryRawUnsafe<unknown[]>(
-      'SELECT 1 FROM nudge.rules'
+      'SELECT 1 FROM marketing.rules'
     );
     expect(rows).toHaveLength(0);
   });
@@ -530,7 +548,7 @@ describe('dashboard routes', () => {
       properties: { item_id: 'book-1' },
     });
     await waitForAdvisoryWaiters(1);
-    const pause = dashboard('PATCH', `/nudge/rules/${ruleId}`, {
+    const pause = dashboard('PATCH', `/marketing/rules/${ruleId}`, {
       status: 'paused',
     });
     // The pause now waits for the batch's shared rule lock.
@@ -540,12 +558,12 @@ describe('dashboard routes', () => {
     expect((await pause).status).toBe(200);
 
     const enrollments = await sql.$queryRawUnsafe<{ status: string }[]>(
-      'SELECT status FROM nudge.enrollments WHERE rule_id = $1::uuid',
+      'SELECT status FROM marketing.enrollments WHERE rule_id = $1::uuid',
       ruleId
     );
     expect(enrollments.map((row) => row.status)).toEqual(['cancelled']);
     const pending = await sql.$queryRawUnsafe<unknown[]>(
-      "SELECT 1 FROM nudge.steps WHERE status = 'pending'"
+      "SELECT 1 FROM marketing.steps WHERE status = 'pending'"
     );
     expect(pending).toHaveLength(0);
   });
@@ -556,12 +574,12 @@ describe('dashboard routes', () => {
     // One more profile than a cancel chunk, so cancelling needs a second transaction.
     await sql.$executeRawUnsafe(
       `WITH created AS (
-         INSERT INTO nudge.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+         INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
          SELECT gen_random_uuid(), 'proj-a', $1::uuid, $2::jsonb, 'p' || n, 'active', now()
          FROM generate_series(1, 1001) AS n
          RETURNING id
        )
-       INSERT INTO nudge.steps (enrollment_id, step_index, due_at, status)
+       INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
        SELECT id, 0, now(), 'pending' FROM created`,
       ruleId,
       snapshot
@@ -585,13 +603,13 @@ describe('dashboard routes', () => {
     });
     const errors = spyOn(console, 'error').mockImplementation(() => undefined);
     const failed = await failing.fetch(
-      new Request(`${BASE}/nudge/rules/${ruleId}`, {
+      new Request(`${BASE}/marketing/rules/${ruleId}`, {
         method: 'DELETE',
         headers: {
-          'x-nudge-proxy-secret': PROXY_SECRET,
-          'x-nudge-project-id': 'proj-a',
-          'x-nudge-user-id': 'user-1',
-          'x-nudge-csrf': '1',
+          'x-marketing-proxy-secret': PROXY_SECRET,
+          'x-marketing-project-id': 'proj-a',
+          'x-marketing-user-id': 'user-1',
+          'x-marketing-csrf': '1',
         },
       }),
       peer('10.0.0.1')
@@ -599,17 +617,17 @@ describe('dashboard routes', () => {
     errors.mockRestore();
     expect(failed.status).toBe(500);
     const [rule] = await sql.$queryRawUnsafe<{ status: string }[]>(
-      'SELECT status FROM nudge.rules WHERE id = $1::uuid',
+      'SELECT status FROM marketing.rules WHERE id = $1::uuid',
       ruleId
     );
     expect(rule?.status).toBe('paused');
 
-    const retried = await dashboard('DELETE', `/nudge/rules/${ruleId}`);
+    const retried = await dashboard('DELETE', `/marketing/rules/${ruleId}`);
     expect(retried.status).toBe(200);
     const leftovers = await sql.$queryRawUnsafe<{ n: number }[]>(
-      `SELECT (SELECT count(*) FROM nudge.rules)::int
-            + (SELECT count(*) FROM nudge.enrollments WHERE status = 'active')::int
-            + (SELECT count(*) FROM nudge.steps WHERE status = 'pending')::int AS n`
+      `SELECT (SELECT count(*) FROM marketing.rules)::int
+            + (SELECT count(*) FROM marketing.enrollments WHERE status = 'active')::int
+            + (SELECT count(*) FROM marketing.steps WHERE status = 'pending')::int AS n`
     );
     expect(leftovers[0]?.n).toBe(0);
   });
@@ -624,9 +642,9 @@ describe('dashboard routes', () => {
             return Reflect.get(target, property, receiver);
           }
           return async (query: string, ...values: unknown[]) => {
-            if (query.startsWith('DELETE FROM nudge.rules')) {
+            if (query.startsWith('DELETE FROM marketing.rules')) {
               await target.$executeRawUnsafe(
-                "UPDATE nudge.rules SET status = 'active' WHERE id = $1::uuid",
+                "UPDATE marketing.rules SET status = 'active' WHERE id = $1::uuid",
                 ruleId
               );
             }
@@ -636,13 +654,13 @@ describe('dashboard routes', () => {
       }),
     });
     const response = await reactivating.fetch(
-      new Request(`${BASE}/nudge/rules/${ruleId}`, {
+      new Request(`${BASE}/marketing/rules/${ruleId}`, {
         method: 'DELETE',
         headers: {
-          'x-nudge-proxy-secret': PROXY_SECRET,
-          'x-nudge-project-id': 'proj-a',
-          'x-nudge-user-id': 'user-1',
-          'x-nudge-csrf': '1',
+          'x-marketing-proxy-secret': PROXY_SECRET,
+          'x-marketing-project-id': 'proj-a',
+          'x-marketing-user-id': 'user-1',
+          'x-marketing-csrf': '1',
         },
       }),
       peer('10.0.0.1')
@@ -650,7 +668,7 @@ describe('dashboard routes', () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: 'rule_reactivated' });
     const [rule] = await sql.$queryRawUnsafe<{ status: string }[]>(
-      'SELECT status FROM nudge.rules WHERE id = $1::uuid',
+      'SELECT status FROM marketing.rules WHERE id = $1::uuid',
       ruleId
     );
     expect(rule?.status).toBe('active');
@@ -665,12 +683,15 @@ describe('dashboard routes', () => {
       ['pending'],
       'proj-b'
     );
-    const patched = await dashboard('PATCH', `/nudge/rules/${ruleId}`, {
+    const patched = await dashboard('PATCH', `/marketing/rules/${ruleId}`, {
       status: 'paused',
     });
-    const deleted = await dashboard('DELETE', `/nudge/rules/${ruleId}`);
-    const results = await dashboard('GET', `/nudge/results?ruleId=${ruleId}`);
-    const notUuid = await dashboard('DELETE', '/nudge/rules/not-a-uuid');
+    const deleted = await dashboard('DELETE', `/marketing/rules/${ruleId}`);
+    const results = await dashboard(
+      'GET',
+      `/marketing/results?ruleId=${ruleId}`
+    );
+    const notUuid = await dashboard('DELETE', '/marketing/rules/not-a-uuid');
     expect([
       patched.status,
       deleted.status,
@@ -682,14 +703,14 @@ describe('dashboard routes', () => {
       steps: ['pending'],
     });
     const [rule] = await sql.$queryRawUnsafe<{ status: string }[]>(
-      'SELECT status FROM nudge.rules WHERE id = $1::uuid',
+      'SELECT status FROM marketing.rules WHERE id = $1::uuid',
       ruleId
     );
     expect(rule?.status).toBe('active');
   });
 
   it('GET starter-rules lists the starter definitions', async () => {
-    const response = await dashboard('GET', '/nudge/starter-rules');
+    const response = await dashboard('GET', '/marketing/starter-rules');
     const body = (await response.json()) as { starterRules: { key: string }[] };
     expect(body.starterRules.map((rule) => rule.key)).toEqual(
       Object.keys(STARTER_RULES)
@@ -705,11 +726,11 @@ describe('dashboard routes', () => {
       pass: 'super-secret-password',
       from: 'news@shop.test',
     };
-    const put = await dashboard('PUT', '/nudge/channels/email', { config });
+    const put = await dashboard('PUT', '/marketing/channels/email', { config });
     expect(put.status).toBe(200);
     expect(JSON.stringify(await put.json())).not.toContain(config.pass);
     const [row] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
-      'SELECT config_encrypted FROM nudge.channel_configs'
+      'SELECT config_encrypted FROM marketing.channel_configs'
     );
     expect(row?.config_encrypted).not.toContain(config.pass);
     expect(
@@ -718,19 +739,19 @@ describe('dashboard routes', () => {
       )
     ).toEqual(config);
 
-    const get = await dashboard('GET', '/nudge/channels/email');
+    const get = await dashboard('GET', '/marketing/channels/email');
     expect(await get.json()).toEqual({
       channel: 'email',
       configured: true,
       config: { ...config, pass: MASK },
     });
 
-    const resaved = await dashboard('PUT', '/nudge/channels/email', {
+    const resaved = await dashboard('PUT', '/marketing/channels/email', {
       config: { ...config, pass: MASK },
     });
     expect(resaved.status).toBe(200);
     const [after] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
-      'SELECT config_encrypted FROM nudge.channel_configs'
+      'SELECT config_encrypted FROM marketing.channel_configs'
     );
     expect(
       JSON.parse(
@@ -738,7 +759,7 @@ describe('dashboard routes', () => {
       )
     ).toEqual(config);
 
-    const invalid = await dashboard('PUT', '/nudge/channels/email', {
+    const invalid = await dashboard('PUT', '/marketing/channels/email', {
       config: { host: 'smtp.test' },
     });
     expect(invalid.status).toBe(400);
@@ -753,8 +774,8 @@ describe('dashboard routes', () => {
       pass: 'super-secret-password',
       from: 'news@shop.test',
     };
-    await dashboard('PUT', '/nudge/channels/email', { config });
-    const redirected = await dashboard('PUT', '/nudge/channels/email', {
+    await dashboard('PUT', '/marketing/channels/email', { config });
+    const redirected = await dashboard('PUT', '/marketing/channels/email', {
       config: { ...config, host: 'attacker.example', pass: MASK },
     });
     expect(redirected.status).toBe(400);
@@ -768,21 +789,21 @@ describe('dashboard routes', () => {
       ],
     });
     const [row] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
-      'SELECT config_encrypted FROM nudge.channel_configs'
+      'SELECT config_encrypted FROM marketing.channel_configs'
     );
     expect(
       JSON.parse(
         decryptCredential(cfg.encryptionKey, row?.config_encrypted ?? '')
       )
     ).toEqual(config);
-    const reentered = await dashboard('PUT', '/nudge/channels/email', {
+    const reentered = await dashboard('PUT', '/marketing/channels/email', {
       config: { ...config, host: 'smtp2.test', pass: 'new-password' },
     });
     expect(reentered.status).toBe(200);
   });
 
   it('SECURITY a mask with no stored secret behind it is rejected, never stored', async () => {
-    const email = await dashboard('PUT', '/nudge/channels/email', {
+    const email = await dashboard('PUT', '/marketing/channels/email', {
       config: {
         host: 'smtp.test',
         port: 587,
@@ -791,9 +812,9 @@ describe('dashboard routes', () => {
         from: 'news@shop.test',
       },
     });
-    const webhook = await dashboard('PUT', '/nudge/channels/webhook', {
+    const webhook = await dashboard('PUT', '/marketing/channels/webhook', {
       config: {
-        url: 'https://hooks.example.com/nudge',
+        url: 'https://hooks.example.com/marketing',
         secrets: [MASK, 'whsec-0123456789abcdef'],
       },
     });
@@ -805,7 +826,7 @@ describe('dashboard routes', () => {
       error: 'secrets_required',
     });
     const rows = await sql.$queryRawUnsafe<unknown[]>(
-      'SELECT 1 FROM nudge.channel_configs'
+      'SELECT 1 FROM marketing.channel_configs'
     );
     expect(rows).toHaveLength(0);
   });
@@ -813,23 +834,23 @@ describe('dashboard routes', () => {
   it('SECURITY GET channels never returns a secret value, even masked values do not reveal length', async () => {
     const short = 'whsec-0123456789ab';
     const long = `whsec-${'z'.repeat(90)}`;
-    const put = await dashboard('PUT', '/nudge/channels/webhook', {
+    const put = await dashboard('PUT', '/marketing/channels/webhook', {
       config: {
-        url: 'https://hooks.example.com/nudge',
+        url: 'https://hooks.example.com/marketing',
         secrets: [short, long],
       },
     });
     expect(put.status).toBe(200);
-    const response = await dashboard('GET', '/nudge/channels/webhook');
+    const response = await dashboard('GET', '/marketing/channels/webhook');
     const text = await response.text();
     expect(text).not.toContain(short);
     expect(text).not.toContain('zzzz');
     expect(JSON.parse(text)).toEqual({
       channel: 'webhook',
       configured: true,
-      config: { url: 'https://hooks.example.com/nudge', secrets: MASK },
+      config: { url: 'https://hooks.example.com/marketing', secrets: MASK },
     });
-    const empty = await dashboard('GET', '/nudge/channels/push');
+    const empty = await dashboard('GET', '/marketing/channels/push');
     expect(await empty.json()).toEqual({
       channel: 'push',
       configured: false,
@@ -842,16 +863,16 @@ describe('dashboard routes', () => {
       caps: { max: 2, periodSeconds: 86_400 },
       quietHours: { start: '22:00', end: '08:00', timezone: 'Asia/Kolkata' },
     };
-    const put = await dashboard('PUT', '/nudge/settings', settings);
+    const put = await dashboard('PUT', '/marketing/settings', settings);
     expect(put.status).toBe(200);
-    expect(await (await dashboard('GET', '/nudge/settings')).json()).toEqual(
-      settings
-    );
-    const badZone = await dashboard('PUT', '/nudge/settings', {
+    expect(
+      await (await dashboard('GET', '/marketing/settings')).json()
+    ).toEqual(settings);
+    const badZone = await dashboard('PUT', '/marketing/settings', {
       ...settings,
       quietHours: { ...settings.quietHours, timezone: 'Mars/Olympus' },
     });
-    const badTime = await dashboard('PUT', '/nudge/settings', {
+    const badTime = await dashboard('PUT', '/marketing/settings', {
       ...settings,
       quietHours: { ...settings.quietHours, start: '25:00' },
     });
@@ -897,7 +918,7 @@ describe('dashboard routes', () => {
       'proj-b'
     );
 
-    const response = await dashboard('GET', '/nudge/results');
+    const response = await dashboard('GET', '/marketing/results');
     const body = (await response.json()) as {
       results: Record<string, unknown>[];
     };
@@ -908,7 +929,7 @@ describe('dashboard routes', () => {
       name: 'r',
       goalKind: 'event',
       enrolled: 5,
-      nudged: 3,
+      messaged: 3,
       sent: 4,
       completedAfterSend: 1,
       conversionRate: 1 / 3,
@@ -920,14 +941,14 @@ describe('dashboard routes', () => {
       name: 'r',
       goalKind: 'event',
       enrolled: 0,
-      nudged: 0,
+      messaged: 0,
       sent: 0,
       completedAfterSend: 0,
       conversionRate: 0,
       skipped: 0,
       failed: 0,
     });
-    const one = await dashboard('GET', `/nudge/results?ruleId=${ruleId}`);
+    const one = await dashboard('GET', `/marketing/results?ruleId=${ruleId}`);
     const filtered = (await one.json()) as { results: unknown[] };
     expect(filtered.results).toHaveLength(1);
   });
@@ -936,14 +957,14 @@ describe('dashboard routes', () => {
     const key = await createKey('proj-a');
     const [id, secret] = key.split('.');
     const [row] = await sql.$queryRawUnsafe<{ key_hash: string }[]>(
-      'SELECT key_hash FROM nudge.api_keys WHERE id = $1::uuid',
+      'SELECT key_hash FROM marketing.api_keys WHERE id = $1::uuid',
       id
     );
     expect(row?.key_hash).not.toContain(secret ?? '');
   });
 
   it('preview escapes HTML in variables', async () => {
-    const response = await dashboard('POST', '/nudge/preview', {
+    const response = await dashboard('POST', '/marketing/preview', {
       channel: 'email',
       template: {
         subject: 'Hi {{profile.firstName}}',
@@ -973,7 +994,7 @@ describe('unsubscribe', () => {
     const tampered = `${path.slice(0, -3)}${path.endsWith('A') ? 'B' : 'A'}xx`;
     const bad = await call('POST', tampered, ONE_CLICK);
     expect(bad.status).toBe(400);
-    const noToken = await call('POST', '/nudge/unsubscribe', ONE_CLICK);
+    const noToken = await call('POST', '/marketing/unsubscribe', ONE_CLICK);
     expect(noToken.status).toBe(400);
     expect(await optOuts()).toHaveLength(1);
   });
@@ -1003,7 +1024,7 @@ describe('unsubscribe', () => {
     expect(html).toContain('name="List-Unsubscribe" value="One-Click"');
     expect(html).not.toContain('<b>');
     expect(await optOuts()).toHaveLength(0);
-    const bad = await call('GET', '/nudge/unsubscribe?t=%3Cscript%3E');
+    const bad = await call('GET', '/marketing/unsubscribe?t=%3Cscript%3E');
     expect(bad.status).toBe(400);
   });
 
@@ -1029,13 +1050,13 @@ describe('unsubscribe', () => {
   it('SECURITY the 31st invalid unsubscribe token from one IP returns 429, a valid token still works', async () => {
     const ip = '203.0.113.9';
     for (let attempt = 0; attempt < 30; attempt++) {
-      const response = await call('POST', '/nudge/unsubscribe?t=bad', {
+      const response = await call('POST', '/marketing/unsubscribe?t=bad', {
         ...ONE_CLICK,
         ip,
       });
       expect(response.status).toBe(400);
     }
-    const limited = await call('GET', '/nudge/unsubscribe?t=bad', { ip });
+    const limited = await call('GET', '/marketing/unsubscribe?t=bad', { ip });
     expect(limited.status).toBe(429);
     const valid = await call('POST', unsubscribePath('u1'), {
       ...ONE_CLICK,
@@ -1048,7 +1069,7 @@ describe('unsubscribe', () => {
 
 describe('SECURITY limits', () => {
   it('SECURITY a body over 1 MiB returns 413', async () => {
-    const response = await dashboard('POST', '/nudge/preview', {
+    const response = await dashboard('POST', '/marketing/preview', {
       channel: 'email',
       template: { body: 'x' },
       sample: { profile: { blob: 'y'.repeat(MIB) } },
@@ -1070,14 +1091,14 @@ describe('SECURITY limits', () => {
         controller.enqueue(chunk);
       },
     });
-    const request = new Request(`${BASE}/nudge/preview`, {
+    const request = new Request(`${BASE}/marketing/preview`, {
       method: 'POST',
       body: stream,
       headers: {
-        'x-nudge-proxy-secret': PROXY_SECRET,
-        'x-nudge-project-id': 'proj-a',
-        'x-nudge-user-id': 'user-1',
-        'x-nudge-csrf': '1',
+        'x-marketing-proxy-secret': PROXY_SECRET,
+        'x-marketing-project-id': 'proj-a',
+        'x-marketing-user-id': 'user-1',
+        'x-marketing-csrf': '1',
       },
       duplex: 'half',
     } as RequestInit);
@@ -1089,14 +1110,14 @@ describe('SECURITY limits', () => {
 
   it('SECURITY a template body over 20,000 characters returns 400', async () => {
     const [step] = STARTER_RULES['cart-abandoned'].steps;
-    const response = await dashboard('POST', '/nudge/rules', {
+    const response = await dashboard('POST', '/marketing/rules', {
       definition: ruleDefinition({
         steps: [{ ...step, template: { body: 'x'.repeat(20_001) } }],
       }),
     });
     expect(response.status).toBe(400);
     const rows = await sql.$queryRawUnsafe<unknown[]>(
-      'SELECT 1 FROM nudge.rules'
+      'SELECT 1 FROM marketing.rules'
     );
     expect(rows).toHaveLength(0);
   });
@@ -1104,9 +1125,9 @@ describe('SECURITY limits', () => {
   it('SECURITY the 31st failed api-key attempt from one IP within a minute returns 429', async () => {
     const key = await createKey('proj-a');
     const attempt = (apiKey: string, ip: string) =>
-      call('PUT', '/nudge/devices', {
+      call('PUT', '/marketing/devices', {
         body: { profileId: 'u1', token: 't', platform: 'ios' },
-        headers: { 'x-nudge-api-key': apiKey },
+        headers: { 'x-marketing-api-key': apiKey },
         ip,
       });
     for (let failure = 0; failure < 30; failure++) {
@@ -1120,9 +1141,9 @@ describe('SECURITY limits', () => {
   it('SECURITY a recently verified api key still works from an IP locked out by failed attempts', async () => {
     const key = await createKey('proj-a');
     const attempt = (apiKey: string) =>
-      call('PUT', '/nudge/devices', {
+      call('PUT', '/marketing/devices', {
         body: { profileId: 'u1', token: 't', platform: 'ios' },
-        headers: { 'x-nudge-api-key': apiKey },
+        headers: { 'x-marketing-api-key': apiKey },
         ip: '198.51.100.9',
       });
     expect((await attempt(key)).status).toBe(200);
@@ -1149,11 +1170,11 @@ describe('SECURITY limits', () => {
     const original = console.error;
     console.error = errors;
     const response = await broken.fetch(
-      new Request(`${BASE}/nudge/rules`, {
+      new Request(`${BASE}/marketing/rules`, {
         headers: {
-          'x-nudge-proxy-secret': PROXY_SECRET,
-          'x-nudge-project-id': 'proj-a',
-          'x-nudge-user-id': 'user-1',
+          'x-marketing-proxy-secret': PROXY_SECRET,
+          'x-marketing-project-id': 'proj-a',
+          'x-marketing-user-id': 'user-1',
         },
       }),
       peer('10.0.0.1')
