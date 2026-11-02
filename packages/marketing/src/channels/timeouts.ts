@@ -2,6 +2,8 @@ import type { SendResult } from './types';
 
 // The ticker's lease must exceed this plus its mark budget, or a slow send is reclaimed and sent twice.
 export const SEND_TIMEOUT_MS = 30_000;
+// The ticker's mark retries (about 0.5 s) plus slack.
+export const LEASE_MARGIN_MS = 1000;
 
 export const TIMEOUT_RESULT: SendResult = {
   ok: false,

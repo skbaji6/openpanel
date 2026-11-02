@@ -43,7 +43,7 @@ function fakeClock(refills: Item[][] = []) {
 }
 
 describe('gatherLookupBatch', () => {
-  it('dispatches a full group of 500 immediately', async () => {
+  it('returns without waiting when every group is full', async () => {
     const clock = fakeClock();
     const groups = await gatherLookupBatch(items('a', 500), clock.opts);
     expect(groups.map((group) => group.length)).toEqual([500]);
@@ -57,6 +57,16 @@ describe('gatherLookupBatch', () => {
     expect(groups.map((group) => group.length)).toEqual([5]);
     expect(clock.sleeps.reduce((sum, ms) => sum + ms, 0)).toBe(WINDOW_MS);
     expect(clock.refillCalls).toBeGreaterThan(0);
+  });
+
+  it('a full group next to a partial one waits at most windowMs with it', async () => {
+    const clock = fakeClock();
+    const groups = await gatherLookupBatch(
+      [...items('a', 500), ...items('b', 1)],
+      clock.opts
+    );
+    expect(groups.map((group) => group.length)).toEqual([500, 1]);
+    expect(clock.sleeps.reduce((sum, ms) => sum + ms, 0)).toBe(WINDOW_MS);
   });
 
   it('groups by project', async () => {

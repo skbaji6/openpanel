@@ -1,13 +1,15 @@
 import { z } from 'zod';
-import { SEND_TIMEOUT_MS } from './channels/timeouts';
+import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from './channels/timeouts';
 
 const SASL_MECHANISMS = ['plain', 'scram-sha-256', 'scram-sha-512'] as const;
 const TRUE_VALUES = new Set(['true', '1']);
 const FALSE_VALUES = new Set(['false', '0']);
 // Connections a replica needs besides one per concurrent send: consumer batch, tick sweep/claim, HTTP.
 const DB_POOL_HEADROOM = 3;
-// A lease must outlast the adapter's send timeout plus the ticker's mark retries (about 0.5 s).
-const MIN_LEASE_SECONDS = SEND_TIMEOUT_MS / 1000 + 1;
+// A lease must outlast the lookup batch window, the adapter's send timeout and the ticker's mark retries.
+// A slower lookup is caught by the ticker's remaining-lease check instead.
+const minLeaseSeconds = (lookupWindowMs: number) =>
+  (lookupWindowMs + SEND_TIMEOUT_MS + LEASE_MARGIN_MS) / 1000;
 const WEB_PROTOCOLS = new Set(['http:', 'https:']);
 const TRAILING_SLASHES = /\/+$/;
 
@@ -132,10 +134,11 @@ const rawSchema = z
         `must be at least MARKETING_SEND_CONCURRENCY + ${DB_POOL_HEADROOM} (${raw.MARKETING_SEND_CONCURRENCY + DB_POOL_HEADROOM})`
       );
     }
-    if (raw.MARKETING_LEASE_SECONDS <= MIN_LEASE_SECONDS) {
+    const minLease = minLeaseSeconds(raw.MARKETING_LOOKUP_WINDOW_MS);
+    if (raw.MARKETING_LEASE_SECONDS <= minLease) {
       issue(
         'MARKETING_LEASE_SECONDS',
-        `must be greater than ${MIN_LEASE_SECONDS} (the ${SEND_TIMEOUT_MS / 1000} s send timeout plus mark retries)`
+        `must be greater than ${minLease} (MARKETING_LOOKUP_WINDOW_MS plus the ${SEND_TIMEOUT_MS / 1000} s send timeout plus mark retries)`
       );
     }
     const hasUsername = raw.KAFKA_SASL_USERNAME !== undefined;

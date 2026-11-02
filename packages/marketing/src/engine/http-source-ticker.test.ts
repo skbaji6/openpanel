@@ -12,7 +12,11 @@ import { randomUUID } from 'node:crypto';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
 import type { LookupChannel, LookupEntry } from '../audience/contract';
-import { SourceAuthError, SourceUnavailableError } from '../audience/errors';
+import {
+  SourceAuthError,
+  SourceProtocolError,
+  SourceUnavailableError,
+} from '../audience/errors';
 import type { AudienceSource } from '../audience/source';
 import { registerAdapter } from '../channels/registry';
 import type {
@@ -61,7 +65,9 @@ const CFG: MarketingConfig = {
   kafka: { brokers: [], clientId: '', topic: '', groupId: '', ssl: false },
 };
 
-const engine = createEngine({ sql, now: () => NOW });
+let clock = NOW;
+let onLookup: () => void = () => undefined;
+const engine = createEngine({ sql, now: () => clock });
 let sends: { msg: RenderedMessage; to: Recipient; projectId: string }[] = [];
 let lookups: { ids: string[]; channel: LookupChannel }[] = [];
 let answer: (id: string) => LookupEntry = (id) => ({
@@ -86,6 +92,7 @@ const fakeSource: AudienceSource = {
   resolve: unused,
   lookup(ids, channel) {
     lookups.push({ ids, channel });
+    onLookup();
     if (lookupError) {
       return Promise.reject(lookupError);
     }
@@ -109,12 +116,12 @@ function capturingAdapter(id: ChannelId): ChannelAdapter<{ secret: string }> {
   };
 }
 
-function tick() {
+function tick(cfg: MarketingConfig = CFG) {
   return runTick({
     sql,
     engine,
-    now: () => NOW,
-    cfg: CFG,
+    now: () => clock,
+    cfg,
     renderUnsubscribeUrl: () => 'https://marketing.test/u',
     logger: { warn: () => undefined },
     sources,
@@ -210,6 +217,8 @@ describe('runTick with an http audience source', () => {
     sends = [];
     lookups = [];
     lookupError = null;
+    clock = NOW;
+    onLookup = () => undefined;
     answer = (id) => ({
       id,
       status: 'ok',
@@ -353,5 +362,57 @@ describe('runTick with an http audience source', () => {
     expect(await tick()).toMatchObject({ sent: 3 });
     expect(lookups).toHaveLength(1);
     expect(lookups[0]?.ids.sort()).toEqual(['u1', 'u2', 'u3']);
+  });
+
+  it('a lookup that outlasts the lease requeues its steps unsent with the attempt restored', async () => {
+    onLookup = () => {
+      clock = new Date(NOW.getTime() + CFG.leaseSeconds * 1000);
+    };
+    const enrollmentId = await enroll();
+    expect(await tick()).toMatchObject({ sent: 0, postponed: 1, failed: 0 });
+    expect(sends).toHaveLength(0);
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('pending');
+    expect(step?.attempt).toBe(0);
+  });
+
+  it('refills during the window never claim more than claimBatch steps in one tick', async () => {
+    const ids: string[] = [];
+    for (const profileId of ['u1', 'u2', 'u3', 'u4', 'u5']) {
+      ids.push(await enroll({ profileId }));
+    }
+    await tick({ ...CFG, claimBatch: 2, lookupWindowMs: 600 });
+    expect(lookups.flatMap((call) => call.ids)).toHaveLength(2);
+    expect(sends).toHaveLength(2);
+    const pending: number[] = [];
+    for (const id of ids) {
+      const step = await stepOf(id);
+      if (step?.status === 'pending') {
+        pending.push(step.attempt);
+      }
+    }
+    expect(pending).toEqual([0, 0, 0]);
+  });
+
+  it('an unreachable reason that is not a short code is recorded as unknown', async () => {
+    for (const reason of ['student@example.test', 'x'.repeat(65)]) {
+      answer = (id) => ({ id, status: 'unreachable', reason });
+      const enrollmentId = await enroll({ profileId: reason.slice(0, 10) });
+      await tick();
+      expect((await stepOf(enrollmentId))?.outcome).toEqual({
+        reason: 'unreachable:unknown',
+      });
+    }
+    expect(sends).toHaveLength(0);
+  });
+
+  it('a protocol error sets the source status to source_error and leaves steps pending', async () => {
+    lookupError = new SourceProtocolError('lookup: invalid JSON');
+    const enrollmentId = await enroll();
+    await tick();
+    expect(await sourceStatus()).toBe('source_error');
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('pending');
+    expect(step?.attempt).toBe(0);
   });
 });

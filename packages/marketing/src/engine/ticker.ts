@@ -5,9 +5,14 @@ import {
   type LookupEntry,
   MAX_LOOKUP_IDS,
 } from '../audience/contract';
-import { SourceAuthError } from '../audience/errors';
+import {
+  SourceAuthError,
+  SourceBusyError,
+  SourceUnavailableError,
+} from '../audience/errors';
 import type { AudienceSource } from '../audience/source';
 import { getAdapter } from '../channels/registry';
+import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from '../channels/timeouts';
 import type {
   ChannelAdapter,
   ChannelId,
@@ -39,6 +44,10 @@ const MAX_ATTEMPTS = 5;
 const RETRY_BACKOFF_MS = 60_000;
 // Short, so journeys resume soon after the source recovers, yet a down source does not spin every tick.
 const SOURCE_BACKOFF_MS = 30_000;
+// A step that waited behind lookups is sent only if its lease still covers a full send and its mark.
+const MIN_LEASE_LEFT_MS = SEND_TIMEOUT_MS + LEASE_MARGIN_MS;
+// The reason comes from the owner's API, so only a short code is recorded.
+const UNREACHABLE_REASON = /^[a-z0-9_.-]{1,64}$/;
 // Total mark budget is about 0.5 s; leaseSeconds must exceed the adapter's own send timeout
 // (at most 30 s) plus this budget, or a slow send can be reclaimed and sent twice.
 const MARK_RETRY_DELAYS_MS = [100, 400];
@@ -100,6 +109,7 @@ interface Claim {
   project_id: string;
   profile_id: string;
   channel: ChannelId | null;
+  lease_until: Date;
 }
 
 interface LookupItem {
@@ -180,7 +190,8 @@ export const CLAIM_SQL = `
   RETURNING s.enrollment_id::text, s.step_index, s.attempt,
     NOT EXISTS (SELECT 1 FROM marketing.steps later
                 WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last,
-    ce.project_id, ce.profile_id, ce.rule_snapshot->'steps'->s.step_index->>'channel' AS channel`;
+    ce.project_id, ce.profile_id, ce.rule_snapshot->'steps'->s.step_index->>'channel' AS channel,
+    s.lease_until`;
 
 // Params: enrollment id, step index.
 const CONTEXT_SQL = `
@@ -422,14 +433,22 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
       await completeIfDone(sql, id);
     }
   }
-  const claimDue = (now: Date) =>
-    sql.$queryRawUnsafe<Claim[]>(
+  // Refills share the tick's claim budget, so a tick never claims more than claimBatch steps.
+  let claimBudget = cfg.claimBatch;
+  const claimDue = async (now: Date) => {
+    if (claimBudget <= 0) {
+      return [];
+    }
+    const claims = await sql.$queryRawUnsafe<Claim[]>(
       CLAIM_SQL,
       now.toISOString(),
       new Date(now.getTime() - cfg.graceSeconds * 1000).toISOString(),
-      cfg.claimBatch,
+      claimBudget,
       new Date(now.getTime() + cfg.leaseSeconds * 1000).toISOString()
     );
+    claimBudget -= claims.length;
+    return claims;
+  };
   const count = (outcome: Outcome) => {
     if (outcome !== 'lost') {
       result[outcome]++;
@@ -442,6 +461,26 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
     claim: Claim;
     entry?: LookupEntry;
   }) => count(await processClaim(deps, claim, entry));
+  // A lookup can take longer than the lease; sending then could race the replica that reclaims it.
+  const sendIfLeaseLeft = async (item: {
+    claim: Claim;
+    entry?: LookupEntry;
+  }) => {
+    const leaseLeftMs =
+      new Date(item.claim.lease_until).getTime() - deps.now().getTime();
+    if (leaseLeftMs >= MIN_LEASE_LEFT_MS) {
+      return await send(item);
+    }
+    try {
+      count(await createStepWriter(deps, item.claim).postpone(deps.now()));
+    } catch (error) {
+      console.error(
+        LOG_PREFIX,
+        stepLabel(item.claim),
+        redactSecrets(error, [])
+      );
+    }
+  };
 
   const routing = createSourceRouting(deps, count);
   const first = await routing.split(await claimDue(tickStart));
@@ -475,7 +514,7 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
   await runPool(
     [...laterStored.map((claim) => ({ claim })), ...lookedUp.flat()],
     cfg.sendConcurrency,
-    send
+    sendIfLeaseLeft
   );
   return result;
 }
@@ -487,7 +526,7 @@ function lookupChannel(channel: ChannelId | null): LookupChannel {
 async function setSourceStatus(
   deps: TickDeps,
   projectId: string,
-  status: 'ok' | 'source_auth_failed'
+  status: 'ok' | 'source_auth_failed' | 'source_error'
 ): Promise<void> {
   try {
     await deps.sql.$executeRawUnsafe(
@@ -529,8 +568,14 @@ function createSourceRouting(
     claims: Claim[],
     error: unknown
   ): Promise<void> {
+    // Down or busy is transient and says nothing about the setup, so only these are shown.
+    const transient =
+      error instanceof SourceUnavailableError ||
+      error instanceof SourceBusyError;
     if (error instanceof SourceAuthError) {
       await setSourceStatus(deps, projectId, 'source_auth_failed');
+    } else if (!transient) {
+      await setSourceStatus(deps, projectId, 'source_error');
     }
     if (!loggedProjects.has(projectId)) {
       loggedProjects.add(projectId);
@@ -891,7 +936,10 @@ function lookupSkipReason(entry: LookupEntry): string | null {
     return null;
   }
   if (entry.status === 'unreachable') {
-    return `unreachable:${entry.reason ?? 'unknown'}`;
+    const reason = UNREACHABLE_REASON.test(entry.reason ?? '')
+      ? entry.reason
+      : 'unknown';
+    return `unreachable:${reason}`;
   }
   return entry.status;
 }

@@ -146,13 +146,20 @@ describe('loadConfig', () => {
     ).toBe(6);
   });
 
-  it('MARKETING_LEASE_SECONDS must exceed the send timeout plus mark retries', () => {
+  it('MARKETING_LEASE_SECONDS must exceed the lookup window plus the send timeout plus mark retries', () => {
     expect(() =>
-      loadConfig({ ...required, MARKETING_LEASE_SECONDS: '31' })
-    ).toThrow(/MARKETING_LEASE_SECONDS: must be greater than 31/);
+      loadConfig({ ...required, MARKETING_LEASE_SECONDS: '33' })
+    ).toThrow(/MARKETING_LEASE_SECONDS: must be greater than 33/);
     expect(
-      loadConfig({ ...required, MARKETING_LEASE_SECONDS: '32' }).leaseSeconds
-    ).toBe(32);
+      loadConfig({ ...required, MARKETING_LEASE_SECONDS: '34' }).leaseSeconds
+    ).toBe(34);
+    expect(() =>
+      loadConfig({
+        ...required,
+        MARKETING_LEASE_SECONDS: '34',
+        MARKETING_LOOKUP_WINDOW_MS: '10000',
+      })
+    ).toThrow(/MARKETING_LEASE_SECONDS: must be greater than 41/);
   });
 
   it('missing KAFKA_EVENTS_TOPIC throws', () => {
