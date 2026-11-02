@@ -199,11 +199,14 @@ export async function startWorker(
       console.warn(LOG_PREFIX, 'no unsubscribe link renderer; sending is off');
     }
 
+    // Separate jobs: a persistent failure in one must not stop the other's retention.
     started.push(
-      every(PURGE_INTERVAL_MS, 'purge', secrets, async () => {
-        await purgeDeadTokens(sql);
-        return await engine.purgeOldEvents(cfg.retentionDays);
-      })
+      every(PURGE_INTERVAL_MS, 'purge dead tokens', secrets, () =>
+        purgeDeadTokens(sql)
+      ),
+      every(PURGE_INTERVAL_MS, 'purge events', secrets, () =>
+        engine.purgeOldEvents(cfg.retentionDays)
+      )
     );
 
     if (deps.startHttp) {
