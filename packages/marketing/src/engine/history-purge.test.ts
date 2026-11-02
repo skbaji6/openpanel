@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
+import { hashToken, purgeDeadTokens, recordDeadTokens } from './dead-tokens';
 
 const README = readFileSync(
   join(import.meta.dir, '..', '..', 'README.md'),
@@ -103,5 +104,24 @@ describe('README history purge recipe', () => {
 
     expect(await remaining('enrollments')).toEqual(kept);
     expect(await remaining('steps')).toEqual(kept);
+  });
+
+  it('purge removes rows older than 90 days and keeps newer', async () => {
+    await recordDeadTokens(sql, 'p', ['old', 'new'], 'k'.repeat(32));
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.dead_tokens SET seen_at = now() - interval '91 days' WHERE token_hash = $1`,
+      hashToken('k'.repeat(32), 'old')
+    );
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.dead_tokens SET seen_at = now() - interval '89 days' WHERE token_hash = $1`,
+      hashToken('k'.repeat(32), 'new')
+    );
+    expect(await purgeDeadTokens(sql)).toBe(1);
+    const rows = await sql.$queryRawUnsafe<{ token_hash: Uint8Array }[]>(
+      'SELECT token_hash FROM marketing.dead_tokens'
+    );
+    expect(
+      rows.map((row) => Buffer.from(row.token_hash).toString('hex'))
+    ).toEqual([hashToken('k'.repeat(32), 'new').toString('hex')]);
   });
 });

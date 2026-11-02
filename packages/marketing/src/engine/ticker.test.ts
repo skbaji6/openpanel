@@ -70,6 +70,11 @@ const CFG: MarketingConfig = {
   webhookAllowHosts: [],
   kafka: { brokers: [], clientId: '', topic: '', groupId: '', ssl: false },
 };
+// A step an outage left two days overdue must not count as expired in the outage-ordering test.
+const LONG_LATENESS_CFG: MarketingConfig = {
+  ...CFG,
+  maxLatenessSeconds: 3 * DAY,
+};
 
 interface Call {
   msg: RenderedMessage;
@@ -1132,12 +1137,12 @@ describe('runTick', () => {
       { dueAt: new Date(DUE.getTime() - DAY * 1000) },
       { dueAt: DUE },
     ]);
-    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect(await tick(LONG_LATENESS_CFG)).toEqual({ ...ZERO, sent: 1 });
     expect((await steps(enrollmentId)).map((s) => s.status)).toEqual([
       'sent',
       'pending',
     ]);
-    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect(await tick(LONG_LATENESS_CFG)).toEqual({ ...ZERO, sent: 1 });
     expect(calls.map((call) => call.opts.idempotencyKey)).toEqual([
       `${enrollmentId}:0`,
       `${enrollmentId}:1`,

@@ -30,6 +30,7 @@ import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
+import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
 import { createEngine } from './engine';
 import { runTick } from './ticker';
 
@@ -77,6 +78,7 @@ let answer: (id: string) => LookupEntry = (id) => ({
   traits: { firstName: 'Ada' },
 });
 let lookupError: Error | null = null;
+let invalidTokens: string[] | undefined;
 let errorLog: Mock<typeof console.error>;
 
 function unused(): never {
@@ -111,7 +113,7 @@ function capturingAdapter(id: ChannelId): ChannelAdapter<{ secret: string }> {
     configSchema: z.object({ secret: z.string() }),
     send(msg, to) {
       sends.push({ msg, to, projectId: msg.meta.projectId });
-      return Promise.resolve({ ok: true });
+      return Promise.resolve({ ok: true, invalidTokens });
     },
   };
 }
@@ -146,7 +148,12 @@ function rule(channel: ChannelId = 'email'): RuleDefinition {
 }
 
 async function enroll(
-  opts: { projectId?: string; profileId?: string; channel?: ChannelId } = {}
+  opts: {
+    projectId?: string;
+    profileId?: string;
+    channel?: ChannelId;
+    dueAt?: Date;
+  } = {}
 ): Promise<string> {
   const projectId = opts.projectId ?? HTTP_PROJECT;
   const definition = rule(opts.channel);
@@ -174,7 +181,7 @@ async function enroll(
     `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status, attempt)
      VALUES ($1::uuid, 0, $2::timestamptz, 'pending', 0)`,
     id,
-    DUE.toISOString()
+    (opts.dueAt ?? DUE).toISOString()
   );
   return id;
 }
@@ -217,6 +224,7 @@ describe('runTick with an http audience source', () => {
     sends = [];
     lookups = [];
     lookupError = null;
+    invalidTokens = undefined;
     clock = NOW;
     onLookup = () => undefined;
     answer = (id) => ({
@@ -265,6 +273,91 @@ describe('runTick with an http audience source', () => {
     expect(sends[0]?.msg.subject).toBe('Hi Ada');
     expect((await stepOf(enrollmentId))?.status).toBe('sent');
     expect(await sourceStatus()).toBe('ok');
+  });
+
+  it("an http project's invalid token is hashed, not stored, and not deleted from devices", async () => {
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      devices: [
+        { token: 'dead-token', platform: 'android' },
+        { token: 'live-token', platform: 'android' },
+      ],
+    });
+    invalidTokens = ['dead-token'];
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.devices (project_id, profile_id, token, platform)
+       VALUES ($1, 'u1', 'dead-token', 'android')`,
+      HTTP_PROJECT
+    );
+    await enroll({ channel: 'push' });
+    expect(await tick()).toMatchObject({ sent: 1 });
+    expect(await count('devices')).toBe(1);
+    const rows = await sql.$queryRawUnsafe<{ token_hash: Uint8Array }[]>(
+      'SELECT token_hash FROM marketing.dead_tokens'
+    );
+    expect(rows).toHaveLength(1);
+    expect(
+      Buffer.from(rows[0]?.token_hash ?? []).equals(Buffer.from('dead-token'))
+    ).toBe(false);
+    expect(
+      await filterLiveTokens(
+        sql,
+        HTTP_PROJECT,
+        ['dead-token', 'live-token'],
+        ENCRYPTION_KEY
+      )
+    ).toEqual(['live-token']);
+  });
+
+  it('known dead tokens are not sent, and a step with only dead tokens is skipped', async () => {
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      devices: [
+        { token: 'dead-a', platform: 'android' },
+        { token: 'live-b', platform: 'android' },
+      ],
+    });
+    await recordDeadTokens(sql, HTTP_PROJECT, ['dead-a'], ENCRYPTION_KEY);
+    await enroll({ channel: 'push' });
+    await tick();
+    expect(sends[0]?.to.deviceTokens).toEqual(['live-b']);
+
+    await recordDeadTokens(sql, HTTP_PROJECT, ['live-b'], ENCRYPTION_KEY);
+    sends = [];
+    const skipped = await enroll({ channel: 'push', profileId: 'u2' });
+    await tick();
+    expect(sends).toHaveLength(0);
+    expect((await stepOf(skipped))?.outcome).toEqual({
+      reason: 'unreachable:no_live_token',
+    });
+  });
+
+  it('a step later than the max lateness is skipped as expired and is not looked up', async () => {
+    const late = new Date(NOW.getTime() - (CFG.maxLatenessSeconds + 1) * 1000);
+    const stored = await enroll({ projectId: STORED_PROJECT, dueAt: late });
+    const http = await enroll({ dueAt: late });
+    expect(await tick()).toMatchObject({ skipped: 2, sent: 0 });
+    expect(lookups).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    for (const id of [stored, http]) {
+      const step = await stepOf(id);
+      expect(step?.status).toBe('skipped');
+      expect(step?.outcome).toEqual({ reason: 'expired' });
+    }
+  });
+
+  it('a step 1 second inside the limit is sent', async () => {
+    const inside = new Date(
+      NOW.getTime() - (CFG.maxLatenessSeconds - 1) * 1000
+    );
+    const exact = new Date(NOW.getTime() - CFG.maxLatenessSeconds * 1000);
+    const a = await enroll({ dueAt: inside });
+    const b = await enroll({ dueAt: exact, profileId: 'u2' });
+    expect(await tick()).toMatchObject({ sent: 2 });
+    expect((await stepOf(a))?.status).toBe('sent');
+    expect((await stepOf(b))?.status).toBe('sent');
   });
 
   it('skips not_found with reason not_found', async () => {

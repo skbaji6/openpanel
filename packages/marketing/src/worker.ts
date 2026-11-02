@@ -2,6 +2,7 @@ import type { Redis } from '@openpanel/redis';
 import { createUnsubscribeUrlRenderer } from './api/unsubscribe';
 import type { SourceResolver } from './audience/resolver';
 import { loadConfig, type MarketingConfig } from './config';
+import { purgeDeadTokens } from './engine/dead-tokens';
 import type { createEngine, Sql } from './engine/engine';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
@@ -199,9 +200,10 @@ export async function startWorker(
     }
 
     started.push(
-      every(PURGE_INTERVAL_MS, 'purge', secrets, () =>
-        engine.purgeOldEvents(cfg.retentionDays)
-      )
+      every(PURGE_INTERVAL_MS, 'purge', secrets, async () => {
+        await purgeDeadTokens(sql);
+        return await engine.purgeOldEvents(cfg.retentionDays);
+      })
     );
 
     if (deps.startHttp) {

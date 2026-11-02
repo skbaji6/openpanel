@@ -24,6 +24,7 @@ import type { MarketingConfig } from '../config';
 import { redactSecrets } from '../redact';
 import type { Step } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
+import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
 import {
   type createEngine,
   type GoalResult,
@@ -48,6 +49,8 @@ const SOURCE_BACKOFF_MS = 30_000;
 const MIN_LEASE_LEFT_MS = SEND_TIMEOUT_MS + LEASE_MARGIN_MS;
 // The reason comes from the owner's API, so only a short code is recorded.
 const UNREACHABLE_REASON = /^[a-z0-9_.-]{1,64}$/;
+const EXPIRED_REASON = 'expired';
+const NO_LIVE_TOKEN_REASON = 'unreachable:no_live_token';
 // Total mark budget is about 0.5 s; leaseSeconds must exceed the adapter's own send timeout
 // (at most 30 s) plus this budget, or a slow send can be reclaimed and sent twice.
 const MARK_RETRY_DELAYS_MS = [100, 400];
@@ -110,6 +113,7 @@ interface Claim {
   profile_id: string;
   channel: ChannelId | null;
   lease_until: Date;
+  due_at: Date;
 }
 
 interface LookupItem {
@@ -191,7 +195,7 @@ export const CLAIM_SQL = `
     NOT EXISTS (SELECT 1 FROM marketing.steps later
                 WHERE later.enrollment_id = s.enrollment_id AND later.step_index > s.step_index) AS is_last,
     ce.project_id, ce.profile_id, ce.rule_snapshot->'steps'->s.step_index->>'channel' AS channel,
-    s.lease_until`;
+    s.lease_until, s.due_at`;
 
 // Params: enrollment id, step index.
 const CONTEXT_SQL = `
@@ -447,12 +451,31 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
       new Date(now.getTime() + cfg.leaseSeconds * 1000).toISOString()
     );
     claimBudget -= claims.length;
-    return claims;
+    return await expireLate(claims, now);
   };
   const count = (outcome: Outcome) => {
     if (outcome !== 'lost') {
       result[outcome]++;
     }
+  };
+  // A step this late would surprise its recipient, so it ends before any lookup or send.
+  const expireLate = async (claims: Claim[], now: Date) => {
+    const latestAllowed = now.getTime() - cfg.maxLatenessSeconds * 1000;
+    const onTime: Claim[] = [];
+    for (const claim of claims) {
+      if (new Date(claim.due_at).getTime() >= latestAllowed) {
+        onTime.push(claim);
+        continue;
+      }
+      try {
+        count(
+          await createStepWriter(deps, claim).finish('skipped', EXPIRED_REASON)
+        );
+      } catch (error) {
+        console.error(LOG_PREFIX, stepLabel(claim), redactSecrets(error, []));
+      }
+    }
+    return onTime;
   };
   const send = async ({
     claim,
@@ -960,15 +983,28 @@ async function loadContext(
   const [row] = await deps.sql.$queryRawUnsafe<
     Omit<StepContext, 'email' | 'attributes' | 'device_tokens'>[]
   >(CONTEXT_NO_CONTACT_SQL, claim.enrollment_id, claim.step_index);
-  return (
-    row && {
-      ...row,
-      email: entry.email ?? null,
-      attributes: entry.traits ?? {},
-      device_tokens: entry.devices?.map((device) => device.token) ?? [],
-      lookup_skip: lookupSkipReason(entry),
-    }
-  );
+  if (!row) {
+    return row;
+  }
+  const looked = entry.devices?.map((device) => device.token) ?? [];
+  const deviceTokens =
+    claim.channel === 'push'
+      ? await filterLiveTokens(
+          deps.sql,
+          claim.project_id,
+          looked,
+          deps.cfg.encryptionKey
+        )
+      : looked;
+  const allDead = looked.length > 0 && deviceTokens.length === 0;
+  return {
+    ...row,
+    email: entry.email ?? null,
+    attributes: entry.traits ?? {},
+    device_tokens: deviceTokens,
+    lookup_skip:
+      lookupSkipReason(entry) ?? (allDead ? NO_LIVE_TOKEN_REASON : null),
+  };
 }
 
 function skipReason(stepDef: Step, context: StepContext): string | null {
@@ -1088,21 +1124,37 @@ async function deliver(
     sendResult,
     loaded.secrets
   );
-  await pruneInvalidTokens(deps.sql, context, sendResult.invalidTokens);
+  await forgetInvalidTokens(
+    deps,
+    context,
+    entry !== undefined,
+    sendResult.invalidTokens
+  );
   return outcome;
 }
 
 // Best effort and never thrown: a throw would reach processClaim, which retries the already sent step.
-async function pruneInvalidTokens(
-  sql: Sql,
+// An http project has no device rows, so its invalid tokens are remembered as hashes instead.
+async function forgetInvalidTokens(
+  deps: TickDeps,
   context: StepContext,
+  fromSource: boolean,
   tokens: string[] | undefined
 ): Promise<void> {
   if (!tokens?.length) {
     return;
   }
   try {
-    await sql.$executeRawUnsafe(
+    if (fromSource) {
+      await recordDeadTokens(
+        deps.sql,
+        context.project_id,
+        tokens,
+        deps.cfg.encryptionKey
+      );
+      return;
+    }
+    await deps.sql.$executeRawUnsafe(
       DELETE_INVALID_TOKENS_SQL,
       context.project_id,
       context.profile_id,
