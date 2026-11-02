@@ -7,6 +7,7 @@ import {
   useMarketingFetch,
   useMarketingQueryKey,
 } from './api';
+import { AudienceSourceCard } from './audience-source-card';
 import {
   type ApiIssue,
   CHANNELS,
@@ -384,6 +385,7 @@ export function ChannelsPage() {
         <ChannelCard channel={channel} key={channel} />
       ))}
       <ApiKeysCard />
+      <AudienceSourceCard />
     </div>
   );
 }

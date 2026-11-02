@@ -248,6 +248,38 @@ describe('marketing proxy', () => {
     expect(marketingCalls()).toHaveLength(2);
   });
 
+  test('audience source: an admin may read, save and test it; a member may do none of them', async () => {
+    const calls = () => [
+      request('audience-source'),
+      request('audience-source', { method: 'PUT', body: '{}' }),
+      request('audience-source/test', { method: 'POST', body: '{}' }),
+    ];
+    const admin = setup({ role: 'admin' });
+    for (const req of calls()) {
+      expect((await admin.proxy.handle(req)).status).toBe(200);
+    }
+    expect(admin.marketingCalls()).toHaveLength(3);
+    const member = setup({ role: 'member' });
+    for (const req of calls()) {
+      expect((await member.proxy.handle(req)).status).toBe(403);
+    }
+    expect(member.marketingCalls()).toHaveLength(0);
+  });
+
+  test('audience source: other methods and sub-paths are rejected', async () => {
+    const { proxy, marketingCalls } = setup();
+    const statuses = await Promise.all(
+      [
+        request('audience-source', { method: 'DELETE' }),
+        request('audience-source/test'),
+        request('audience-source/test', { method: 'PUT', body: '{}' }),
+        request('audience-source/other', { method: 'POST', body: '{}' }),
+      ].map(async (req) => (await proxy.handle(req)).status)
+    );
+    expect(statuses).toEqual([405, 405, 405, 404]);
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
   test('rejects a body over 1 MiB with 413', async () => {
     const { proxy, marketingCalls } = setup();
     const response = await proxy.handle(

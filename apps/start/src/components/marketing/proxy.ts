@@ -26,6 +26,8 @@ const ALLOWED_ROUTES: {
     pattern: /^channels\/(email|webhook|push)$/,
     methods: { GET: 'admin', PUT: 'admin' },
   },
+  { pattern: /^audience-source$/, methods: { GET: 'admin', PUT: 'admin' } },
+  { pattern: /^audience-source\/test$/, methods: { POST: 'admin' } },
   { pattern: /^settings$/, methods: { GET: 'member', PUT: 'admin' } },
   { pattern: /^results$/, methods: { GET: 'member' } },
   { pattern: /^api-keys$/, methods: { POST: 'admin' } },
