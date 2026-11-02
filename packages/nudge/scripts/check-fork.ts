@@ -1,5 +1,6 @@
 // Fails when the branch changes an upstream file beyond the three the plugin may edit.
-const BASE_COMMIT = 'f019500c';
+import { BASE_COMMIT, lines, runGit, runGuard } from './git';
+
 const MODIFIABLE_PATHS = new Set([
   'apps/start/src/components/sidebar-project-menu.tsx',
   'apps/start/src/routeTree.gen.ts',
@@ -17,23 +18,18 @@ export function findForkViolations(
     .map(({ status, path }) => `${status} ${path}`);
 }
 
-async function git(...args: string[]) {
-  const proc = Bun.spawn(['git', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  const out = await new Response(proc.stdout).text();
-  await proc.exited;
-  return out.split('\n').filter(Boolean);
-}
+const gitLines = async (args: string[]) => lines((await runGit(args)).out);
 
 async function main() {
-  const root = (await git('rev-parse', '--show-toplevel'))[0] ?? '.';
+  const root = (await gitLines(['rev-parse', '--show-toplevel']))[0] ?? '.';
   process.chdir(root);
   const changes = [
-    ...(await git('diff', '--name-status', BASE_COMMIT)).map((line) => {
+    ...(await gitLines(['diff', '--name-status', BASE_COMMIT])).map((line) => {
       const [status, ...paths] = line.split('\t');
       // Renames and copies list "R100 old new"; keep both paths in the report.
       return { status: (status ?? '').slice(0, 1), path: paths.join(' -> ') };
     }),
-    ...(await git('ls-files', '--others', '--exclude-standard')).map(
+    ...(await gitLines(['ls-files', '--others', '--exclude-standard'])).map(
       (path) => ({ status: 'A', path })
     ),
   ];
@@ -49,5 +45,5 @@ async function main() {
 }
 
 if (import.meta.main) {
-  await main();
+  await runGuard(main);
 }

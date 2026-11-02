@@ -1,7 +1,7 @@
 // Fails when the old plugin name survives in a file this branch added or modified.
 import { readFileSync } from 'node:fs';
+import { BASE_COMMIT, lines, runGit, runGuard } from './git';
 
-const BASE_COMMIT = 'f019500c';
 const OLD_NAME = /nudge/i;
 const SKIPPED_PATHS = [/^docs\/superpowers\//, /scripts\/check-/];
 // Upstream files that the plugin legitimately edits, so they are scanned despite existing at base.
@@ -23,28 +23,21 @@ export function findRenameViolations(
     .map(({ path }) => path);
 }
 
-async function git(...args: string[]) {
-  const proc = Bun.spawn(['git', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  const [out, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    proc.exited,
-  ]);
-  return { out, ok: code === 0 };
-}
-
-const lines = (text: string) => text.split('\n').filter(Boolean);
-
 async function main() {
-  const root = (await git('rev-parse', '--show-toplevel')).out.trim();
+  const root = (await runGit(['rev-parse', '--show-toplevel'])).out.trim();
   process.chdir(root);
   const changed = [
-    ...lines((await git('diff', '--name-only', BASE_COMMIT)).out),
-    ...lines((await git('ls-files', '--others', '--exclude-standard')).out),
+    ...lines((await runGit(['diff', '--name-only', BASE_COMMIT])).out),
+    ...lines(
+      (await runGit(['ls-files', '--others', '--exclude-standard'])).out
+    ),
   ];
   const files: { path: string; text: string }[] = [];
   for (const path of new Set(changed)) {
     const existedAtBase = (
-      await git('cat-file', '-e', `${BASE_COMMIT}:${path}`)
+      await runGit(['cat-file', '-e', `${BASE_COMMIT}:${path}`], {
+        allowFailure: true,
+      })
     ).ok;
     if (existedAtBase && !SCANNED_UPSTREAM_PATHS.has(path)) {
       continue;
@@ -67,5 +60,5 @@ async function main() {
 }
 
 if (import.meta.main) {
-  await main();
+  await runGuard(main);
 }
