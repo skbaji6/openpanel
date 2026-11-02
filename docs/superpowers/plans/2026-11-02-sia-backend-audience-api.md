@@ -75,7 +75,7 @@
 
 - [ ] **Step 1: Write failing tests** (validator): `rejects depth 4`, `rejects an unknown dimension`, `id allowed only with in and not_in`, `id with 1001 values rejected`, `between needs two`, `type mismatch`. (Compiler): `eq binds a parameter`, `in binds a list`, `a value containing a quote, semicolon, -- and unicode appears only in params`, `not_in`, `between`, `exists`, `nested OR inside AND is parenthesised`, `course includes the enrollments EXISTS`, `purchase_status PURCHASED and NOT_PURCHASED`, `an unknown dimension throws IllegalArgumentException`.
 - [ ] **Step 2: Run** them; expect FAIL.
-- [ ] **Step 3: Implement** the model, validator and compiler; Jackson polymorphic deserialization for `FilterTree` (`group` has `and`/`or` + `children`; condition has `dimension`, `op`, `values`; match the marketing contract's JSON exactly: read `contract.ts`).
+- [ ] **Step 3: Implement** the model, validator and compiler; Jackson deserialization for `FilterTree`: a group is `{"op": "and"|"or", "children": [...]}` (non-empty), a condition is `{"dimension", "op", "values"}`, a node is a group when it has `children`; depth counts groups with a lone condition as depth 1 (so group > group > condition is the maximum, depth 3); `date` values are ISO `YYYY-MM-DD` strings and number dimensions accept only JSON numbers. This matches `packages/marketing/src/audience/contract.ts` (read it).
 - [ ] **Step 4: Run** the tests (PASS).
 - [ ] **Step 5: Commit** `feat(audience): filter tree validation and parameterised compiler`.
 
