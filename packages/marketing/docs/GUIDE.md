@@ -84,7 +84,7 @@ Run the tests with `cd packages/marketing && bun test --isolate` (needs Postgres
 
 ## 5. Connect it
 
-There are three connection points: events (already done by OpenPanel), the dashboard, and your backend.
+There are four connection points: events (already done by OpenPanel), the dashboard, the audience source and, for the stored source, the sync API from your backend.
 
 ### 5a. Events
 
@@ -95,12 +95,22 @@ Nothing to configure. The worker consumes the topic named by `KAFKA_EVENTS_TOPIC
 Open a project: the sidebar has **Marketing** with four tabs: Journeys, Channels, Results and How it works.
 
 - **Journeys**: create from a starter or from scratch, as a vertical timeline with one form per step. Activate or pause. Preview templates with sample data.
-- **Channels**: email (SMTP), push (Firebase service account) and webhook (URL plus secret), plus the project's caps, quiet hours and API keys.
+- **Channels**: the audience source (5c), email (SMTP), push (Firebase service account) and webhook (URL plus secret), plus the project's caps, quiet hours and API keys.
 - **Results**: per rule: enrolled, messaged, sent, completed after send, conversion, skipped, failed.
+- **How it works**: this guide, in short.
 
 Organization owners and admins can change things; members can read and preview.
 
-### 5c. Your backend (server to server)
+### 5c. The audience source
+
+Each project gets its people from one source, set on the Channels tab:
+
+- **Stored**: your backend pushes contacts and devices to the sync API (5d). Simple; the plugin holds the contact data.
+- **HTTP**: you run the audience API of `docs/AUDIENCE_CONTRACT.md` and register its base URL, key id and secret. The plugin stores only the encrypted secret and, per send, ids and a status; it asks your API for contact details one batch at a time and discards them. Use this when student data must stay in your system. The Channels tab shows whether the source is healthy or failing authentication. Verify your API first with the conformance suite (`conformance/README.md`); `examples/audience-api-postgres/` is a working reference.
+
+With the HTTP source, steps that come due are grouped (up to 500 ids, waiting at most `MARKETING_LOOKUP_WINDOW_MS`, default 2 s), looked up and sent; a person returned as not found, suppressed or unreachable is recorded as skipped with that reason. A step overdue by more than `MARKETING_MAX_LATENESS` (default one day) is skipped as `expired`, for both sources.
+
+### 5d. Your backend (server to server, stored source)
 
 Your backend talks to the worker with a project **API key**. Device registration is server-to-server only; apps never call these endpoints.
 
@@ -131,6 +141,10 @@ Notes:
 - A person with no contact email gets no email step; a person with no device gets no push. These steps are recorded as skipped, not failed.
 - You own consent. The plugin sends to whoever you sync and honours its own email unsubscribe links. Push has no opt-out inside the plugin: stop syncing the device, or delete it.
 - If your users live in two databases, sync contacts and devices from your own user service whenever a user registers, changes email or logs in on a new device.
+
+### 5e. Where it runs, and its own database
+
+The recommended production layout is a separate service close to your own backend, not inside it: OpenPanel at Hetzner; marketing workers, their Postgres and Redis at AWS Hyderabad; the worker consumes the events topic over TLS and SASL from AWS and calls your `/internal/audience/**` over signed HTTPS. Workers scale as replicas of one service (consumer, ticker and API together) and never touch your student database. Give them a dedicated database with `MARKETING_DATABASE_URL` (it falls back to `DATABASE_URL`, which shares OpenPanel's database: fine for small installs). The README, "Audience source and topology", has the details and the variables `MARKETING_SOURCE_CONCURRENCY`, `MARKETING_LOOKUP_WINDOW_MS` and `MARKETING_MAX_LATENESS`.
 
 ## 6. Configure the channels
 
@@ -242,13 +256,16 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 | No "Marketing" in the sidebar, or the pages 404 | The dashboard is the stock image, or `MARKETING_URL` / `MARKETING_PROXY_SECRET` are not set on it. |
 | Unsubscribe link 404s | The same, or `MARKETING_PUBLIC_URL` is not the dashboard's public origin. |
 | Rule is active but nobody is messaged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours or caps hold it back. Check Results (skipped / failed). |
+| Steps show `skipped: expired` | The step was more than `MARKETING_MAX_LATENESS` late (an outage or a long backlog). Intended. |
+| Steps show `unreachable:...` or `suppressed` | The audience source says the person cannot be reached on that channel (HTTP source). |
+| Source shows failing | Wrong key or secret (401), the API is down, or its answers do not match the contract; run the conformance suite. |
 | Everyone is messaged though they reached the goal | A `matchOn` property is missing on the goal event, or the goal event name differs. For a `set` goal, the set does not contain the value the app sends. |
 | `401` from the sync API | Wrong or revoked key. After revoking, a replica may accept the old key for up to 5 minutes. |
 | `429` from the sync API | Too many failed key attempts from one IP (30 per minute). |
 | Email fails | SMTP settings or TLS mode; check the failure reason in Results. |
 | Push has no effect | Service account JSON for another Firebase project, or the device token belongs to a different Firebase app. |
 | Webhook shows `blocked url` | Not https and the host is not in `MARKETING_WEBHOOK_ALLOW_HOSTS`, or it resolves to a private address. |
-| Worker will not start | A required variable is missing (the log names it), or `MARKETING_DB_POOL` is below `MARKETING_SEND_CONCURRENCY` + 3, or `MARKETING_LEASE_SECONDS` is 31 or less. |
+| Worker will not start | A required variable is missing (the log names it), or `MARKETING_DB_POOL` is below `MARKETING_SEND_CONCURRENCY` + 3, or `MARKETING_LEASE_SECONDS` is not greater than `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. |
 
 ## 12. Limits worth knowing
 

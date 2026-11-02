@@ -8,21 +8,25 @@ New here? Start with the [setup and integration guide](docs/GUIDE.md). This READ
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DATABASE_URL` | required | Postgres; `connection_limit` is set from `MARKETING_DB_POOL` |
+| `DATABASE_URL` | required unless `MARKETING_DATABASE_URL` is set | Postgres; `connection_limit` is set from `MARKETING_DB_POOL` |
+| `MARKETING_DATABASE_URL` | unset | A dedicated database for the plugin; `DATABASE_URL` is used when unset (see "Audience source and topology") |
 | `REDIS_URL` | required | Redis |
 | `ENCRYPTION_KEY` | required | Encrypts channel config; unsubscribe token key is derived from it |
 | `MARKETING_PROXY_SECRET` | required | Shared secret with the dashboard proxy |
-| `MARKETING_PUBLIC_URL` | required | Base URL for unsubscribe links |
+| `MARKETING_PUBLIC_URL` | required | Base URL for unsubscribe links and tracking. The production domain is undecided and is supplied by the owner |
 | `MARKETING_PORT` | 4100 | HTTP port |
 | `MARKETING_TRUST_PROXY` | false | Take the client IP from `x-forwarded-for` (see below) |
 | `MARKETING_GRACE_SECONDS` | 300 | Window in which an observed goal cancels a pending journey message |
 | `MARKETING_MAX_LAG` | 1000 | Consumer lag above which the ticker pauses sending (nothing is dropped) |
 | `MARKETING_TICK_MS` | 5000 | Ticker interval |
-| `MARKETING_LEASE_SECONDS` | 120 | Lease on claimed steps; must be more than 31 (30 s send timeout plus mark retries) |
+| `MARKETING_LEASE_SECONDS` | 120 | Lease on claimed steps; must be greater than `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31 (30 s send timeout plus mark retries), so more than 33 with the default window |
 | `MARKETING_EVENT_RETENTION_DAYS` | 30 | Event retention |
 | `MARKETING_CLAIM_BATCH` | 200 | Steps claimed per tick |
 | `MARKETING_SEND_CONCURRENCY` | 10 | Concurrent sends |
 | `MARKETING_DB_POOL` | 15 | Prisma pool size (the DB is shared with core); must be at least `MARKETING_SEND_CONCURRENCY` + 3 |
+| `MARKETING_SOURCE_CONCURRENCY` | 4 | Audience API calls in flight, across all replicas (Redis semaphore) |
+| `MARKETING_LOOKUP_WINDOW_MS` | 2000 | How long the engine waits to fill a lookup batch (up to 500 ids) before calling `/members/lookup` |
+| `MARKETING_MAX_LATENESS` | 86400 | Seconds. A step overdue by more than this is skipped as `expired`, not sent, for both sources |
 | `MARKETING_WEBHOOK_ALLOW_HOSTS` | empty | Comma list of internal hosts webhooks may reach |
 | `MARKETING_KAFKA_GROUP` | marketing | Consumer group id |
 | `KAFKA_BROKERS` | required | Comma list |
@@ -52,6 +56,14 @@ Both answer 404 until these are set on the dashboard process (the proxy needs bo
 | `MARKETING_PROXY_SECRET` | Same value as the worker's |
 
 Roles: every `/marketing-api/*` call is checked against core first. Organization owners and admins can change rules, channels, settings, reference sets and API keys, and read channel configuration; members can read rules, starter rules, settings, results and reference sets, and preview templates. Contact and device sync are never reachable through the dashboard. The unsubscribe route forwards only the query string, a POST body of at most 64 KiB, `content-type` and `x-forwarded-for` (verbatim), never the proxy secret, and returns only the worker's status, body, `content-type`, `content-security-policy` and `cache-control`.
+
+## Audience source and topology
+
+A project's people can come from two sources, chosen on the Channels tab: `stored` (contacts and devices synced through the sync endpoints) or `http` (the owner's signed audience API: the plugin asks it for counts, pages of ids and, when a step is due, a lookup of up to 500 ids, and keeps no contact data). The contract, signing, limits and a conformance suite are in [`docs/AUDIENCE_CONTRACT.md`](docs/AUDIENCE_CONTRACT.md); a runnable reference server is `examples/audience-api-postgres/`. Moving the owner's existing backend journeys onto the plugin is in [`docs/CUTOVER_BACKEND_JOURNEYS.md`](docs/CUTOVER_BACKEND_JOURNEYS.md): read its opt-out warning first.
+
+Intended topology (spec section 3.1): OpenPanel (dashboard, API, Redpanda, ClickHouse) at Hetzner; the marketing worker replicas, the marketing Postgres and Redis in AWS Hyderabad next to the owner's backend. The worker consumes the events topic across the WAN over TLS and SASL, initiated from AWS, and calls the owner's `/internal/audience/**` over signed HTTPS; the dashboard reaches the worker through the existing proxy over HTTPS with the shared secret, and the worker's port is open only to the Hetzner addresses. The worker is a **separate service** from the owner's backend: it never connects to the student database. Set `MARKETING_DATABASE_URL` to a dedicated database in AWS; sharing OpenPanel's database through `DATABASE_URL` stays supported for small installs. Keep the Redpanda topic retention longer than the longest outage you accept (at least 7 days); after an outage, steps later than `MARKETING_MAX_LATENESS` are skipped as `expired`. `scripts/consumer-bytes.ts` measures the WAN bandwidth of the topic.
+
+Source calls: 5 s timeout for `count`, 10 s for the others, 3 attempts with jittered backoff on 5xx and 429, no retry on 401 or 403, responses over 8 MiB rejected, redirects never followed. If the source is down, journey steps stay pending and resume by themselves; nothing is marked failed because of it.
 
 ## Deploy
 
@@ -106,6 +118,9 @@ Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --n
 ### Plugin upgrade notes
 
 - Migration 0005 adds `marketing.enrollments.end_reason`. Journeys that ended before it have no end reason, so after the upgrade they count as not converted: "Completed after send" and conversion start low and only count journeys that end afterwards.
+- **Lease rule (config now fails at startup).** `MARKETING_LEASE_SECONDS` must exceed `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. With the default 2,000 ms window that is more than 33, so configs of 32 to 34 s that used to boot are now rejected; raise it (the default 120 is fine).
+- **Expired steps (behaviour change).** A step that is overdue by more than `MARKETING_MAX_LATENESS` (default 86,400 s) is skipped as `expired` instead of sent, for the `stored` source as well. After a long outage, steps older than a day are no longer sent late.
+- Migrations 0007 (`marketing.audience_sources`), 0008 (source status columns) and 0009 (`marketing.dead_tokens`: hashes of push tokens FCM reported dead, purged after 90 days) are additive and fast.
 - Migration 0006 builds an index on `marketing.events (event_time)` inside the startup migration. It locks writes to `marketing.events` while it builds, so on a large table expect the first start to take longer.
 
 ## End-to-end check

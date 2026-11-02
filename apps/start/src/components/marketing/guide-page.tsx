@@ -62,7 +62,9 @@ export function GuidePage() {
             </Link>{' '}
             tab and set up email (SMTP), push (a Firebase service account) or a
             webhook to your own backend. Create an API key there too if your
-            backend will sync contacts.
+            backend will sync contacts, or choose the audience source there:
+            your own audience API (people stay in your system) or the contacts
+            you sync.
           </li>
           <li>
             <strong>Tell it who to contact.</strong> Your backend sends each
@@ -71,7 +73,7 @@ export function GuidePage() {
             skipped.
           </li>
           <li>
-            <strong>Create a rule.</strong> On the Rules tab, pick{' '}
+            <strong>Create a rule.</strong> On the Journeys tab, pick{' '}
             <em>Start from template</em> and change the event names to the ones
             your app sends. The preview shows the message with sample data.
           </li>
@@ -162,9 +164,9 @@ export function GuidePage() {
 
       <Section title="Connect your backend">
         <p className="text-muted-foreground">
-          Your backend sends contacts, push tokens and item lists to the message
-          service with an API key. For example, to save a person's email and
-          name:
+          Your backend sends contacts, push tokens and item lists to the
+          marketing service with an API key. For example, to save a person's
+          email and name:
         </p>
         <Code>{SYNC_EXAMPLE}</Code>
         <p className="text-muted-foreground">
