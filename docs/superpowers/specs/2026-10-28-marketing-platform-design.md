@@ -61,6 +61,14 @@ AWS Hyderabad: ▼                                                 │
 - The marketing database lives in AWS next to the workers. By default it is a separate database (`MARKETING_DATABASE_URL`); sharing OpenPanel's database remains supported for small installs but is not this topology.
 - The owner's production database is reached only by `sia-backend`, never by the plugin.
 
+### 3.2 Where the workers run (decided by the owner)
+
+The marketing workers are a **separate service**, not part of `sia-backend`.
+- **Marketing worker** (this repo, Bun/TypeScript, `packages/marketing`): journeys, campaigns, the events consumer and the send engine. It has its own Postgres schema and Redis, runs as one or more replicas in AWS Hyderabad, and never connects to the student database.
+- **`sia-backend`** gains only the read-only `/internal/audience/**` endpoints (section 5.4) and a flag that disables its own journey service at cut-over. It hosts no marketing workers.
+- Why: the plugin stays in the OpenPanel fork without a Java rewrite; a large campaign cannot compete with the student-facing app for CPU, connections or memory; and the worker sees only ids and what the signed API returns, so the "no personal data stored" rule is a hard boundary rather than a convention.
+- Cost accepted: one more service to deploy, monitor and secure, and network calls to `sia-backend` that the plugin pages, bounds and backs off on (section 5.2).
+
 ## 4. Roadmap
 
 | Phase | Scope | Where |
