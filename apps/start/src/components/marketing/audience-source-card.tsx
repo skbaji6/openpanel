@@ -53,7 +53,7 @@ const SAVE_ERROR_MESSAGES: Record<string, string> = {
   secret_required:
     'Enter the secret again: a new base URL or key id needs its own secret',
   invalid_base_url:
-    'The base URL must be https (http is only allowed for localhost) and have no credentials, query or fragment',
+    'The base URL must be https (http is only allowed for localhost) and have no credentials, query, fragment or empty path segment (//)',
 };
 
 function failureMessage(code: string): string {

@@ -102,6 +102,8 @@ describe('audience source routes', () => {
       'https://u:p@owner.test',
       'https://owner.test?x=1',
       'https://owner.test#f',
+      'http://localhost//attacker.example/api',
+      'https://owner.test/a//b',
     ]) {
       const res = await call('PUT', URL_PATH, { ...valid, baseUrl });
       expect(res.status).toBe(400);

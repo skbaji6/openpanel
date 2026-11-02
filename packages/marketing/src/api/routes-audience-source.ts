@@ -39,11 +39,19 @@ function normalizeBaseUrl(value: string): string | null {
   const allowedScheme =
     url.protocol === 'https:' ||
     (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
-  const clean = !(url.username || url.password || url.search || url.hash);
+  const path = url.pathname.replace(TRAILING_SLASHES, '');
+  // An empty segment is never needed and // can be read as the start of another host.
+  const clean = !(
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    path.includes('//')
+  );
   if (!(allowedScheme && clean)) {
     return null;
   }
-  return `${url.origin}${url.pathname.replace(TRAILING_SLASHES, '')}`;
+  return `${url.origin}${path}`;
 }
 
 const zBody = z.strictObject({

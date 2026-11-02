@@ -271,6 +271,19 @@ describe('http audience source', () => {
     }
   });
 
+  it('a base path starting with // never sends the request to another host', async () => {
+    let url = '';
+    const { source } = setup(
+      async (u) => {
+        url = u;
+        return json({ dimensions: [] });
+      },
+      { baseUrl: 'http://localhost//attacker.example/api' }
+    );
+    await source.schema();
+    expect(new URL(url).host).toBe('localhost');
+  });
+
   it('dimension values must be an object with a values array', async () => {
     const { source } = setup(async () => json([{ value: 'a', label: 'A' }]));
     await expect(source.dimensionValues('state', '', 5)).rejects.toBeInstanceOf(

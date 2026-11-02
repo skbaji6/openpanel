@@ -97,7 +97,7 @@ export function createContext(
     payload?: unknown,
     options: RawOptions = {}
   ): Promise<{ status: number; json: unknown }> {
-    const url = new URL(`${basePath}${route}`, base.origin);
+    const url = new URL(`${base.origin}${basePath}${route}`);
     const path = `${url.pathname}${url.search}`;
     const body = payload === undefined ? '' : JSON.stringify(payload);
     const auth = options.auth ?? 'valid';

@@ -134,7 +134,8 @@ export function createHttpSource(opts: HttpSourceOptions): AudienceSource {
     const cancelTimer = setTimer(() => controller.abort(), timeoutMs);
     try {
       // Signed as fetch will serialise it (e.g. ' becomes %27), so the server verifies what it receives.
-      const url = new URL(`${basePath}${route}`, base.origin);
+      // Not new URL(path, origin): a path starting with // would name another host.
+      const url = new URL(`${base.origin}${basePath}${route}`);
       const path = `${url.pathname}${url.search}`;
       const headers: Record<string, string> = signRequest({
         method,
