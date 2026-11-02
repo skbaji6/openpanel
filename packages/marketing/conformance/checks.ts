@@ -97,7 +97,8 @@ export function createContext(
     payload?: unknown,
     options: RawOptions = {}
   ): Promise<{ status: number; json: unknown }> {
-    const path = `${basePath}${route}`;
+    const url = new URL(`${basePath}${route}`, base.origin);
+    const path = `${url.pathname}${url.search}`;
     const body = payload === undefined ? '' : JSON.stringify(payload);
     const auth = options.auth ?? 'valid';
     const headers: Record<string, string> =
@@ -120,7 +121,7 @@ export function createContext(
     if (method === 'POST') {
       headers['Content-Type'] = 'application/json';
     }
-    const res = await doFetch(`${base.origin}${path}`, {
+    const res = await doFetch(url.href, {
       method,
       headers,
       body: method === 'POST' ? (options.sendBody ?? body) : undefined,
@@ -326,6 +327,8 @@ export const checks: { name: string; run: (ctx: Context) => Promise<void> }[] =
         if (one.length > 1) {
           fail(`limit=1 returned ${one.length} values`);
         }
+        // An apostrophe is sent as %27; a server that verifies anything but the received query rejects it.
+        await ctx.source.dimensionValues('university', "St. Mary's", 5);
       },
     },
     {
@@ -798,7 +801,8 @@ export const checks: { name: string; run: (ctx: Context) => Promise<void> }[] =
           ];
           for (const [what, request] of attempts) {
             const { status, json } = await request;
-            if (status >= STATUS_CLIENT_ERROR_END) {
+            // Anything but a clean answer or a validation error (a 401 is a signature mismatch) fails.
+            if (status !== STATUS_OK && status !== STATUS_BAD_REQUEST) {
               fail(`${label} in ${what}: answered ${status}`);
             }
             const count = (json as { count?: unknown })?.count;

@@ -32,10 +32,10 @@ All bodies are JSON (`Content-Type: application/json` on POST). All paths below 
 
 ### 2. `GET /dimensions/{key}/values?q=&limit=`
 
-Only for dimensions with `valuesListable: true`. `q` is a case-insensitive search text (may be empty), `limit` the most items wanted. The plugin accepts a bare array or `{ "values": [...] }`:
+Only for dimensions with `valuesListable: true`. `q` is a case-insensitive search text (may be empty), `limit` the most items wanted. The response is an object with a `values` array (a bare array is rejected as a protocol error):
 
 ```json
-[ { "value": "12", "label": "Biology" }, { "value": "14", "label": "Biotechnology" } ]
+{ "values": [ { "value": "12", "label": "Biology" }, { "value": "14", "label": "Biotechnology" } ] }
 ```
 
 `value` is a string; `label` is what people see. The query string is part of the signed path (see below).
@@ -164,7 +164,7 @@ SHA256_HEX_OF_BODY
 ```
 
 - `METHOD` is upper case.
-- `PATH` is the request path **exactly as sent**, including any base-path prefix and, for the dimension-values call, the query string (`?q=...&limit=...`) with its percent-encoding unchanged. It is not the full URL: no scheme or host.
+- `PATH` is the request path **exactly as sent**, including any base-path prefix and, for the dimension-values call, the query string (`?q=...&limit=...`). It is not the full URL: no scheme or host. The plugin signs the URL-normalised form, what a WHATWG `URL` serialises as `pathname + search` (for example `q=St.%20Mary%27s`: the apostrophe goes out as `%27`). The rule for a server: verify against the path and query string **as received**, byte for byte, before any decoding; never re-encode or decode them first.
 - `SHA256_HEX_OF_BODY` is the hex SHA-256 of the raw body bytes; for `GET` the body is empty, so it is `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 
 ### Worked example

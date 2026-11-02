@@ -528,11 +528,12 @@ export function createServer(opts: ServerOptions) {
     }
     const valuesMatch = /^\/dimensions\/([^/]+)\/values$/.exec(path);
     if (method === 'GET' && valuesMatch) {
-      return dimensionValues(
+      const values = await dimensionValues(
         decodeKey(valuesMatch[1] ?? ''),
         search.get('q') ?? '',
         search.get('limit') ?? ''
       );
+      return { values };
     }
     if (method === 'POST') {
       const handlers: Record<string, (body: unknown) => Promise<unknown>> = {

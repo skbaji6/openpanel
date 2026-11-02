@@ -250,9 +250,9 @@ describe('audience routes', () => {
       })
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([
-      { value: 'u2', label: 'Beta University' },
-    ]);
+    expect(await res.json()).toEqual({
+      values: [{ value: 'u2', label: 'Beta University' }],
+    });
   });
 
   it('resolve matches emails and phones and reports the rest', async () => {

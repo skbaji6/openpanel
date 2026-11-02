@@ -133,7 +133,9 @@ export function createHttpSource(opts: HttpSourceOptions): AudienceSource {
     const controller = new AbortController();
     const cancelTimer = setTimer(() => controller.abort(), timeoutMs);
     try {
-      const path = `${basePath}${route}`;
+      // Signed as fetch will serialise it (e.g. ' becomes %27), so the server verifies what it receives.
+      const url = new URL(`${basePath}${route}`, base.origin);
+      const path = `${url.pathname}${url.search}`;
       const headers: Record<string, string> = signRequest({
         method,
         path,
@@ -146,7 +148,7 @@ export function createHttpSource(opts: HttpSourceOptions): AudienceSource {
       if (method === 'POST') {
         headers['Content-Type'] = 'application/json';
       }
-      const res = await doFetch(`${base.origin}${path}`, {
+      const res = await doFetch(url.href, {
         method,
         headers,
         body: method === 'POST' ? body : undefined,

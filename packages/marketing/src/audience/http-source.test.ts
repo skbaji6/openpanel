@@ -8,6 +8,7 @@ import {
 } from './errors';
 import { createHttpSource, MAX_BODY_BYTES } from './http-source';
 import type { createSourceLimiter } from './limiter';
+import { verifyRequest } from './signing';
 
 type Limiter = ReturnType<typeof createSourceLimiter>;
 type FetchFn = (url: string, init: RequestInit) => Promise<Response>;
@@ -228,11 +229,52 @@ describe('http audience source', () => {
     let url = '';
     const { source } = setup(async (u) => {
       url = u;
-      return json([{ value: 'a', label: 'A' }]);
+      return json({ values: [{ value: 'a', label: 'A' }] });
     });
     await source.dimensionValues('state', 'ka r', 5);
     expect(url).toBe(
       'https://x.test/internal/audience/dimensions/state/values?q=ka%20r&limit=5'
+    );
+  });
+
+  it('a dimension-values search with awkward characters verifies on the server as received', async () => {
+    const searches = [
+      "St. Mary's",
+      'a b',
+      '"quoted"',
+      'café 東京',
+      'a&b=c',
+      '100%',
+      '~!*()',
+    ];
+    for (const q of searches) {
+      let verdict = { ok: false } as { ok: boolean };
+      let receivedQ = null as string | null;
+      const { source } = setup(async (u, init) => {
+        // What a WHATWG server sees: the URL as fetch serialises it.
+        const received = new URL(new Request(u).url);
+        receivedQ = received.searchParams.get('q');
+        verdict = await verifyRequest({
+          headers: init.headers as Record<string, string>,
+          method: 'GET',
+          path: `${received.pathname}${received.search}`,
+          body: '',
+          keys: [{ id: 'k1', secret: 'topsecret' }],
+          now: 1_700_000_000,
+          nonces: { seenBefore: async () => false },
+        });
+        return json({ values: [{ value: 'a', label: 'A' }] });
+      });
+      await source.dimensionValues("state's key", q, 5);
+      expect({ q, ok: verdict.ok }).toEqual({ q, ok: true });
+      expect(receivedQ).toBe(q);
+    }
+  });
+
+  it('dimension values must be an object with a values array', async () => {
+    const { source } = setup(async () => json([{ value: 'a', label: 'A' }]));
+    await expect(source.dimensionValues('state', '', 5)).rejects.toBeInstanceOf(
+      SourceProtocolError
     );
   });
 
