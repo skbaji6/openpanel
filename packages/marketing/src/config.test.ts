@@ -30,7 +30,18 @@ describe('loadConfig', () => {
 
   it('fails when neither database URL is set', () => {
     const { DATABASE_URL: _omitted, ...rest } = required;
-    expect(() => loadConfig(rest)).toThrow(/DATABASE_URL/);
+    expect(() => loadConfig(rest)).toThrow(
+      /set DATABASE_URL or MARKETING_DATABASE_URL/
+    );
+  });
+
+  it('works with only MARKETING_DATABASE_URL set', () => {
+    const { DATABASE_URL: _omitted, ...rest } = required;
+    const config = loadConfig({
+      ...rest,
+      MARKETING_DATABASE_URL: 'postgresql://u:p@other:5432/marketing_db',
+    });
+    expect(new URL(config.databaseUrl).pathname).toBe('/marketing_db');
   });
 
   it('rejects a MARKETING_DATABASE_URL that is not a URL without echoing it', () => {

@@ -54,7 +54,7 @@ const optionalBoolean = z.preprocess(
 
 const rawSchema = z
   .object({
-    DATABASE_URL: requiredString,
+    DATABASE_URL: optionalString,
     // A dedicated database for the plugin; DATABASE_URL is used when unset.
     MARKETING_DATABASE_URL: optionalString,
     REDIS_URL: requiredString,
@@ -97,6 +97,12 @@ const rawSchema = z
     const issue = (path: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [path], message });
     // The value is a secret, so the message never echoes it.
+    if (
+      raw.DATABASE_URL === undefined &&
+      raw.MARKETING_DATABASE_URL === undefined
+    ) {
+      issue('DATABASE_URL', 'set DATABASE_URL or MARKETING_DATABASE_URL');
+    }
     for (const [name, value] of [
       ['DATABASE_URL', raw.DATABASE_URL],
       ['MARKETING_DATABASE_URL', raw.MARKETING_DATABASE_URL],
@@ -208,7 +214,7 @@ export function loadConfig(
 
   return {
     databaseUrl: withConnectionLimit(
-      raw.MARKETING_DATABASE_URL ?? raw.DATABASE_URL,
+      (raw.MARKETING_DATABASE_URL ?? raw.DATABASE_URL) as string,
       raw.MARKETING_DB_POOL
     ),
     redisUrl: raw.REDIS_URL,
