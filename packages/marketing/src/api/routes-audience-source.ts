@@ -12,7 +12,7 @@ import { createHttpSource } from '../audience/http-source';
 import { createSourceLimiter } from '../audience/limiter';
 import type { SourceResolver, SourceRow } from '../audience/resolver';
 import type { MarketingConfig } from '../config';
-import type { Queryable } from '../engine/engine';
+import type { Queryable, Sql } from '../engine/engine';
 import { HttpError, json, parseJsonBody, type Route } from './http';
 
 const MAX_FIELD_LENGTH = 2048;
@@ -24,7 +24,7 @@ const TRAILING_SLASHES = /\/+$/;
 
 interface Deps {
   cfg: MarketingConfig;
-  sql: Queryable;
+  sql: Queryable & Pick<Sql, '$transaction'>;
   redis: Redis;
   resolver: SourceResolver;
   fetch?: typeof fetch;
@@ -54,22 +54,18 @@ const zBody = z.strictObject({
   secret: z.string().max(MAX_FIELD_LENGTH).optional(),
 });
 
-// One statement, so the switch and the purge commit together. An http project keeps no contact
-// data; its opt-outs and dead-token hashes are ids only and keep working.
 const SAVE_SOURCE_SQL = `
-  WITH saved AS (
-    INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
-    VALUES ($1, $2, $3, $4, $5)
-    ON CONFLICT (project_id) DO UPDATE SET kind = EXCLUDED.kind, base_url = EXCLUDED.base_url,
-      key_id = EXCLUDED.key_id, secret_encrypted = EXCLUDED.secret_encrypted, updated_at = now(),
-      status = 'unknown', status_at = NULL
-    RETURNING 1
-  ), purged_contacts AS (
-    DELETE FROM marketing.contacts WHERE project_id = $1 AND $2::text = 'http' RETURNING 1
-  ), purged_devices AS (
-    DELETE FROM marketing.devices WHERE project_id = $1 AND $2::text = 'http' RETURNING 1
-  )
-  SELECT count(*)::int AS saved FROM saved`;
+  INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
+  VALUES ($1, $2, $3, $4, $5)
+  ON CONFLICT (project_id) DO UPDATE SET kind = EXCLUDED.kind, base_url = EXCLUDED.base_url,
+    key_id = EXCLUDED.key_id, secret_encrypted = EXCLUDED.secret_encrypted, updated_at = now(),
+    status = 'unknown', status_at = NULL`;
+
+// An http project keeps no contact data; its opt-outs and dead-token hashes are ids only and stay.
+const PURGE_CONTACT_DATA_SQL = [
+  'DELETE FROM marketing.contacts WHERE project_id = $1',
+  'DELETE FROM marketing.devices WHERE project_id = $1',
+];
 
 function failureCode(error: unknown) {
   if (error instanceof SourceAuthError) {
@@ -144,14 +140,23 @@ export function audienceSourceRoutes(deps: Deps): Route[] {
             throw new HttpError(400, 'invalid_body');
           }
         }
-        await sql.$queryRawUnsafe(
-          SAVE_SOURCE_SQL,
-          ctx.projectId,
-          body.kind,
-          baseUrl,
-          keyId,
-          secretEncrypted
-        );
+        // Separate statements in one transaction: the upsert waits for any sync holding the source row,
+        // and each purge then takes a fresh snapshot that includes what that sync committed.
+        await sql.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(
+            SAVE_SOURCE_SQL,
+            ctx.projectId,
+            body.kind,
+            baseUrl,
+            keyId,
+            secretEncrypted
+          );
+          if (body.kind === 'http') {
+            for (const purge of PURGE_CONTACT_DATA_SQL) {
+              await tx.$executeRawUnsafe(purge, ctx.projectId);
+            }
+          }
+        });
         deps.resolver.invalidate(ctx.projectId);
         return json({
           kind: body.kind,

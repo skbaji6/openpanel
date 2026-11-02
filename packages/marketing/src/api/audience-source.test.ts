@@ -215,6 +215,35 @@ describe('audience source routes', () => {
     ]);
   });
 
+  it('a contact a sync commits while the switch to http waits on the source row is still purged', async () => {
+    await call('PUT', URL_PATH, { kind: 'stored' });
+    let switched: Promise<Response> | undefined;
+    // Plays a sync that passed its source check: it holds the row share lock and writes a contact.
+    await sql.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        "SELECT kind FROM marketing.audience_sources WHERE project_id = 'proj-a' FOR SHARE"
+      );
+      await tx.$executeRawUnsafe(
+        `INSERT INTO marketing.contacts (project_id, profile_id, email) VALUES ('proj-a', 'u1', 'a@example.test')`
+      );
+      switched = call('PUT', URL_PATH, valid);
+      for (;;) {
+        const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+          "SELECT count(*)::int AS n FROM pg_locks WHERE locktype IN ('transactionid', 'tuple') AND NOT granted"
+        );
+        if (row?.n) {
+          break;
+        }
+        await Bun.sleep(10);
+      }
+    });
+    expect((await switched)?.status).toBe(200);
+    const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      'SELECT count(*)::int AS n FROM marketing.contacts'
+    );
+    expect(row?.n).toBe(0);
+  });
+
   it('the stored secret in the database is not the plaintext', async () => {
     await call('PUT', URL_PATH, valid);
     const [row] = await sql.$queryRawUnsafe<{ s: string }[]>(

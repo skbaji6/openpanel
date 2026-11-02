@@ -50,8 +50,9 @@ const zReferenceSet = z.strictObject({
     .max(MAX_REFERENCE_VALUES),
 });
 
-// Param $1 is the project. Locking the source row makes a sync racing a switch to http wait for
-// it and then see kind = 'http', so the switch's purge cannot miss the row.
+// Param $1 is the project. The share lock orders a sync against a switch to http: a sync that locks
+// first commits before the switch's upsert, whose later purge statements then delete its row; one that
+// comes after waits for the switch and sees kind = 'http'.
 // shortcut: a project's very first source row has nothing to lock yet; that race window is one statement long.
 const SOURCE_IS_STORED = `NOT EXISTS (
   SELECT 1 FROM (SELECT kind FROM marketing.audience_sources WHERE project_id = $1 FOR SHARE) source
