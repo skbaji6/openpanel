@@ -138,4 +138,9 @@ describe('signing', () => {
     expect(newNonce()).toMatch(/^[0-9a-f]{32}$/);
     expect(newNonce()).not.toBe(newNonce());
   });
+
+  test('a lower-case method verifies against the upper-case one', async () => {
+    const headers = sign({ method: 'post' });
+    expect((await verify(headers)).ok).toBe(true);
+  });
 });

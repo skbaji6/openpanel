@@ -39,7 +39,7 @@ function computeSignature(
   },
   secret: string
 ) {
-  const canonical = `${input.method}\n${input.path}\n${input.timestamp}\n${input.nonce}\n${sha256Hex(input.body)}`;
+  const canonical = `${input.method.toUpperCase()}\n${input.path}\n${input.timestamp}\n${input.nonce}\n${sha256Hex(input.body)}`;
   return createHmac('sha256', secret).update(canonical).digest('hex');
 }
 

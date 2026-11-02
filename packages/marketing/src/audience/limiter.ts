@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from '@openpanel/redis';
-import { SourceUnavailableError } from './errors';
+import { SourceBusyError } from './errors';
 
 const KEY_PREFIX = 'marketing:source-sem:';
 const DEFAULT_MAX_WAIT_MS = 10_000;
@@ -52,7 +52,7 @@ export function createSourceLimiter(redis: Redis, options: LimiterOptions) {
           break;
         }
         if (now() - startedAt >= maxWaitMs) {
-          throw new SourceUnavailableError('limiter_timeout');
+          throw new SourceBusyError('limiter_timeout');
         }
         await sleep(POLL_MS + Math.random() * POLL_JITTER_MS);
       }

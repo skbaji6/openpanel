@@ -102,17 +102,20 @@ async function readBody(res: Response, label: string): Promise<string> {
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        throw tooLarge;
+      }
+      chunks.push(value);
     }
-    total += value.byteLength;
-    if (total > MAX_BODY_BYTES) {
-      await reader.cancel();
-      throw tooLarge;
-    }
-    chunks.push(value);
+  } finally {
+    await reader.cancel().catch(() => undefined);
   }
   return Buffer.concat(chunks).toString('utf8');
 }

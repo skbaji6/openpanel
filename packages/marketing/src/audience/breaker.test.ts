@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { createBreaker } from './breaker';
 import {
   SourceAuthError,
+  SourceBusyError,
   SourceProtocolError,
   SourceUnavailableError,
 } from './errors';
@@ -115,6 +116,16 @@ describe('breaker', () => {
       .catch((e) => e);
     expect(error).toBeInstanceOf(SourceAuthError);
     expect(await breaker.run(() => Promise.resolve('ok'))).toBe('ok');
+    expect(await breaker.run(() => Promise.resolve('closed'))).toBe('closed');
+  });
+
+  it('a busy error does not count', async () => {
+    const { breaker } = setup();
+    for (let i = 0; i < THRESHOLD * 2; i += 1) {
+      await breaker
+        .run(() => Promise.reject(new SourceBusyError('limiter_timeout')))
+        .catch(() => undefined);
+    }
     expect(await breaker.run(() => Promise.resolve('closed'))).toBe('closed');
   });
 });

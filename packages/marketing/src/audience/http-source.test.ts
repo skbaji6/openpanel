@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { createBreaker } from './breaker';
 import {
   SourceAuthError,
+  SourceBusyError,
   SourceProtocolError,
   SourceUnavailableError,
 } from './errors';
@@ -233,5 +234,75 @@ describe('http audience source', () => {
     expect(url).toBe(
       'https://x.test/internal/audience/dimensions/state/values?q=ka%20r&limit=5'
     );
+  });
+
+  it('honours a Retry-After HTTP date relative to the injected now', async () => {
+    let calls = 0;
+    const date = new Date(1_700_000_000_000 + 4000).toUTCString();
+    const { source, sleeps } = setup(async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response('', { status: 429, headers: { 'retry-after': date } })
+        : json({ dimensions: [] });
+    });
+    await source.schema();
+    expect(sleeps).toEqual([4000]);
+  });
+
+  it('a negative Retry-After falls back to backoff', async () => {
+    let calls = 0;
+    const { source, sleeps } = setup(async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response('', { status: 429, headers: { 'retry-after': '-5' } })
+        : json({ dimensions: [] });
+    });
+    await source.schema();
+    expect(sleeps).toEqual([200]);
+  });
+
+  it('5xx exhausting 3 attempts throws SourceUnavailableError', async () => {
+    let calls = 0;
+    const { source } = setup(async () => {
+      calls += 1;
+      return new Response('', { status: 502 });
+    });
+    await expect(source.schema()).rejects.toBeInstanceOf(
+      SourceUnavailableError
+    );
+    expect(calls).toBe(3);
+  });
+
+  it('403 throws SourceAuthError without retry', async () => {
+    let calls = 0;
+    const { source } = setup(async () => {
+      calls += 1;
+      return new Response('', { status: 403 });
+    });
+    await expect(source.schema()).rejects.toBeInstanceOf(SourceAuthError);
+    expect(calls).toBe(1);
+  });
+
+  it('limiter_timeout passes through without retry and does not open the breaker', async () => {
+    let attempts = 0;
+    const limiter = {
+      acquire: async () => {
+        attempts += 1;
+        throw new SourceBusyError('limiter_timeout');
+      },
+    } as unknown as Limiter;
+    const source = createHttpSource({
+      baseUrl: 'https://x.test/a',
+      keyId: 'k',
+      secret: 's',
+      limiter,
+      breaker: createBreaker({ failureThreshold: 1, openMs: 1000 }),
+      fetch: (async () => json({ dimensions: [] })) as unknown as typeof fetch,
+      sleep: async () => undefined,
+    });
+    for (let i = 0; i < 3; i++) {
+      await expect(source.schema()).rejects.toBeInstanceOf(SourceBusyError);
+    }
+    expect(attempts).toBe(3);
   });
 });

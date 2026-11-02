@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
-import { SourceUnavailableError } from './errors';
+import { SourceBusyError } from './errors';
 import { createSourceLimiter } from './limiter';
 
 const redis = getRedisCache();
@@ -98,7 +98,7 @@ describe('source limiter', () => {
     });
     await limiter.acquire();
     const error = await limiter.acquire().catch((e) => e);
-    expect(error).toBeInstanceOf(SourceUnavailableError);
+    expect(error).toBeInstanceOf(SourceBusyError);
     expect(error.message).toBe('limiter_timeout');
   });
 });

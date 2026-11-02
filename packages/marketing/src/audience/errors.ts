@@ -18,3 +18,11 @@ export class SourceProtocolError extends Error {
     this.name = 'SourceProtocolError';
   }
 }
+
+// Our own queue pressure, not an upstream failure: deliberately not a SourceUnavailableError so the breaker ignores it.
+export class SourceBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SourceBusyError';
+  }
+}
