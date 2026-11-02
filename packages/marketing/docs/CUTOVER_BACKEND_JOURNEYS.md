@@ -12,7 +12,7 @@ Also true at cut-over: the plugin's frequency cap does not see the backend's own
 
 Events arrive as `eventType` plus a `userId` and a `metadata` map. For each, the service schedules a push (`title` `SIA`) at a delay, after the cap check. Cancellations are the calls to `cancelPendingByUserAndJourney`.
 
-| Backend event | Journey key | Delay | Message (copy it exactly from the code) | Cancelled by |
+| Backend event | Journey key | Delay | Message (summary: copy the exact wording, emojis included, from the backend code) | Cancelled by |
 |---|---|---|---|---|
 | `USER_LOGGED_IN` | `LOGIN_WELCOME` | now | Welcome, complete your setup and get access to free PYQs & LMR for your semester | (a comment says "cancel if course selected within 10 minutes"; the code does not) |
 | `INVALID_OTP` | `INVALID_OTP_REMINDER` | 1 minute | Trouble logging in? Tap to resend OTP or reach support directly | `USER_LOGGED_IN` |
