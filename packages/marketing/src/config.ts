@@ -55,6 +55,8 @@ const optionalBoolean = z.preprocess(
 const rawSchema = z
   .object({
     DATABASE_URL: requiredString,
+    // A dedicated database for the plugin; DATABASE_URL is used when unset.
+    MARKETING_DATABASE_URL: optionalString,
     REDIS_URL: requiredString,
     ENCRYPTION_KEY: requiredString,
     MARKETING_PROXY_SECRET: requiredString,
@@ -95,11 +97,16 @@ const rawSchema = z
     const issue = (path: string, message: string) =>
       ctx.addIssue({ code: 'custom', path: [path], message });
     // The value is a secret, so the message never echoes it.
-    if (!URL.canParse(raw.DATABASE_URL)) {
-      issue(
-        'DATABASE_URL',
-        'must be a URL such as postgresql://user:password@host:5432/database'
-      );
+    for (const [name, value] of [
+      ['DATABASE_URL', raw.DATABASE_URL],
+      ['MARKETING_DATABASE_URL', raw.MARKETING_DATABASE_URL],
+    ] as const) {
+      if (value !== undefined && !URL.canParse(value)) {
+        issue(
+          name,
+          'must be a URL such as postgresql://user:password@host:5432/database'
+        );
+      }
     }
     const publicUrl = URL.canParse(raw.MARKETING_PUBLIC_URL)
       ? new URL(raw.MARKETING_PUBLIC_URL)
@@ -200,7 +207,10 @@ export function loadConfig(
   const sslEnabled = raw.KAFKA_SSL ?? hasSasl;
 
   return {
-    databaseUrl: withConnectionLimit(raw.DATABASE_URL, raw.MARKETING_DB_POOL),
+    databaseUrl: withConnectionLimit(
+      raw.MARKETING_DATABASE_URL ?? raw.DATABASE_URL,
+      raw.MARKETING_DB_POOL
+    ),
     redisUrl: raw.REDIS_URL,
     encryptionKey: raw.ENCRYPTION_KEY,
     proxySecret: raw.MARKETING_PROXY_SECRET,

@@ -102,8 +102,10 @@ export async function startWorker(
   cfg: MarketingConfig,
   deps: WorkerDeps = {}
 ): Promise<Stoppable> {
-  // Must precede the first import of @openpanel/db so the pool honours MARKETING_DB_POOL.
-  process.env.DATABASE_URL = cfg.databaseUrl;
+  // Must precede the first import of db/client so the pool honours MARKETING_DB_POOL.
+  const dedicated = Boolean(process.env.MARKETING_DATABASE_URL?.trim());
+  process.env[dedicated ? 'MARKETING_DATABASE_URL' : 'DATABASE_URL'] =
+    cfg.databaseUrl;
   const [
     { sql },
     { migrate },

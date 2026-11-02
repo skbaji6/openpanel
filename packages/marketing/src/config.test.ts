@@ -12,6 +12,33 @@ const required = {
 };
 
 describe('loadConfig', () => {
+  it('uses MARKETING_DATABASE_URL when set', () => {
+    const config = loadConfig({
+      ...required,
+      MARKETING_DATABASE_URL: 'postgresql://u:p@other:5432/marketing_db',
+    });
+    const url = new URL(config.databaseUrl);
+    expect(url.host).toBe('other:5432');
+    expect(url.pathname).toBe('/marketing_db');
+    expect(url.searchParams.get('connection_limit')).toBe('15');
+  });
+
+  it('falls back to DATABASE_URL when MARKETING_DATABASE_URL is blank', () => {
+    const config = loadConfig({ ...required, MARKETING_DATABASE_URL: ' ' });
+    expect(new URL(config.databaseUrl).pathname).toBe('/db');
+  });
+
+  it('fails when neither database URL is set', () => {
+    const { DATABASE_URL: _omitted, ...rest } = required;
+    expect(() => loadConfig(rest)).toThrow(/DATABASE_URL/);
+  });
+
+  it('rejects a MARKETING_DATABASE_URL that is not a URL without echoing it', () => {
+    expect(() =>
+      loadConfig({ ...required, MARKETING_DATABASE_URL: 'not a url' })
+    ).toThrow(/MARKETING_DATABASE_URL: must be a URL/);
+  });
+
   it('defaults apply when only required env is set', () => {
     const config = loadConfig(required);
     expect(config.graceSeconds).toBe(300);
