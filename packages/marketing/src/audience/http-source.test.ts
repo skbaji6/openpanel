@@ -305,4 +305,19 @@ describe('http audience source', () => {
     }
     expect(attempts).toBe(3);
   });
+
+  it('a 302 is a SourceProtocolError and is not followed', async () => {
+    let calls = 0;
+    const { source } = setup(async () => {
+      calls += 1;
+      return new Response('', {
+        status: 302,
+        headers: { location: 'http://169.254.169.254/' },
+      });
+    });
+    const error = await source.schema().catch((e: Error) => e);
+    expect(error).toBeInstanceOf(SourceProtocolError);
+    expect((error as Error).message).toBe('/schema: 302');
+    expect(calls).toBe(1);
+  });
 });

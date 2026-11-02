@@ -157,6 +157,7 @@ export function createHttpSource(opts: HttpSourceOptions): AudienceSource {
         headers,
         body: method === 'POST' ? body : undefined,
         signal: controller.signal,
+        redirect: 'manual',
       });
       const status = res.status;
       if (status === 401 || status === 403) {
