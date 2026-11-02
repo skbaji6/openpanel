@@ -115,21 +115,25 @@ An optional, separate, runnable example service (`packages/marketing/examples/au
 
 ### 5.4a The owner's audience API lives in `sia-backend-public`
 
-The owner decided the audience API is served from the `sia-backend-public` repo (Spring Boot 4, Java 17, JPA, Flyway, Postgres), and that any API it lacks is built there. A read-only look at that repo found:
+The owner's main backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Postgres). It holds the real data. `sia-backend-public` is a separate public website backend that shares the database and only maps `users` as `id`, `phone_number`, `active`. A read-only look at `sia-backend` found:
 
-| Needed by the contract | What `sia-backend-public` has today |
+| Needed by the contract | What `sia-backend` has today |
 |---|---|
-| Dimension values: states, universities (by state), semesters, courses, regulation years | **Exists** as public lookups: `/getAllStates`, `/getUniversities/{state}`, `/getSemesters`, `/getCourses`, `/api/regulation-years`. They return display data, have no auth, and return whole lists, so they are not the contract (`/dimensions/{key}/values` needs search, paging, ids). |
-| Which student belongs to which university, course, semester, regulation | **Missing.** The `users` entity maps only `id`, `phone_number`, `active`. The enrolment/subscription link is not in this repo (the code comment points to the private `sia-backend`). |
-| Purchases (book bought, payment type, date) | **Partly.** `payments` exists but is mapped with only `id` and `type`; `course_books` links course, semester, regulation and book. Which user bought which book is not mapped. |
-| Email, name, push tokens | **Missing.** Not mapped in this repo. |
-| Suppressed/withdrawn flag | Only `users.active`. |
-| Paged member list, count, lookup (the three audience calls) | **Missing.** |
+| Student to university, college, course, semester, regulation, state | **Exists** on the `users` table: `university_id`, `college_id`, `course_id`, `semester_id`, `regulation_year_id`, `sub_regulation_year`, `state_id`, plus an `enrollments` table (`user_id`, `course_id`) for the rare multi-course student. |
+| Email, name, phone, active flag | **Exists** on `users` (`email`, `first_name`, `last_name`, `phone_number`, `active`, `email_verified`). |
+| Push tokens | **Exists**: `user_devices.fcm_token` with `active`, `device_os` and `fcm_token_updated_at`. |
+| Purchases | **Exists**: `purchases` (`user_id`, `book_id`, `purchase_date`, `expiry_date`, `progress`); `subscriptions` per course. |
+| Dimension values (states, universities, semesters, courses, regulation years) | **Exists** as lookup endpoints, but as plain lists with no paging or search. |
+| Existing notifications | **Exists and overlaps**: `Notification` already targets by `universityId`, `courseId`, `regulationId`, `semesterId` and `purchaseStatus`, with send now/later, recurring, a push queue, a Firebase sender, a scheduler and a hard-coded `NotificationJourneyService` (daily cap 2, weekly cap 10). |
+| Paged member list, count, lookup, explain with parameterised filters | **Missing.** These are the new endpoints. |
+| Marketing opt-out / consent field | Not found; the plugin keeps its own opt-out record by id. |
 
-So the five contract calls are all new work, and the student-to-course data must be reached through the shared database. That needs the exact table and column names from the owner (open question 1 in section 9).
+So the data needed for the audience API already exists in one place and the work is five new read-only endpoints, not new data modelling. The existing push-targeting query is a good starting point for the filter compilation and its semantics (including how `purchaseStatus` is defined) must be matched, so a student is selected the same way in both places.
+
+**Overlap to decide (owner):** the plugin's journeys and campaigns would replace the hard-coded journey service and the admin notification screens over time. This roadmap does not touch `sia-backend`'s notification code; the two run side by side, the plugin's shared frequency cap does not see the backend's own sends, and so a student could receive both. The owner decides whether the backend's journeys are switched off when the plugin's go live.
 
 Binding rules for building them:
-- **Separate trust zone.** `sia-backend-public` is an unauthenticated public website backend. The audience endpoints return personal data, so they must not be served from the public deployment. They go in a new, separately deployed module or Spring profile of the same repo (an `/internal/audience/**` path set, its own port, bearer + HMAC auth from section 5.2, IP allow-list, no CORS). The public site's deployment never exposes them.
+- **Separate trust zone.** `sia-backend-public` is an unauthenticated public website backend and must not host these endpoints. They go in a new `/internal/audience/**` controller set in `sia-backend` (the private backend, which already has auth and the data), not in `sia-backend-public` (an `/internal/audience/**` path set, its own port, bearer + HMAC auth from section 5.2, IP allow-list, no CORS). The public site's deployment never exposes them.
 - **Read-only database role.** The audience module connects with a dedicated read-only Postgres role limited to the tables it needs, not the current application account.
 - **Secrets.** The repo currently has a database password committed in plain text in `application.yaml`. This is out of scope to change here, but the audience module must read its credentials from environment variables, and the owner should rotate that password and move it out of git.
 - **Indexes.** The filter fields (university, course, semester, regulation, state, purchase) need indexes on the audience queries; a Flyway migration in that repo adds them. Counts and keyset paging are tested against the production-sized data.
@@ -228,9 +232,9 @@ Each phase ends only when these have been run and their outputs recorded:
 13. Hetzner remains the home of OpenPanel and its Redpanda, and the worker consumes events across the WAN (to be measured; mirror topic if needed).
 14. Nothing is deployed, including staging, at rename time; the builder confirms and stops if not.
 15. The builder creates the owner/member/no-access fixtures for the browser pass.
-16. The audience API is a new internal module of `sia-backend-public`, deployed apart from the public site (section 5.4a); a separate deployment is my recommendation, not yet confirmed.
+16. The audience API is built in `sia-backend` (it owns users, enrollments, devices and purchases), as internal endpoints behind service-to-service auth and a read-only database role (5.4a). `sia-backend-public` is not used.
 17. `/audience/explain` and phone-to-id lookup for the picker are additions to the contract for selection control (5.4b).
-18. Open item for the owner: the table and column names that link a student to university, course, semester and regulation, and where email and push tokens are stored. Until known, the Java side cannot be specified.
+18. Open items for the owner: how `purchaseStatus` is defined, whether the backend's own journeys are switched off when the plugin's go live, and which students count as "active" (the `active` flag, `email_verified`, device `active`).
 
 ## 10. Left to the builder
 
