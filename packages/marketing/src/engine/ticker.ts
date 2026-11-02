@@ -1115,15 +1115,13 @@ async function deliver(
     .catch((error: unknown) => ({
       ok: false as const,
       retryable: true,
-      reason: error instanceof Error ? error.message : String(error),
+      reason: redactSecrets(error, recipientValues(recipient)),
     }));
   // Marked first: pruning must not eat into the lease budget between the send and its mark.
-  const outcome = await recordSendResult(
-    claim,
-    step,
-    sendResult,
-    loaded.secrets
-  );
+  const outcome = await recordSendResult(claim, step, sendResult, [
+    ...loaded.secrets,
+    ...recipientValues(recipient),
+  ]);
   await forgetInvalidTokens(
     deps,
     context,
@@ -1131,6 +1129,18 @@ async function deliver(
     sendResult.invalidTokens
   );
   return outcome;
+}
+
+// An adapter's error text can echo who it was sending to; those values must not reach logs or the step row.
+function recipientValues(recipient: Recipient): string[] {
+  const attributeValues = Object.values(recipient.attributes).filter(
+    (value): value is string => typeof value === 'string'
+  );
+  return [
+    ...(recipient.email ? [recipient.email] : []),
+    ...recipient.deviceTokens,
+    ...attributeValues,
+  ].filter((value) => value.length > 0);
 }
 
 // Best effort and never thrown: a throw would reach processClaim, which retries the already sent step.

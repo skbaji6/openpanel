@@ -19,6 +19,13 @@ const DUPLICATE_WINDOW_MS = 15_000;
 const CANCEL_WAIT_MS = 40_000;
 const POLL_MS = 1000;
 const GOAL_AFTER_TRIGGER_MS = 1000;
+const FIRST_HTTP_PROFILE = '1001';
+const SECOND_HTTP_PROFILE = '1002';
+// First name of student 1001 in the conformance seed.
+const FIRST_HTTP_PROFILE_NAME = 'Asha';
+const SERVICE_START_TIMEOUT_MS = 20_000;
+const SEED_SCHEMA = 'conformance_demo';
+const SERVICE_BASE_PATH = '/internal/audience';
 const E2E_USER_ID = 'marketing-e2e';
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128.0 Safari/537.36';
@@ -48,7 +55,8 @@ const env = {
   clientSecret: requireEnv('E2E_CLIENT_SECRET'),
   // Must be listed in the worker's MARKETING_WEBHOOK_ALLOW_HOSTS (plain http is only allowed for those).
   receiverHost: process.env.E2E_RECEIVER_HOST?.trim() || 'localhost',
-  databaseUrl: process.env.DATABASE_URL?.trim() || undefined,
+  // Prisma's ?schema=public is not a Postgres setting, so Bun's driver rejects it.
+  databaseUrl: process.env.DATABASE_URL?.trim().split('?')[0] || undefined,
   allowWebhookOverwrite: process.env.E2E_ALLOW_WEBHOOK_OVERWRITE === 'true',
 };
 
@@ -316,8 +324,199 @@ async function main() {
   }
 }
 
+async function waitForAsync(
+  condition: () => Promise<boolean>,
+  timeoutMs: number
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await condition()) {
+      return true;
+    }
+    await sleep(POLL_MS);
+  }
+  return condition();
+}
+
+// Source-backed project: the reference audience API serves the conformance seed, no contact rows exist in marketing.
+async function httpSourceScenario() {
+  if (!env.databaseUrl) {
+    console.log('SKIP http source: DATABASE_URL is required to load the seed');
+    return;
+  }
+  const seedDir = new URL('../conformance/seed/', import.meta.url);
+  const { databaseUrl } = env;
+  const keyId = 'e2e-key';
+  const keySecret = randomBytes(24).toString('hex');
+  const probe = Bun.serve({ port: 0, fetch: () => new Response() });
+  const servicePort = probe.port;
+  probe.stop(true);
+
+  const deliveries: Delivery[] = [];
+  const malformed: string[] = [];
+  const receiver = startReceiver(deliveries, malformed);
+  const webhookSecret = randomBytes(24).toString('hex');
+  const runId = randomUUID().slice(0, 8);
+  const db = new SQL(databaseUrl);
+  let service: ReturnType<typeof Bun.spawn> | undefined;
+  let ruleId: string | undefined;
+  let cleanedUp = true;
+  try {
+    await db.unsafe(await Bun.file(new URL('seed.sql', seedDir)).text());
+    service = Bun.spawn(
+      [
+        process.execPath,
+        Bun.fileURLToPath(
+          new URL('../examples/audience-api-postgres/main.ts', import.meta.url)
+        ),
+      ],
+      {
+        env: {
+          ...process.env,
+          AUDIENCE_DATABASE_URL: databaseUrl,
+          AUDIENCE_KEYS: `${keyId}:${keySecret}`,
+          AUDIENCE_MAPPING: Bun.fileURLToPath(
+            new URL('reference-mapping.json', seedDir)
+          ),
+          AUDIENCE_BASE_PATH: SERVICE_BASE_PATH,
+          AUDIENCE_PORT: String(servicePort),
+        },
+        stdout: 'ignore',
+        stderr: 'ignore',
+      }
+    );
+    const baseUrl = `http://127.0.0.1:${servicePort}${SERVICE_BASE_PATH}`;
+    const ready = await waitForAsync(async () => {
+      try {
+        await fetch(`${baseUrl}/schema`);
+        return true;
+      } catch {
+        return false;
+      }
+    }, SERVICE_START_TIMEOUT_MS);
+    assert(ready, 'reference audience service did not start');
+
+    await marketing('PUT', 'audience-source', {
+      kind: 'http',
+      baseUrl,
+      keyId,
+      secret: keySecret,
+    });
+    const test = await marketing('POST', 'audience-source/test');
+    assert(test.ok === true, 'audience-source test failed');
+    console.log('PASS source connection test');
+
+    await marketing('PUT', 'channels/webhook', {
+      config: {
+        url: `http://${env.receiverHost}:${receiver.port}/hook`,
+        secrets: [webhookSecret],
+      },
+    });
+    const rule = await marketing('POST', 'rules', {
+      status: 'active',
+      definition: {
+        name: `e2e http source ${runId}`,
+        trigger: { event: TRIGGER_EVENT },
+        goal: { kind: 'event', event: GOAL_EVENT },
+        steps: [
+          {
+            delaySeconds: STEP_DELAY_SECONDS,
+            channel: 'webhook',
+            template: { body: 'Hi {{profile.firstName}}' },
+          },
+        ],
+        reentry: { enabled: false, cooldownSeconds: 0 },
+        allowedEventProps: [],
+      },
+    });
+    ruleId = String(rule.id);
+    const forProfile = (profileId: string) =>
+      deliveries.filter((delivery) => delivery.profileId === profileId);
+
+    await track(TRIGGER_EVENT, FIRST_HTTP_PROFILE);
+    const delivered = await waitFor(
+      () => forProfile(FIRST_HTTP_PROFILE).length > 0,
+      DELIVERY_TIMEOUT_MS
+    );
+    assert(delivered, `no delivery within ${DELIVERY_TIMEOUT_MS} ms`);
+    await sleep(DUPLICATE_WINDOW_MS);
+    const [delivery, ...duplicates] = forProfile(FIRST_HTTP_PROFILE);
+    assert(
+      delivery !== undefined && duplicates.length === 0,
+      `expected 1 delivery, got ${1 + duplicates.length}`
+    );
+    assert(
+      parseObject(delivery.rawBody)?.body === `Hi ${FIRST_HTTP_PROFILE_NAME}`,
+      'delivery body was not personalised from the looked-up traits'
+    );
+    const [contacts] =
+      await db`SELECT count(*)::int AS n FROM marketing.contacts
+      WHERE project_id = ${env.projectId} AND profile_id = ${FIRST_HTTP_PROFILE}`;
+    assert(
+      contacts.n === 0,
+      'a contact row was stored for a source-backed profile'
+    );
+    console.log('PASS http source delivered once, personalised from lookup');
+
+    await track(TRIGGER_EVENT, SECOND_HTTP_PROFILE);
+    await sleep(GOAL_AFTER_TRIGGER_MS);
+    await track(GOAL_EVENT, SECOND_HTTP_PROFILE);
+    await sleep(CANCEL_WAIT_MS);
+    const results = await marketing('GET', `results?ruleId=${ruleId}`);
+    const [ruleResult] = results.results as { enrolled: number }[];
+    assert(
+      ruleResult?.enrolled === 2,
+      `expected 2 enrollments, got ${ruleResult?.enrolled}`
+    );
+    assert(
+      forProfile(SECOND_HTTP_PROFILE).length === 0,
+      'delivery happened after the goal'
+    );
+    assert(malformed.length === 0, 'receiver got malformed bodies');
+    console.log('PASS http source cancelled by goal');
+  } finally {
+    receiver.stop(true);
+    service?.kill();
+    const cleanup: [string, () => Promise<unknown>][] = [
+      [
+        'restore stored source',
+        () => marketing('PUT', 'audience-source', { kind: 'stored' }),
+      ],
+      [
+        'delete rule',
+        async () => {
+          if (ruleId) {
+            await marketing('DELETE', `rules/${ruleId}`);
+            await deleteMarketingRows(ruleId, [
+              FIRST_HTTP_PROFILE,
+              SECOND_HTTP_PROFILE,
+            ]);
+          }
+        },
+      ],
+      [
+        'drop seed schema',
+        () => db.unsafe(`DROP SCHEMA IF EXISTS ${SEED_SCHEMA} CASCADE`),
+      ],
+    ];
+    for (const [label, step] of cleanup) {
+      try {
+        await step();
+      } catch (error) {
+        cleanedUp = false;
+        console.error(`cleanup: ${label} failed: ${messageOf(error)}`);
+      }
+    }
+    await db.close();
+  }
+  if (!cleanedUp) {
+    throw new Error('cleanup failed; see the messages above');
+  }
+}
+
 try {
   await main();
+  await httpSourceScenario();
   process.exit(0);
 } catch (error) {
   console.error(messageOf(error));
