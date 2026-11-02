@@ -741,13 +741,15 @@ async function processClaim(
   entry?: LookupEntry
 ): Promise<Outcome> {
   const step = createStepWriter(deps, claim);
+  // Filled as soon as contact fields are in memory, so any throw below is redacted against them.
+  const known = entry ? entryValues(entry) : [];
   try {
     if (claim.attempt > MAX_ATTEMPTS) {
       return await step.finish('failed', 'max_attempts');
     }
-    return await deliver(deps, claim, step, entry);
+    return await deliver(deps, claim, step, entry, known);
   } catch (error) {
-    const reason = redactSecrets(error, []);
+    const reason = redactSecrets(error, longestFirst(known));
     console.error(LOG_PREFIX, stepLabel(claim), reason);
     try {
       return await step.retry(reason);
@@ -1047,12 +1049,15 @@ async function deliver(
   deps: TickDeps,
   claim: Claim,
   step: StepWriter,
-  entry: LookupEntry | undefined
+  entry: LookupEntry | undefined,
+  known: string[]
 ): Promise<Outcome> {
   const context = await loadContext(deps, claim, entry);
   if (!context) {
     return 'lost';
   }
+  const recipient = recipientOf(context);
+  known.push(...recipientValues(recipient));
   const stepDef = context.rule_snapshot.steps[claim.step_index];
   if (!stepDef) {
     return await step.finish('failed', 'step_missing');
@@ -1110,12 +1115,6 @@ async function deliver(
     ruleId: context.rule_id,
     stepIndex: claim.step_index,
   });
-  const recipient: Recipient = {
-    profileId: context.profile_id,
-    ...(context.email ? { email: context.email } : {}),
-    deviceTokens: context.device_tokens,
-    attributes: isRecord(context.attributes) ? context.attributes : {},
-  };
   const leased = await step.extendLease(deps.now());
   if (leased !== true) {
     return leased;
@@ -1156,6 +1155,29 @@ const MIN_REDACTED_ATTRIBUTE_LENGTH = 3;
 
 // An adapter's error text can echo who it was sending to; those values must not reach logs or the step row.
 // Longest first, so "Asha Rao" goes before "Asha" and no half of a name survives.
+function recipientOf(context: StepContext): Recipient {
+  return {
+    profileId: context.profile_id,
+    ...(context.email ? { email: context.email } : {}),
+    deviceTokens: context.device_tokens,
+    attributes: isRecord(context.attributes) ? context.attributes : {},
+  };
+}
+
+function entryValues(entry: LookupEntry): string[] {
+  const values = recipientValues({
+    profileId: entry.id,
+    ...(entry.email ? { email: entry.email } : {}),
+    deviceTokens: entry.devices?.map((device) => device.token) ?? [],
+    attributes: entry.traits ?? {},
+  });
+  return entry.phone ? [...values, entry.phone] : values;
+}
+
+function longestFirst(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => b.length - a.length);
+}
+
 export function recipientValues(recipient: Recipient): string[] {
   const attributeValues = Object.values(recipient.attributes).filter(
     (value): value is string =>

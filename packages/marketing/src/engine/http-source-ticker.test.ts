@@ -568,6 +568,42 @@ describe('runTick with an http audience source', () => {
     expect(await sourceStatus()).toBe('ok');
   });
 
+  it('a throw before the send never stores recipient values in the step outcome', async () => {
+    const storedEmail = 'stored-person@example.test';
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.contacts (project_id, profile_id, email) VALUES ($1, 'u1', $2)`,
+      STORED_PROJECT,
+      storedEmail
+    );
+    const http = await enroll();
+    const stored = await enroll({ projectId: STORED_PROJECT });
+    const throwing = {
+      ...engine,
+      evaluateEnrollment: () =>
+        Promise.reject(
+          new Error(`goal check failed for ${LOOKED_UP_EMAIL} ${storedEmail}`)
+        ),
+    };
+    await runTick({
+      sql,
+      engine: throwing,
+      now: () => clock,
+      cfg: CFG,
+      renderUnsubscribeUrl: () => 'https://marketing.test/u',
+      logger: { warn: () => undefined },
+      sources,
+    });
+    expect(sends).toHaveLength(0);
+    for (const [id, own] of [
+      [http, LOOKED_UP_EMAIL],
+      [stored, storedEmail],
+    ] as const) {
+      const reason = (await stepOf(id))?.outcome?.reason ?? '';
+      expect(reason).toContain('[redacted]');
+      expect(reason).not.toContain(own);
+    }
+  });
+
   it('a protocol error sets the source status to source_error and leaves steps pending', async () => {
     lookupError = new SourceProtocolError('lookup: invalid JSON');
     const enrollmentId = await enroll();
