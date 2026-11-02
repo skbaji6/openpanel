@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
+import { SourceUnavailableError } from './errors';
 import { createSourceLimiter } from './limiter';
 
 const redis = getRedisCache();
@@ -86,5 +87,18 @@ describe('source limiter', () => {
     expect(second).toBe(true);
     await releaseSecond();
     expect(await redis.zcard(REDIS_KEY)).toBe(0);
+  });
+
+  it('acquire gives up with limiter_timeout when the cap stays full', async () => {
+    const limiter = createSourceLimiter(redis, {
+      key: KEY,
+      cap: 1,
+      slotTtlMs: SLOT_TTL_MS,
+      maxWaitMs: 150,
+    });
+    await limiter.acquire();
+    const error = await limiter.acquire().catch((e) => e);
+    expect(error).toBeInstanceOf(SourceUnavailableError);
+    expect(error.message).toBe('limiter_timeout');
   });
 });

@@ -105,4 +105,16 @@ describe('breaker', () => {
     await breaker.run(fail).catch(() => undefined);
     expect(await breaker.run(() => Promise.resolve('ok'))).toBe('ok');
   });
+
+  it('a probe that throws a non-counted error does not wedge the breaker', async () => {
+    const { breaker, advance } = setup();
+    await trip(breaker);
+    advance(OPEN_MS);
+    const error = await breaker
+      .run(() => Promise.reject(new SourceAuthError('401')))
+      .catch((e) => e);
+    expect(error).toBeInstanceOf(SourceAuthError);
+    expect(await breaker.run(() => Promise.resolve('ok'))).toBe('ok');
+    expect(await breaker.run(() => Promise.resolve('closed'))).toBe('closed');
+  });
 });
