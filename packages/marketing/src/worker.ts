@@ -34,6 +34,7 @@ export interface WorkerDeps {
   onFatal?: () => void;
 }
 
+// Per-project audience secrets are decrypted later and are not here, so no code path may log them.
 function secretsOf(cfg: MarketingConfig): string[] {
   return [
     cfg.encryptionKey,
