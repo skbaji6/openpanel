@@ -115,7 +115,7 @@ An optional, separate, runnable example service (`packages/marketing/examples/au
 
 ### 5.4a The owner's audience API is built in `sia-backend`
 
-The owner's main backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Postgres). It holds the real data. `sia-backend-public` is a separate public website backend that shares the database and only maps `users` as `id`, `phone_number`, `active`. A read-only look at `sia-backend` found:
+The owner's main backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Postgres). It holds the real data. A read-only look at `sia-backend` found:
 
 | Needed by the contract | What `sia-backend` has today |
 |---|---|
@@ -137,7 +137,7 @@ The existing admin endpoint `GET /getAllUserDetails` already filters by search, 
 **Decided (owner): the backend's own journeys are switched off** when the plugin's journeys go live. `NotificationJourneyService` and its scheduler path are disabled by a configuration flag in `sia-backend` (default unchanged until the cut-over), the plugin's journeys are built to cover the same events (login, registration started, buy-now, checkout view, course bought, topic/LMR click, video started, 72-hour and 7-day inactivity), and the cut-over is a planned step with a checklist: copy the message wording, run both in shadow with the plugin sending to a test list, then flip the flag. The admin Notification feature (manual targeted pushes) stays; the plugin's campaigns replace it later, by the owner's choice.
 
 Binding rules for building them:
-- **Separate trust zone.** `sia-backend-public` is an unauthenticated public website backend and must not host these endpoints. They go in a new `/internal/audience/**` controller set in `sia-backend` (the private backend, which already has auth and the data), with bearer + HMAC auth from section 5.2, an IP allow-list and no CORS. The public site's deployment never exposes them.
+- **Separate trust zone.** The endpoints go in a new `/internal/audience/**` controller set in `sia-backend`, with bearer + HMAC auth from section 5.2, an IP allow-list and no CORS. They are never published through any public site or CDN.
 - **How the calls are secured** (the existing backend authenticates users and staff with JWTs checked in `TokenInterceptor`, and Spring Security itself is `permitAll`, so a new path is open unless it is guarded explicitly):
   1. A dedicated machine credential for the plugin, not a user or staff token. Each request carries `Authorization: Bearer <key id>.<secret>` and `X-Signature` = HMAC-SHA256 over method, path, timestamp, a random nonce and the body hash, plus `X-Timestamp` and `X-Nonce`. The API rejects timestamps older than 60 s and a repeated nonce (a short-lived cache), so captured calls cannot be replayed.
   2. A dedicated interceptor/filter guards `/internal/audience/**` and **denies by default**: if the secret is not configured, or the credential is wrong, the answer is 401 and nothing runs. The route is excluded from the user-JWT interceptor only to use this check, never left unguarded.
@@ -244,7 +244,7 @@ Each phase ends only when these have been run and their outputs recorded:
 13. Hetzner remains the home of OpenPanel and its Redpanda, and the worker consumes events across the WAN (to be measured; mirror topic if needed).
 14. Nothing is deployed, including staging, at rename time; the builder confirms and stops if not.
 15. The builder creates the owner/member/no-access fixtures for the browser pass.
-16. The audience API is built in `sia-backend` (it owns users, enrollments, devices and purchases), as internal endpoints behind service-to-service auth and a read-only database role (5.4a). `sia-backend-public` is not used.
+16. The audience API is built in `sia-backend` (it owns users, enrollments, devices and purchases), as internal endpoints behind service-to-service auth and a read-only database role (5.4a).
 17. `/audience/explain` and phone-to-id lookup for the picker are additions to the contract for selection control (5.4b).
 18. Contactable students: a student is a recipient only if `users.active = true`; for email also `email_verified = true`; for push only devices with `active = true` and a non-empty `fcm_token`. This is my call from the entity fields; the owner confirms.
 19. The backend's journeys are switched off at cut-over by a flag (owner decision), after a shadow run.
