@@ -108,9 +108,11 @@ function enrollments(): Promise<EnrollmentRow[]> {
 
 function steps(
   enrollmentId?: string
-): Promise<{ step_index: number; due_at: Date; status: string }[]> {
+): Promise<
+  { step_index: number; due_at: Date; scheduled_at: Date; status: string }[]
+> {
   return sql.$queryRawUnsafe(
-    `SELECT step_index, due_at, status FROM marketing.steps
+    `SELECT step_index, due_at, scheduled_at, status FROM marketing.steps
      WHERE $1::uuid IS NULL OR enrollment_id = $1::uuid
      ORDER BY enrollment_id, step_index`,
     enrollmentId ?? null
@@ -317,6 +319,10 @@ describe('engine', () => {
       [0, secondsAfter(triggerTime, HOUR), 'pending'],
       [1, secondsAfter(triggerTime, DAY), 'pending'],
     ]);
+    // Expiry measures lateness from scheduled_at, so enrolling must write it.
+    for (const row of rows) {
+      expect(row.scheduled_at?.getTime()).toBe(row.due_at.getTime());
+    }
   });
 
   it('a matching goal event completes the enrollment and cancels pending steps', async () => {
@@ -556,9 +562,15 @@ describe('engine', () => {
 
     const enrollment = await onlyEnrollment();
     expect(enrollment.status).toBe('active');
-    expect((await steps()).map((s) => [s.due_at.getTime(), s.status])).toEqual([
-      [secondsAfter(at(30), HOUR), 'pending'],
-      [secondsAfter(at(30), DAY), 'pending'],
+    expect(
+      (await steps()).map((s) => [
+        s.due_at.getTime(),
+        s.scheduled_at.getTime(),
+        s.status,
+      ])
+    ).toEqual([
+      [secondsAfter(at(30), HOUR), secondsAfter(at(30), HOUR), 'pending'],
+      [secondsAfter(at(30), DAY), secondsAfter(at(30), DAY), 'pending'],
     ]);
   });
 
