@@ -20,8 +20,8 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as WidgetRealtimeRouteImport } from './routes/widget/realtime'
 import { Route as WidgetCounterRouteImport } from './routes/widget/counter'
 import { Route as WidgetBadgeRouteImport } from './routes/widget/badge'
-import { Route as NudgeUnsubscribeRouteImport } from './routes/nudge.unsubscribe'
-import { Route as NudgeApiSplatRouteImport } from './routes/nudge-api.$'
+import { Route as MarketingUnsubscribeRouteImport } from './routes/marketing.unsubscribe'
+import { Route as MarketingApiSplatRouteImport } from './routes/marketing-api.$'
 import { Route as ApiHealthcheckRouteImport } from './routes/api/healthcheck'
 import { Route as ApiConfigRouteImport } from './routes/api/config'
 import { Route as PublicOnboardingRouteImport } from './routes/_public.onboarding'
@@ -64,15 +64,15 @@ import { Route as AppOrganizationIdProjectIdSettingsTabsRouteImport } from './ro
 import { Route as AppOrganizationIdProjectIdSessionsSessionIdRouteImport } from './routes/_app.$organizationId.$projectId.sessions_.$sessionId'
 import { Route as AppOrganizationIdProjectIdReportsReportIdRouteImport } from './routes/_app.$organizationId.$projectId.reports_.$reportId'
 import { Route as AppOrganizationIdProjectIdProfilesTabsRouteImport } from './routes/_app.$organizationId.$projectId.profiles._tabs'
-import { Route as AppOrganizationIdProjectIdNudgeTabsRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs'
+import { Route as AppOrganizationIdProjectIdMarketingTabsRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs'
 import { Route as AppOrganizationIdProjectIdIntegrationsTabsRouteImport } from './routes/_app.$organizationId.$projectId.integrations._tabs'
 import { Route as AppOrganizationIdProjectIdEventsTabsRouteImport } from './routes/_app.$organizationId.$projectId.events._tabs'
 import { Route as AppOrganizationIdProjectIdDashboardsDashboardIdRouteImport } from './routes/_app.$organizationId.$projectId.dashboards_.$dashboardId'
 import { Route as AppOrganizationIdProjectIdSettingsTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.settings._tabs.index'
 import { Route as AppOrganizationIdProjectIdProfilesTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.profiles._tabs.index'
-import { Route as AppOrganizationIdProjectIdNudgeTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.index'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.index'
+import { Route as AppOrganizationIdProjectIdMarketingTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.index'
 import { Route as AppOrganizationIdProjectIdIntegrationsTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.integrations._tabs.index'
 import { Route as AppOrganizationIdProjectIdEventsTabsIndexRouteImport } from './routes/_app.$organizationId.$projectId.events._tabs.index'
 import { Route as AppOrganizationIdProjectIdSettingsTabsWidgetsRouteImport } from './routes/_app.$organizationId.$projectId.settings._tabs.widgets'
@@ -87,11 +87,11 @@ import { Route as AppOrganizationIdProjectIdProfilesTabsPowerUsersRouteImport } 
 import { Route as AppOrganizationIdProjectIdProfilesTabsIdentifiedRouteImport } from './routes/_app.$organizationId.$projectId.profiles._tabs.identified'
 import { Route as AppOrganizationIdProjectIdProfilesTabsAnonymousRouteImport } from './routes/_app.$organizationId.$projectId.profiles._tabs.anonymous'
 import { Route as AppOrganizationIdProjectIdProfilesProfileIdTabsRouteImport } from './routes/_app.$organizationId.$projectId.profiles.$profileId._tabs'
-import { Route as AppOrganizationIdProjectIdNudgeTabsResultsRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.results'
-import { Route as AppOrganizationIdProjectIdNudgeTabsGuideRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.guide'
-import { Route as AppOrganizationIdProjectIdNudgeTabsChannelsRouteImport } from './routes/_app.$organizationId.$projectId.nudge._tabs.channels'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsRulesRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.rules'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsNotificationsRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.notifications'
+import { Route as AppOrganizationIdProjectIdMarketingTabsResultsRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.results'
+import { Route as AppOrganizationIdProjectIdMarketingTabsGuideRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.guide'
+import { Route as AppOrganizationIdProjectIdMarketingTabsChannelsRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.channels'
 import { Route as AppOrganizationIdProjectIdIntegrationsTabsInstalledRouteImport } from './routes/_app.$organizationId.$projectId.integrations._tabs.installed'
 import { Route as AppOrganizationIdProjectIdIntegrationsTabsAvailableRouteImport } from './routes/_app.$organizationId.$projectId.integrations._tabs.available'
 import { Route as AppOrganizationIdProjectIdGroupsGroupIdTabsRouteImport } from './routes/_app.$organizationId.$projectId.groups_.$groupId._tabs'
@@ -121,11 +121,11 @@ const AppOrganizationIdProjectIdSettingsRouteImport = createFileRoute(
 const AppOrganizationIdProjectIdProfilesRouteImport = createFileRoute(
   '/_app/$organizationId/$projectId/profiles',
 )()
-const AppOrganizationIdProjectIdNudgeRouteImport = createFileRoute(
-  '/_app/$organizationId/$projectId/nudge',
-)()
 const AppOrganizationIdProjectIdNotificationsRouteImport = createFileRoute(
   '/_app/$organizationId/$projectId/notifications',
+)()
+const AppOrganizationIdProjectIdMarketingRouteImport = createFileRoute(
+  '/_app/$organizationId/$projectId/marketing',
 )()
 const AppOrganizationIdProjectIdIntegrationsRouteImport = createFileRoute(
   '/_app/$organizationId/$projectId/integrations',
@@ -184,14 +184,14 @@ const WidgetBadgeRoute = WidgetBadgeRouteImport.update({
   path: '/widget/badge',
   getParentRoute: () => rootRouteImport,
 } as any)
-const NudgeUnsubscribeRoute = NudgeUnsubscribeRouteImport.update({
-  id: '/nudge/unsubscribe',
-  path: '/nudge/unsubscribe',
+const MarketingUnsubscribeRoute = MarketingUnsubscribeRouteImport.update({
+  id: '/marketing/unsubscribe',
+  path: '/marketing/unsubscribe',
   getParentRoute: () => rootRouteImport,
 } as any)
-const NudgeApiSplatRoute = NudgeApiSplatRouteImport.update({
-  id: '/nudge-api/$',
-  path: '/nudge-api/$',
+const MarketingApiSplatRoute = MarketingApiSplatRouteImport.update({
+  id: '/marketing-api/$',
+  path: '/marketing-api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthcheckRoute = ApiHealthcheckRouteImport.update({
@@ -301,16 +301,16 @@ const AppOrganizationIdProjectIdProfilesRoute =
     path: '/profiles',
     getParentRoute: () => AppOrganizationIdProjectIdRoute,
   } as any)
-const AppOrganizationIdProjectIdNudgeRoute =
-  AppOrganizationIdProjectIdNudgeRouteImport.update({
-    id: '/nudge',
-    path: '/nudge',
-    getParentRoute: () => AppOrganizationIdProjectIdRoute,
-  } as any)
 const AppOrganizationIdProjectIdNotificationsRoute =
   AppOrganizationIdProjectIdNotificationsRouteImport.update({
     id: '/notifications',
     path: '/notifications',
+    getParentRoute: () => AppOrganizationIdProjectIdRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingRoute =
+  AppOrganizationIdProjectIdMarketingRouteImport.update({
+    id: '/marketing',
+    path: '/marketing',
     getParentRoute: () => AppOrganizationIdProjectIdRoute,
   } as any)
 const AppOrganizationIdProjectIdIntegrationsRoute =
@@ -495,15 +495,15 @@ const AppOrganizationIdProjectIdProfilesTabsRoute =
     id: '/_tabs',
     getParentRoute: () => AppOrganizationIdProjectIdProfilesRoute,
   } as any)
-const AppOrganizationIdProjectIdNudgeTabsRoute =
-  AppOrganizationIdProjectIdNudgeTabsRouteImport.update({
-    id: '/_tabs',
-    getParentRoute: () => AppOrganizationIdProjectIdNudgeRoute,
-  } as any)
 const AppOrganizationIdProjectIdNotificationsTabsRoute =
   AppOrganizationIdProjectIdNotificationsTabsRouteImport.update({
     id: '/_tabs',
     getParentRoute: () => AppOrganizationIdProjectIdNotificationsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsRoute =
+  AppOrganizationIdProjectIdMarketingTabsRouteImport.update({
+    id: '/_tabs',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingRoute,
   } as any)
 const AppOrganizationIdProjectIdIntegrationsTabsRoute =
   AppOrganizationIdProjectIdIntegrationsTabsRouteImport.update({
@@ -533,17 +533,17 @@ const AppOrganizationIdProjectIdProfilesTabsIndexRoute =
     path: '/',
     getParentRoute: () => AppOrganizationIdProjectIdProfilesTabsRoute,
   } as any)
-const AppOrganizationIdProjectIdNudgeTabsIndexRoute =
-  AppOrganizationIdProjectIdNudgeTabsIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AppOrganizationIdProjectIdNudgeTabsRoute,
-  } as any)
 const AppOrganizationIdProjectIdNotificationsTabsIndexRoute =
   AppOrganizationIdProjectIdNotificationsTabsIndexRouteImport.update({
     id: '/',
     path: '/',
     getParentRoute: () => AppOrganizationIdProjectIdNotificationsTabsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsIndexRoute =
+  AppOrganizationIdProjectIdMarketingTabsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
   } as any)
 const AppOrganizationIdProjectIdIntegrationsTabsIndexRoute =
   AppOrganizationIdProjectIdIntegrationsTabsIndexRouteImport.update({
@@ -628,24 +628,6 @@ const AppOrganizationIdProjectIdProfilesProfileIdTabsRoute =
     id: '/_tabs',
     getParentRoute: () => AppOrganizationIdProjectIdProfilesProfileIdRoute,
   } as any)
-const AppOrganizationIdProjectIdNudgeTabsResultsRoute =
-  AppOrganizationIdProjectIdNudgeTabsResultsRouteImport.update({
-    id: '/results',
-    path: '/results',
-    getParentRoute: () => AppOrganizationIdProjectIdNudgeTabsRoute,
-  } as any)
-const AppOrganizationIdProjectIdNudgeTabsGuideRoute =
-  AppOrganizationIdProjectIdNudgeTabsGuideRouteImport.update({
-    id: '/guide',
-    path: '/guide',
-    getParentRoute: () => AppOrganizationIdProjectIdNudgeTabsRoute,
-  } as any)
-const AppOrganizationIdProjectIdNudgeTabsChannelsRoute =
-  AppOrganizationIdProjectIdNudgeTabsChannelsRouteImport.update({
-    id: '/channels',
-    path: '/channels',
-    getParentRoute: () => AppOrganizationIdProjectIdNudgeTabsRoute,
-  } as any)
 const AppOrganizationIdProjectIdNotificationsTabsRulesRoute =
   AppOrganizationIdProjectIdNotificationsTabsRulesRouteImport.update({
     id: '/rules',
@@ -657,6 +639,24 @@ const AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute =
     id: '/notifications',
     path: '/notifications',
     getParentRoute: () => AppOrganizationIdProjectIdNotificationsTabsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsResultsRoute =
+  AppOrganizationIdProjectIdMarketingTabsResultsRouteImport.update({
+    id: '/results',
+    path: '/results',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsGuideRoute =
+  AppOrganizationIdProjectIdMarketingTabsGuideRouteImport.update({
+    id: '/guide',
+    path: '/guide',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsChannelsRoute =
+  AppOrganizationIdProjectIdMarketingTabsChannelsRouteImport.update({
+    id: '/channels',
+    path: '/channels',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
   } as any)
 const AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute =
   AppOrganizationIdProjectIdIntegrationsTabsInstalledRouteImport.update({
@@ -764,8 +764,8 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof PublicOnboardingRoute
   '/api/config': typeof ApiConfigRoute
   '/api/healthcheck': typeof ApiHealthcheckRoute
-  '/nudge-api/$': typeof NudgeApiSplatRoute
-  '/nudge/unsubscribe': typeof NudgeUnsubscribeRoute
+  '/marketing-api/$': typeof MarketingApiSplatRoute
+  '/marketing/unsubscribe': typeof MarketingUnsubscribeRoute
   '/widget/badge': typeof WidgetBadgeRoute
   '/widget/counter': typeof WidgetCounterRoute
   '/widget/realtime': typeof WidgetRealtimeRoute
@@ -796,8 +796,8 @@ export interface FileRoutesByFullPath {
   '/$organizationId/$projectId/dashboards/$dashboardId': typeof AppOrganizationIdProjectIdDashboardsDashboardIdRoute
   '/$organizationId/$projectId/events': typeof AppOrganizationIdProjectIdEventsTabsRouteWithChildren
   '/$organizationId/$projectId/integrations': typeof AppOrganizationIdProjectIdIntegrationsTabsRouteWithChildren
+  '/$organizationId/$projectId/marketing': typeof AppOrganizationIdProjectIdMarketingTabsRouteWithChildren
   '/$organizationId/$projectId/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsRouteWithChildren
-  '/$organizationId/$projectId/nudge': typeof AppOrganizationIdProjectIdNudgeTabsRouteWithChildren
   '/$organizationId/$projectId/profiles': typeof AppOrganizationIdProjectIdProfilesTabsRouteWithChildren
   '/$organizationId/$projectId/reports/$reportId': typeof AppOrganizationIdProjectIdReportsReportIdRoute
   '/$organizationId/$projectId/sessions/$sessionId': typeof AppOrganizationIdProjectIdSessionsSessionIdRoute
@@ -815,11 +815,11 @@ export interface FileRoutesByFullPath {
   '/$organizationId/$projectId/groups/$groupId': typeof AppOrganizationIdProjectIdGroupsGroupIdTabsRouteWithChildren
   '/$organizationId/$projectId/integrations/available': typeof AppOrganizationIdProjectIdIntegrationsTabsAvailableRoute
   '/$organizationId/$projectId/integrations/installed': typeof AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute
+  '/$organizationId/$projectId/marketing/channels': typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
+  '/$organizationId/$projectId/marketing/guide': typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
+  '/$organizationId/$projectId/marketing/results': typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
   '/$organizationId/$projectId/notifications/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/$organizationId/$projectId/notifications/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
-  '/$organizationId/$projectId/nudge/channels': typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
-  '/$organizationId/$projectId/nudge/guide': typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
-  '/$organizationId/$projectId/nudge/results': typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   '/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsRouteWithChildren
   '/$organizationId/$projectId/profiles/anonymous': typeof AppOrganizationIdProjectIdProfilesTabsAnonymousRoute
   '/$organizationId/$projectId/profiles/identified': typeof AppOrganizationIdProjectIdProfilesTabsIdentifiedRoute
@@ -834,8 +834,8 @@ export interface FileRoutesByFullPath {
   '/$organizationId/$projectId/settings/widgets': typeof AppOrganizationIdProjectIdSettingsTabsWidgetsRoute
   '/$organizationId/$projectId/events/': typeof AppOrganizationIdProjectIdEventsTabsIndexRoute
   '/$organizationId/$projectId/integrations/': typeof AppOrganizationIdProjectIdIntegrationsTabsIndexRoute
+  '/$organizationId/$projectId/marketing/': typeof AppOrganizationIdProjectIdMarketingTabsIndexRoute
   '/$organizationId/$projectId/notifications/': typeof AppOrganizationIdProjectIdNotificationsTabsIndexRoute
-  '/$organizationId/$projectId/nudge/': typeof AppOrganizationIdProjectIdNudgeTabsIndexRoute
   '/$organizationId/$projectId/profiles/': typeof AppOrganizationIdProjectIdProfilesTabsIndexRoute
   '/$organizationId/$projectId/settings/': typeof AppOrganizationIdProjectIdSettingsTabsIndexRoute
   '/$organizationId/$projectId/cohorts/$cohortId/events': typeof AppOrganizationIdProjectIdCohortsCohortIdTabsEventsRoute
@@ -858,8 +858,8 @@ export interface FileRoutesByTo {
   '/onboarding': typeof PublicOnboardingRoute
   '/api/config': typeof ApiConfigRoute
   '/api/healthcheck': typeof ApiHealthcheckRoute
-  '/nudge-api/$': typeof NudgeApiSplatRoute
-  '/nudge/unsubscribe': typeof NudgeUnsubscribeRoute
+  '/marketing-api/$': typeof MarketingApiSplatRoute
+  '/marketing/unsubscribe': typeof MarketingUnsubscribeRoute
   '/widget/badge': typeof WidgetBadgeRoute
   '/widget/counter': typeof WidgetCounterRoute
   '/widget/realtime': typeof WidgetRealtimeRoute
@@ -889,8 +889,8 @@ export interface FileRoutesByTo {
   '/$organizationId/$projectId/dashboards/$dashboardId': typeof AppOrganizationIdProjectIdDashboardsDashboardIdRoute
   '/$organizationId/$projectId/events': typeof AppOrganizationIdProjectIdEventsTabsIndexRoute
   '/$organizationId/$projectId/integrations': typeof AppOrganizationIdProjectIdIntegrationsTabsIndexRoute
+  '/$organizationId/$projectId/marketing': typeof AppOrganizationIdProjectIdMarketingTabsIndexRoute
   '/$organizationId/$projectId/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsIndexRoute
-  '/$organizationId/$projectId/nudge': typeof AppOrganizationIdProjectIdNudgeTabsIndexRoute
   '/$organizationId/$projectId/profiles': typeof AppOrganizationIdProjectIdProfilesTabsIndexRoute
   '/$organizationId/$projectId/reports/$reportId': typeof AppOrganizationIdProjectIdReportsReportIdRoute
   '/$organizationId/$projectId/sessions/$sessionId': typeof AppOrganizationIdProjectIdSessionsSessionIdRoute
@@ -906,11 +906,11 @@ export interface FileRoutesByTo {
   '/$organizationId/$projectId/groups/$groupId': typeof AppOrganizationIdProjectIdGroupsGroupIdTabsIndexRoute
   '/$organizationId/$projectId/integrations/available': typeof AppOrganizationIdProjectIdIntegrationsTabsAvailableRoute
   '/$organizationId/$projectId/integrations/installed': typeof AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute
+  '/$organizationId/$projectId/marketing/channels': typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
+  '/$organizationId/$projectId/marketing/guide': typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
+  '/$organizationId/$projectId/marketing/results': typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
   '/$organizationId/$projectId/notifications/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/$organizationId/$projectId/notifications/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
-  '/$organizationId/$projectId/nudge/channels': typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
-  '/$organizationId/$projectId/nudge/guide': typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
-  '/$organizationId/$projectId/nudge/results': typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   '/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsIndexRoute
   '/$organizationId/$projectId/profiles/anonymous': typeof AppOrganizationIdProjectIdProfilesTabsAnonymousRoute
   '/$organizationId/$projectId/profiles/identified': typeof AppOrganizationIdProjectIdProfilesTabsIdentifiedRoute
@@ -946,8 +946,8 @@ export interface FileRoutesById {
   '/_public/onboarding': typeof PublicOnboardingRoute
   '/api/config': typeof ApiConfigRoute
   '/api/healthcheck': typeof ApiHealthcheckRoute
-  '/nudge-api/$': typeof NudgeApiSplatRoute
-  '/nudge/unsubscribe': typeof NudgeUnsubscribeRoute
+  '/marketing-api/$': typeof MarketingApiSplatRoute
+  '/marketing/unsubscribe': typeof MarketingUnsubscribeRoute
   '/widget/badge': typeof WidgetBadgeRoute
   '/widget/counter': typeof WidgetCounterRoute
   '/widget/realtime': typeof WidgetRealtimeRoute
@@ -982,10 +982,10 @@ export interface FileRoutesById {
   '/_app/$organizationId/$projectId/events/_tabs': typeof AppOrganizationIdProjectIdEventsTabsRouteWithChildren
   '/_app/$organizationId/$projectId/integrations': typeof AppOrganizationIdProjectIdIntegrationsRouteWithChildren
   '/_app/$organizationId/$projectId/integrations/_tabs': typeof AppOrganizationIdProjectIdIntegrationsTabsRouteWithChildren
+  '/_app/$organizationId/$projectId/marketing': typeof AppOrganizationIdProjectIdMarketingRouteWithChildren
+  '/_app/$organizationId/$projectId/marketing/_tabs': typeof AppOrganizationIdProjectIdMarketingTabsRouteWithChildren
   '/_app/$organizationId/$projectId/notifications': typeof AppOrganizationIdProjectIdNotificationsRouteWithChildren
   '/_app/$organizationId/$projectId/notifications/_tabs': typeof AppOrganizationIdProjectIdNotificationsTabsRouteWithChildren
-  '/_app/$organizationId/$projectId/nudge': typeof AppOrganizationIdProjectIdNudgeRouteWithChildren
-  '/_app/$organizationId/$projectId/nudge/_tabs': typeof AppOrganizationIdProjectIdNudgeTabsRouteWithChildren
   '/_app/$organizationId/$projectId/profiles': typeof AppOrganizationIdProjectIdProfilesRouteWithChildren
   '/_app/$organizationId/$projectId/profiles/_tabs': typeof AppOrganizationIdProjectIdProfilesTabsRouteWithChildren
   '/_app/$organizationId/$projectId/reports_/$reportId': typeof AppOrganizationIdProjectIdReportsReportIdRoute
@@ -1007,11 +1007,11 @@ export interface FileRoutesById {
   '/_app/$organizationId/$projectId/groups_/$groupId/_tabs': typeof AppOrganizationIdProjectIdGroupsGroupIdTabsRouteWithChildren
   '/_app/$organizationId/$projectId/integrations/_tabs/available': typeof AppOrganizationIdProjectIdIntegrationsTabsAvailableRoute
   '/_app/$organizationId/$projectId/integrations/_tabs/installed': typeof AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/channels': typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/guide': typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/results': typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
   '/_app/$organizationId/$projectId/notifications/_tabs/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/_app/$organizationId/$projectId/notifications/_tabs/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
-  '/_app/$organizationId/$projectId/nudge/_tabs/channels': typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
-  '/_app/$organizationId/$projectId/nudge/_tabs/guide': typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
-  '/_app/$organizationId/$projectId/nudge/_tabs/results': typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
   '/_app/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdRouteWithChildren
   '/_app/$organizationId/$projectId/profiles/$profileId/_tabs': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsRouteWithChildren
   '/_app/$organizationId/$projectId/profiles/_tabs/anonymous': typeof AppOrganizationIdProjectIdProfilesTabsAnonymousRoute
@@ -1027,8 +1027,8 @@ export interface FileRoutesById {
   '/_app/$organizationId/$projectId/settings/_tabs/widgets': typeof AppOrganizationIdProjectIdSettingsTabsWidgetsRoute
   '/_app/$organizationId/$projectId/events/_tabs/': typeof AppOrganizationIdProjectIdEventsTabsIndexRoute
   '/_app/$organizationId/$projectId/integrations/_tabs/': typeof AppOrganizationIdProjectIdIntegrationsTabsIndexRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/': typeof AppOrganizationIdProjectIdMarketingTabsIndexRoute
   '/_app/$organizationId/$projectId/notifications/_tabs/': typeof AppOrganizationIdProjectIdNotificationsTabsIndexRoute
-  '/_app/$organizationId/$projectId/nudge/_tabs/': typeof AppOrganizationIdProjectIdNudgeTabsIndexRoute
   '/_app/$organizationId/$projectId/profiles/_tabs/': typeof AppOrganizationIdProjectIdProfilesTabsIndexRoute
   '/_app/$organizationId/$projectId/settings/_tabs/': typeof AppOrganizationIdProjectIdSettingsTabsIndexRoute
   '/_app/$organizationId/$projectId/cohorts_/$cohortId/_tabs/events': typeof AppOrganizationIdProjectIdCohortsCohortIdTabsEventsRoute
@@ -1054,8 +1054,8 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/api/config'
     | '/api/healthcheck'
-    | '/nudge-api/$'
-    | '/nudge/unsubscribe'
+    | '/marketing-api/$'
+    | '/marketing/unsubscribe'
     | '/widget/badge'
     | '/widget/counter'
     | '/widget/realtime'
@@ -1086,8 +1086,8 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/dashboards/$dashboardId'
     | '/$organizationId/$projectId/events'
     | '/$organizationId/$projectId/integrations'
+    | '/$organizationId/$projectId/marketing'
     | '/$organizationId/$projectId/notifications'
-    | '/$organizationId/$projectId/nudge'
     | '/$organizationId/$projectId/profiles'
     | '/$organizationId/$projectId/reports/$reportId'
     | '/$organizationId/$projectId/sessions/$sessionId'
@@ -1105,11 +1105,11 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/groups/$groupId'
     | '/$organizationId/$projectId/integrations/available'
     | '/$organizationId/$projectId/integrations/installed'
+    | '/$organizationId/$projectId/marketing/channels'
+    | '/$organizationId/$projectId/marketing/guide'
+    | '/$organizationId/$projectId/marketing/results'
     | '/$organizationId/$projectId/notifications/notifications'
     | '/$organizationId/$projectId/notifications/rules'
-    | '/$organizationId/$projectId/nudge/channels'
-    | '/$organizationId/$projectId/nudge/guide'
-    | '/$organizationId/$projectId/nudge/results'
     | '/$organizationId/$projectId/profiles/$profileId'
     | '/$organizationId/$projectId/profiles/anonymous'
     | '/$organizationId/$projectId/profiles/identified'
@@ -1124,8 +1124,8 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/settings/widgets'
     | '/$organizationId/$projectId/events/'
     | '/$organizationId/$projectId/integrations/'
+    | '/$organizationId/$projectId/marketing/'
     | '/$organizationId/$projectId/notifications/'
-    | '/$organizationId/$projectId/nudge/'
     | '/$organizationId/$projectId/profiles/'
     | '/$organizationId/$projectId/settings/'
     | '/$organizationId/$projectId/cohorts/$cohortId/events'
@@ -1148,8 +1148,8 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/api/config'
     | '/api/healthcheck'
-    | '/nudge-api/$'
-    | '/nudge/unsubscribe'
+    | '/marketing-api/$'
+    | '/marketing/unsubscribe'
     | '/widget/badge'
     | '/widget/counter'
     | '/widget/realtime'
@@ -1179,8 +1179,8 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/dashboards/$dashboardId'
     | '/$organizationId/$projectId/events'
     | '/$organizationId/$projectId/integrations'
+    | '/$organizationId/$projectId/marketing'
     | '/$organizationId/$projectId/notifications'
-    | '/$organizationId/$projectId/nudge'
     | '/$organizationId/$projectId/profiles'
     | '/$organizationId/$projectId/reports/$reportId'
     | '/$organizationId/$projectId/sessions/$sessionId'
@@ -1196,11 +1196,11 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/groups/$groupId'
     | '/$organizationId/$projectId/integrations/available'
     | '/$organizationId/$projectId/integrations/installed'
+    | '/$organizationId/$projectId/marketing/channels'
+    | '/$organizationId/$projectId/marketing/guide'
+    | '/$organizationId/$projectId/marketing/results'
     | '/$organizationId/$projectId/notifications/notifications'
     | '/$organizationId/$projectId/notifications/rules'
-    | '/$organizationId/$projectId/nudge/channels'
-    | '/$organizationId/$projectId/nudge/guide'
-    | '/$organizationId/$projectId/nudge/results'
     | '/$organizationId/$projectId/profiles/$profileId'
     | '/$organizationId/$projectId/profiles/anonymous'
     | '/$organizationId/$projectId/profiles/identified'
@@ -1235,8 +1235,8 @@ export interface FileRouteTypes {
     | '/_public/onboarding'
     | '/api/config'
     | '/api/healthcheck'
-    | '/nudge-api/$'
-    | '/nudge/unsubscribe'
+    | '/marketing-api/$'
+    | '/marketing/unsubscribe'
     | '/widget/badge'
     | '/widget/counter'
     | '/widget/realtime'
@@ -1271,10 +1271,10 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/$projectId/events/_tabs'
     | '/_app/$organizationId/$projectId/integrations'
     | '/_app/$organizationId/$projectId/integrations/_tabs'
+    | '/_app/$organizationId/$projectId/marketing'
+    | '/_app/$organizationId/$projectId/marketing/_tabs'
     | '/_app/$organizationId/$projectId/notifications'
     | '/_app/$organizationId/$projectId/notifications/_tabs'
-    | '/_app/$organizationId/$projectId/nudge'
-    | '/_app/$organizationId/$projectId/nudge/_tabs'
     | '/_app/$organizationId/$projectId/profiles'
     | '/_app/$organizationId/$projectId/profiles/_tabs'
     | '/_app/$organizationId/$projectId/reports_/$reportId'
@@ -1296,11 +1296,11 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/$projectId/groups_/$groupId/_tabs'
     | '/_app/$organizationId/$projectId/integrations/_tabs/available'
     | '/_app/$organizationId/$projectId/integrations/_tabs/installed'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/channels'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/guide'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/results'
     | '/_app/$organizationId/$projectId/notifications/_tabs/notifications'
     | '/_app/$organizationId/$projectId/notifications/_tabs/rules'
-    | '/_app/$organizationId/$projectId/nudge/_tabs/channels'
-    | '/_app/$organizationId/$projectId/nudge/_tabs/guide'
-    | '/_app/$organizationId/$projectId/nudge/_tabs/results'
     | '/_app/$organizationId/$projectId/profiles/$profileId'
     | '/_app/$organizationId/$projectId/profiles/$profileId/_tabs'
     | '/_app/$organizationId/$projectId/profiles/_tabs/anonymous'
@@ -1316,8 +1316,8 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/$projectId/settings/_tabs/widgets'
     | '/_app/$organizationId/$projectId/events/_tabs/'
     | '/_app/$organizationId/$projectId/integrations/_tabs/'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/'
     | '/_app/$organizationId/$projectId/notifications/_tabs/'
-    | '/_app/$organizationId/$projectId/nudge/_tabs/'
     | '/_app/$organizationId/$projectId/profiles/_tabs/'
     | '/_app/$organizationId/$projectId/settings/_tabs/'
     | '/_app/$organizationId/$projectId/cohorts_/$cohortId/_tabs/events'
@@ -1340,8 +1340,8 @@ export interface RootRouteChildren {
   UnsubscribeRoute: typeof UnsubscribeRoute
   ApiConfigRoute: typeof ApiConfigRoute
   ApiHealthcheckRoute: typeof ApiHealthcheckRoute
-  NudgeApiSplatRoute: typeof NudgeApiSplatRoute
-  NudgeUnsubscribeRoute: typeof NudgeUnsubscribeRoute
+  MarketingApiSplatRoute: typeof MarketingApiSplatRoute
+  MarketingUnsubscribeRoute: typeof MarketingUnsubscribeRoute
   WidgetBadgeRoute: typeof WidgetBadgeRoute
   WidgetCounterRoute: typeof WidgetCounterRoute
   WidgetRealtimeRoute: typeof WidgetRealtimeRoute
@@ -1415,18 +1415,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WidgetBadgeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/nudge/unsubscribe': {
-      id: '/nudge/unsubscribe'
-      path: '/nudge/unsubscribe'
-      fullPath: '/nudge/unsubscribe'
-      preLoaderRoute: typeof NudgeUnsubscribeRouteImport
+    '/marketing/unsubscribe': {
+      id: '/marketing/unsubscribe'
+      path: '/marketing/unsubscribe'
+      fullPath: '/marketing/unsubscribe'
+      preLoaderRoute: typeof MarketingUnsubscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/nudge-api/$': {
-      id: '/nudge-api/$'
-      path: '/nudge-api/$'
-      fullPath: '/nudge-api/$'
-      preLoaderRoute: typeof NudgeApiSplatRouteImport
+    '/marketing-api/$': {
+      id: '/marketing-api/$'
+      path: '/marketing-api/$'
+      fullPath: '/marketing-api/$'
+      preLoaderRoute: typeof MarketingApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/healthcheck': {
@@ -1569,18 +1569,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdProjectIdProfilesRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdRoute
     }
-    '/_app/$organizationId/$projectId/nudge': {
-      id: '/_app/$organizationId/$projectId/nudge'
-      path: '/nudge'
-      fullPath: '/$organizationId/$projectId/nudge'
-      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeRouteImport
-      parentRoute: typeof AppOrganizationIdProjectIdRoute
-    }
     '/_app/$organizationId/$projectId/notifications': {
       id: '/_app/$organizationId/$projectId/notifications'
       path: '/notifications'
       fullPath: '/$organizationId/$projectId/notifications'
       preLoaderRoute: typeof AppOrganizationIdProjectIdNotificationsRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdRoute
+    }
+    '/_app/$organizationId/$projectId/marketing': {
+      id: '/_app/$organizationId/$projectId/marketing'
+      path: '/marketing'
+      fullPath: '/$organizationId/$projectId/marketing'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdRoute
     }
     '/_app/$organizationId/$projectId/integrations': {
@@ -1800,19 +1800,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdProjectIdProfilesTabsRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdProfilesRoute
     }
-    '/_app/$organizationId/$projectId/nudge/_tabs': {
-      id: '/_app/$organizationId/$projectId/nudge/_tabs'
-      path: '/nudge'
-      fullPath: '/$organizationId/$projectId/nudge'
-      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsRouteImport
-      parentRoute: typeof AppOrganizationIdProjectIdNudgeRoute
-    }
     '/_app/$organizationId/$projectId/notifications/_tabs': {
       id: '/_app/$organizationId/$projectId/notifications/_tabs'
       path: '/notifications'
       fullPath: '/$organizationId/$projectId/notifications'
       preLoaderRoute: typeof AppOrganizationIdProjectIdNotificationsTabsRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdNotificationsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs'
+      path: '/marketing'
+      fullPath: '/$organizationId/$projectId/marketing'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingRoute
     }
     '/_app/$organizationId/$projectId/integrations/_tabs': {
       id: '/_app/$organizationId/$projectId/integrations/_tabs'
@@ -1849,19 +1849,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdProjectIdProfilesTabsIndexRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdProfilesTabsRoute
     }
-    '/_app/$organizationId/$projectId/nudge/_tabs/': {
-      id: '/_app/$organizationId/$projectId/nudge/_tabs/'
-      path: '/'
-      fullPath: '/$organizationId/$projectId/nudge/'
-      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsIndexRouteImport
-      parentRoute: typeof AppOrganizationIdProjectIdNudgeTabsRoute
-    }
     '/_app/$organizationId/$projectId/notifications/_tabs/': {
       id: '/_app/$organizationId/$projectId/notifications/_tabs/'
       path: '/'
       fullPath: '/$organizationId/$projectId/notifications/'
       preLoaderRoute: typeof AppOrganizationIdProjectIdNotificationsTabsIndexRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdNotificationsTabsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs/': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/'
+      path: '/'
+      fullPath: '/$organizationId/$projectId/marketing/'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsIndexRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
     }
     '/_app/$organizationId/$projectId/integrations/_tabs/': {
       id: '/_app/$organizationId/$projectId/integrations/_tabs/'
@@ -1961,27 +1961,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdProjectIdProfilesProfileIdTabsRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdProfilesProfileIdRoute
     }
-    '/_app/$organizationId/$projectId/nudge/_tabs/results': {
-      id: '/_app/$organizationId/$projectId/nudge/_tabs/results'
-      path: '/results'
-      fullPath: '/$organizationId/$projectId/nudge/results'
-      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsResultsRouteImport
-      parentRoute: typeof AppOrganizationIdProjectIdNudgeTabsRoute
-    }
-    '/_app/$organizationId/$projectId/nudge/_tabs/guide': {
-      id: '/_app/$organizationId/$projectId/nudge/_tabs/guide'
-      path: '/guide'
-      fullPath: '/$organizationId/$projectId/nudge/guide'
-      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsGuideRouteImport
-      parentRoute: typeof AppOrganizationIdProjectIdNudgeTabsRoute
-    }
-    '/_app/$organizationId/$projectId/nudge/_tabs/channels': {
-      id: '/_app/$organizationId/$projectId/nudge/_tabs/channels'
-      path: '/channels'
-      fullPath: '/$organizationId/$projectId/nudge/channels'
-      preLoaderRoute: typeof AppOrganizationIdProjectIdNudgeTabsChannelsRouteImport
-      parentRoute: typeof AppOrganizationIdProjectIdNudgeTabsRoute
-    }
     '/_app/$organizationId/$projectId/notifications/_tabs/rules': {
       id: '/_app/$organizationId/$projectId/notifications/_tabs/rules'
       path: '/rules'
@@ -1995,6 +1974,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/$organizationId/$projectId/notifications/notifications'
       preLoaderRoute: typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdNotificationsTabsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs/results': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/results'
+      path: '/results'
+      fullPath: '/$organizationId/$projectId/marketing/results'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsResultsRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs/guide': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/guide'
+      path: '/guide'
+      fullPath: '/$organizationId/$projectId/marketing/guide'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsGuideRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs/channels': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/channels'
+      path: '/channels'
+      fullPath: '/$organizationId/$projectId/marketing/channels'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsChannelsRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
     }
     '/_app/$organizationId/$projectId/integrations/_tabs/installed': {
       id: '/_app/$organizationId/$projectId/integrations/_tabs/installed'
@@ -2186,6 +2186,45 @@ const AppOrganizationIdProjectIdIntegrationsRouteWithChildren =
     AppOrganizationIdProjectIdIntegrationsRouteChildren,
   )
 
+interface AppOrganizationIdProjectIdMarketingTabsRouteChildren {
+  AppOrganizationIdProjectIdMarketingTabsChannelsRoute: typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
+  AppOrganizationIdProjectIdMarketingTabsGuideRoute: typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
+  AppOrganizationIdProjectIdMarketingTabsResultsRoute: typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
+  AppOrganizationIdProjectIdMarketingTabsIndexRoute: typeof AppOrganizationIdProjectIdMarketingTabsIndexRoute
+}
+
+const AppOrganizationIdProjectIdMarketingTabsRouteChildren: AppOrganizationIdProjectIdMarketingTabsRouteChildren =
+  {
+    AppOrganizationIdProjectIdMarketingTabsChannelsRoute:
+      AppOrganizationIdProjectIdMarketingTabsChannelsRoute,
+    AppOrganizationIdProjectIdMarketingTabsGuideRoute:
+      AppOrganizationIdProjectIdMarketingTabsGuideRoute,
+    AppOrganizationIdProjectIdMarketingTabsResultsRoute:
+      AppOrganizationIdProjectIdMarketingTabsResultsRoute,
+    AppOrganizationIdProjectIdMarketingTabsIndexRoute:
+      AppOrganizationIdProjectIdMarketingTabsIndexRoute,
+  }
+
+const AppOrganizationIdProjectIdMarketingTabsRouteWithChildren =
+  AppOrganizationIdProjectIdMarketingTabsRoute._addFileChildren(
+    AppOrganizationIdProjectIdMarketingTabsRouteChildren,
+  )
+
+interface AppOrganizationIdProjectIdMarketingRouteChildren {
+  AppOrganizationIdProjectIdMarketingTabsRoute: typeof AppOrganizationIdProjectIdMarketingTabsRouteWithChildren
+}
+
+const AppOrganizationIdProjectIdMarketingRouteChildren: AppOrganizationIdProjectIdMarketingRouteChildren =
+  {
+    AppOrganizationIdProjectIdMarketingTabsRoute:
+      AppOrganizationIdProjectIdMarketingTabsRouteWithChildren,
+  }
+
+const AppOrganizationIdProjectIdMarketingRouteWithChildren =
+  AppOrganizationIdProjectIdMarketingRoute._addFileChildren(
+    AppOrganizationIdProjectIdMarketingRouteChildren,
+  )
+
 interface AppOrganizationIdProjectIdNotificationsTabsRouteChildren {
   AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute: typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   AppOrganizationIdProjectIdNotificationsTabsRulesRoute: typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
@@ -2220,45 +2259,6 @@ const AppOrganizationIdProjectIdNotificationsRouteChildren: AppOrganizationIdPro
 const AppOrganizationIdProjectIdNotificationsRouteWithChildren =
   AppOrganizationIdProjectIdNotificationsRoute._addFileChildren(
     AppOrganizationIdProjectIdNotificationsRouteChildren,
-  )
-
-interface AppOrganizationIdProjectIdNudgeTabsRouteChildren {
-  AppOrganizationIdProjectIdNudgeTabsChannelsRoute: typeof AppOrganizationIdProjectIdNudgeTabsChannelsRoute
-  AppOrganizationIdProjectIdNudgeTabsGuideRoute: typeof AppOrganizationIdProjectIdNudgeTabsGuideRoute
-  AppOrganizationIdProjectIdNudgeTabsResultsRoute: typeof AppOrganizationIdProjectIdNudgeTabsResultsRoute
-  AppOrganizationIdProjectIdNudgeTabsIndexRoute: typeof AppOrganizationIdProjectIdNudgeTabsIndexRoute
-}
-
-const AppOrganizationIdProjectIdNudgeTabsRouteChildren: AppOrganizationIdProjectIdNudgeTabsRouteChildren =
-  {
-    AppOrganizationIdProjectIdNudgeTabsChannelsRoute:
-      AppOrganizationIdProjectIdNudgeTabsChannelsRoute,
-    AppOrganizationIdProjectIdNudgeTabsGuideRoute:
-      AppOrganizationIdProjectIdNudgeTabsGuideRoute,
-    AppOrganizationIdProjectIdNudgeTabsResultsRoute:
-      AppOrganizationIdProjectIdNudgeTabsResultsRoute,
-    AppOrganizationIdProjectIdNudgeTabsIndexRoute:
-      AppOrganizationIdProjectIdNudgeTabsIndexRoute,
-  }
-
-const AppOrganizationIdProjectIdNudgeTabsRouteWithChildren =
-  AppOrganizationIdProjectIdNudgeTabsRoute._addFileChildren(
-    AppOrganizationIdProjectIdNudgeTabsRouteChildren,
-  )
-
-interface AppOrganizationIdProjectIdNudgeRouteChildren {
-  AppOrganizationIdProjectIdNudgeTabsRoute: typeof AppOrganizationIdProjectIdNudgeTabsRouteWithChildren
-}
-
-const AppOrganizationIdProjectIdNudgeRouteChildren: AppOrganizationIdProjectIdNudgeRouteChildren =
-  {
-    AppOrganizationIdProjectIdNudgeTabsRoute:
-      AppOrganizationIdProjectIdNudgeTabsRouteWithChildren,
-  }
-
-const AppOrganizationIdProjectIdNudgeRouteWithChildren =
-  AppOrganizationIdProjectIdNudgeRoute._addFileChildren(
-    AppOrganizationIdProjectIdNudgeRouteChildren,
   )
 
 interface AppOrganizationIdProjectIdProfilesTabsRouteChildren {
@@ -2481,8 +2481,8 @@ interface AppOrganizationIdProjectIdRouteChildren {
   AppOrganizationIdProjectIdDashboardsDashboardIdRoute: typeof AppOrganizationIdProjectIdDashboardsDashboardIdRoute
   AppOrganizationIdProjectIdEventsRoute: typeof AppOrganizationIdProjectIdEventsRouteWithChildren
   AppOrganizationIdProjectIdIntegrationsRoute: typeof AppOrganizationIdProjectIdIntegrationsRouteWithChildren
+  AppOrganizationIdProjectIdMarketingRoute: typeof AppOrganizationIdProjectIdMarketingRouteWithChildren
   AppOrganizationIdProjectIdNotificationsRoute: typeof AppOrganizationIdProjectIdNotificationsRouteWithChildren
-  AppOrganizationIdProjectIdNudgeRoute: typeof AppOrganizationIdProjectIdNudgeRouteWithChildren
   AppOrganizationIdProjectIdProfilesRoute: typeof AppOrganizationIdProjectIdProfilesRouteWithChildren
   AppOrganizationIdProjectIdReportsReportIdRoute: typeof AppOrganizationIdProjectIdReportsReportIdRoute
   AppOrganizationIdProjectIdSessionsSessionIdRoute: typeof AppOrganizationIdProjectIdSessionsSessionIdRoute
@@ -2519,10 +2519,10 @@ const AppOrganizationIdProjectIdRouteChildren: AppOrganizationIdProjectIdRouteCh
       AppOrganizationIdProjectIdEventsRouteWithChildren,
     AppOrganizationIdProjectIdIntegrationsRoute:
       AppOrganizationIdProjectIdIntegrationsRouteWithChildren,
+    AppOrganizationIdProjectIdMarketingRoute:
+      AppOrganizationIdProjectIdMarketingRouteWithChildren,
     AppOrganizationIdProjectIdNotificationsRoute:
       AppOrganizationIdProjectIdNotificationsRouteWithChildren,
-    AppOrganizationIdProjectIdNudgeRoute:
-      AppOrganizationIdProjectIdNudgeRouteWithChildren,
     AppOrganizationIdProjectIdProfilesRoute:
       AppOrganizationIdProjectIdProfilesRouteWithChildren,
     AppOrganizationIdProjectIdReportsReportIdRoute:
@@ -2695,8 +2695,8 @@ const rootRouteChildren: RootRouteChildren = {
   UnsubscribeRoute: UnsubscribeRoute,
   ApiConfigRoute: ApiConfigRoute,
   ApiHealthcheckRoute: ApiHealthcheckRoute,
-  NudgeApiSplatRoute: NudgeApiSplatRoute,
-  NudgeUnsubscribeRoute: NudgeUnsubscribeRoute,
+  MarketingApiSplatRoute: MarketingApiSplatRoute,
+  MarketingUnsubscribeRoute: MarketingUnsubscribeRoute,
   WidgetBadgeRoute: WidgetBadgeRoute,
   WidgetCounterRoute: WidgetCounterRoute,
   WidgetRealtimeRoute: WidgetRealtimeRoute,

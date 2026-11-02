@@ -1,11 +1,11 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { createNudgeProxy } from '@/components/nudge/proxy';
+import { createMarketingProxy } from '@/components/marketing/proxy';
 
 // Read per request: the Cloudflare plugin injects env at runtime. Blank counts as unset.
-const proxy = createNudgeProxy({
+const proxy = createMarketingProxy({
   env: () => ({
-    nudgeUrl: process.env.NUDGE_URL || undefined,
-    proxySecret: process.env.NUDGE_PROXY_SECRET || undefined,
+    marketingUrl: process.env.MARKETING_URL || undefined,
+    proxySecret: process.env.MARKETING_PROXY_SECRET || undefined,
     apiUrl: process.env.API_URL_SSR || process.env.API_URL || undefined,
     dashboardUrl: process.env.DASHBOARD_URL || undefined,
   }),
@@ -15,7 +15,7 @@ function handle({ request }: { request: Request }) {
   return proxy.handle(request);
 }
 
-export const Route = createFileRoute('/nudge-api/$')({
+export const Route = createFileRoute('/marketing-api/$')({
   server: {
     handlers: {
       GET: handle,

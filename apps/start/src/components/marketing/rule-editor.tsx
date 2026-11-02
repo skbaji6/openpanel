@@ -3,10 +3,10 @@ import { FlagIcon, PlusIcon, TrashIcon, ZapIcon } from 'lucide-react';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import {
-  describeNudgeError,
-  NudgeApiError,
-  useNudgeFetch,
-  useNudgeQueryKey,
+  describeMarketingError,
+  MarketingApiError,
+  useMarketingFetch,
+  useMarketingQueryKey,
 } from './api';
 import {
   CHANNELS,
@@ -50,7 +50,7 @@ const DELAY_UNITS = [
   { value: 'days', label: 'days', seconds: DAY },
 ] as const;
 const PREVIEW_DEBOUNCE_MS = 500;
-const EVENT_NAMES_LIST_ID = 'nudge-event-names';
+const EVENT_NAMES_LIST_ID = 'marketing-event-names';
 const CHANNEL_LABELS: Record<Channel, string> = {
   email: 'Email',
   webhook: 'Webhook',
@@ -63,10 +63,10 @@ const GOAL_LABELS: Record<GoalKind, string> = {
 };
 const GOAL_HELP: Record<GoalKind, string> = {
   event:
-    'The journey ends, and remaining nudges are cancelled, as soon as this event happens.',
+    'The journey ends, and remaining messages are cancelled, as soon as this event happens.',
   set: 'The journey ends when the profile has reached every value in a list you register, for example every section of a book.',
   inactivity:
-    'Nudge only if the profile does nothing at all after the trigger.',
+    'Message only if the profile does nothing at all after the trigger.',
 };
 const CHANNELS_WITH_SUBJECT = new Set<Channel>(['email', 'push']);
 const SAMPLE_PROFILE = { firstName: 'Ada', email: 'ada@example.com' };
@@ -389,14 +389,14 @@ function ReferenceValues({
   setKey: string;
   values: string[];
 }) {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
   const id = useId();
   const [text, setText] = useState(values.join('\n'));
   const save = useMutation({
     mutationFn: () =>
-      nudgeFetch(`reference-sets/${encodeURIComponent(setKey)}`, {
+      marketingFetch(`reference-sets/${encodeURIComponent(setKey)}`, {
         method: 'PUT',
         body: JSON.stringify({
           values: text
@@ -410,7 +410,7 @@ function ReferenceValues({
       client.invalidateQueries({ queryKey: queryKey('reference-sets') });
     },
     onError(error) {
-      toast.error(describeNudgeError(error));
+      toast.error(describeMarketingError(error));
     },
   });
   return (
@@ -437,8 +437,8 @@ function ReferenceValues({
 }
 
 function ReferenceSetEditor({ definition }: { definition: RuleDefinition }) {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const defaultKey =
     !definition.matchOn && definition.goal.kind === 'set'
       ? definition.goal.setKey
@@ -447,17 +447,19 @@ function ReferenceSetEditor({ definition }: { definition: RuleDefinition }) {
   const sets = useQuery({
     queryKey: queryKey('reference-sets'),
     queryFn: () =>
-      nudgeFetch<{ referenceSets: ReferenceSetSummary[] }>('reference-sets'),
+      marketingFetch<{ referenceSets: ReferenceSetSummary[] }>(
+        'reference-sets'
+      ),
   });
   const values = useQuery({
     queryKey: queryKey('reference-sets', setKey),
     enabled: setKey !== '',
     retry: false,
     queryFn: () =>
-      nudgeFetch<{ values: string[] }>(
+      marketingFetch<{ values: string[] }>(
         `reference-sets/${encodeURIComponent(setKey)}`
       ).catch((error: unknown) => {
-        if (error instanceof NudgeApiError && error.status === 404) {
+        if (error instanceof MarketingApiError && error.status === 404) {
           return { values: [] };
         }
         throw error;
@@ -474,11 +476,11 @@ function ReferenceSetEditor({ definition }: { definition: RuleDefinition }) {
       </p>
       <InputWithLabel
         label="Edit set"
-        list="nudge-reference-sets"
+        list="marketing-reference-sets"
         onChange={(event) => setSetKey(event.target.value.trim())}
         value={setKey}
       />
-      <datalist id="nudge-reference-sets">
+      <datalist id="marketing-reference-sets">
         {sets.data?.referenceSets.map((set) => (
           <option key={set.setKey} value={set.setKey}>
             {set.count} values
@@ -570,8 +572,8 @@ function StepPreview({
   step: Step;
   allowedEventProps: string[];
 }) {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const request = useDebounceValue(
     JSON.stringify({
       channel: step.channel,
@@ -590,7 +592,7 @@ function StepPreview({
   const preview = useQuery({
     queryKey: queryKey('preview', request),
     queryFn: () =>
-      nudgeFetch<Preview>('preview', { method: 'POST', body: request }),
+      marketingFetch<Preview>('preview', { method: 'POST', body: request }),
     placeholderData: (previous) => previous,
     retry: false,
   });
@@ -604,7 +606,7 @@ function StepPreview({
       </h4>
       {preview.error && (
         <p className="text-destructive text-sm">
-          {describeNudgeError(preview.error)}
+          {describeMarketingError(preview.error)}
         </p>
       )}
       {preview.data?.subject && (
@@ -722,8 +724,8 @@ export function RuleEditor({
   onClose: () => void;
 }) {
   const { projectId } = useAppParams();
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
   const eventNames = useEventNames({ projectId, anyEvents: false });
   const [definition, setDefinition] = useState(initial);
@@ -733,11 +735,11 @@ export function RuleEditor({
   const save = useMutation({
     mutationFn: (valid: RuleDefinition) =>
       ruleId
-        ? nudgeFetch(`rules/${encodeURIComponent(ruleId)}`, {
+        ? marketingFetch(`rules/${encodeURIComponent(ruleId)}`, {
             method: 'PATCH',
             body: JSON.stringify({ definition: valid }),
           })
-        : nudgeFetch('rules', {
+        : marketingFetch('rules', {
             method: 'POST',
             body: JSON.stringify({ definition: valid, status: 'paused' }),
           }),
@@ -747,7 +749,7 @@ export function RuleEditor({
       onClose();
     },
     onError(error) {
-      toast.error(describeNudgeError(error));
+      toast.error(describeMarketingError(error));
     },
   });
 
@@ -851,11 +853,11 @@ export function RuleEditor({
         />
         <label
           className="row items-center gap-2 text-sm"
-          htmlFor="nudge-reentry"
+          htmlFor="marketing-reentry"
         >
           <Switch
             checked={definition.reentry.enabled}
-            id="nudge-reentry"
+            id="marketing-reentry"
             onCheckedChange={(enabled) =>
               setDefinition({
                 ...definition,

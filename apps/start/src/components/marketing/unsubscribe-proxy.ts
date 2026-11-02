@@ -1,6 +1,6 @@
 import { errorResponse, isTimeout, ProxyError, readCappedBody } from './proxy';
 
-const UNSUBSCRIBE_PATH = '/nudge/unsubscribe';
+const UNSUBSCRIBE_PATH = '/marketing/unsubscribe';
 // The worker ignores the body (the signed token in the query is the authority); RFC 8058 bodies are tiny.
 const MAX_BODY_BYTES = 64 * 1024;
 const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -18,7 +18,7 @@ const FIXED_RESPONSE_HEADERS = {
 
 // Public, unauthenticated pass-through so unsubscribe links work on the dashboard's own origin.
 export function createUnsubscribeProxy(deps: {
-  nudgeUrl: () => string | undefined;
+  marketingUrl: () => string | undefined;
   fetch?: typeof fetch;
   timeoutMs?: number;
 }) {
@@ -26,9 +26,9 @@ export function createUnsubscribeProxy(deps: {
   const timeoutMs = deps.timeoutMs ?? UPSTREAM_TIMEOUT_MS;
 
   async function forward(request: Request): Promise<Response> {
-    const nudgeUrl = deps.nudgeUrl();
+    const marketingUrl = deps.marketingUrl();
     const url = new URL(request.url);
-    if (!nudgeUrl || url.pathname !== UNSUBSCRIBE_PATH) {
+    if (!marketingUrl || url.pathname !== UNSUBSCRIBE_PATH) {
       throw new ProxyError(404, 'not_found');
     }
     const method = request.method.toUpperCase();
@@ -41,7 +41,7 @@ export function createUnsubscribeProxy(deps: {
     if (isPost && contentType) {
       headers['content-type'] = contentType;
     }
-    // Verbatim: the edge proxy already appended the client; with NUDGE_TRUST_PROXY the worker reads the rightmost entry.
+    // Verbatim: the edge proxy already appended the client; with MARKETING_TRUST_PROXY the worker reads the rightmost entry.
     const forwardedFor = request.headers.get('x-forwarded-for');
     if (forwardedFor) {
       headers['x-forwarded-for'] = forwardedFor;
@@ -50,7 +50,7 @@ export function createUnsubscribeProxy(deps: {
     let upstream: Response;
     try {
       upstream = await fetchImpl(
-        new URL(`${UNSUBSCRIBE_PATH}${url.search}`, nudgeUrl),
+        new URL(`${UNSUBSCRIBE_PATH}${url.search}`, marketingUrl),
         {
           method,
           headers,
@@ -61,9 +61,9 @@ export function createUnsubscribeProxy(deps: {
       );
     } catch (error) {
       if (isTimeout(error)) {
-        throw new ProxyError(504, 'nudge_timeout');
+        throw new ProxyError(504, 'marketing_timeout');
       }
-      throw new ProxyError(502, 'nudge_unavailable');
+      throw new ProxyError(502, 'marketing_unavailable');
     }
     const responseHeaders = new Headers(FIXED_RESPONSE_HEADERS);
     for (const name of PASSED_RESPONSE_HEADERS) {

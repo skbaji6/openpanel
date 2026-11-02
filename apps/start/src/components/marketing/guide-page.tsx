@@ -19,8 +19,8 @@ function Code({ children }: { children: ReactNode }) {
   );
 }
 
-const SYNC_EXAMPLE = `curl -X PUT $NUDGE_URL/nudge/contacts/user_123 \\
-  -H "x-nudge-api-key: <key from the Channels tab>" \\
+const SYNC_EXAMPLE = `curl -X PUT $MARKETING_URL/marketing/contacts/user_123 \\
+  -H "x-marketing-api-key: <key from the Channels tab>" \\
   -H "content-type: application/json" \\
   -d '{"email":"ada@example.com","attributes":{"firstName":"Ada"}}'`;
 
@@ -28,9 +28,9 @@ export function GuidePage() {
   const { organizationId, projectId } = useAppParams();
   return (
     <div className="col max-w-3xl gap-4 text-sm">
-      <Section title="What nudges do">
+      <Section title="What journeys do">
         <p>
-          A nudge rule says:{' '}
+          A journey rule says:{' '}
           <strong>
             when someone does A, and does not reach the goal G within a set
             time, send them a message.
@@ -46,7 +46,7 @@ export function GuidePage() {
         </p>
         <p className="text-muted-foreground">
           Only people your app identifies (events that carry a profile id) are
-          nudged. Anonymous visitors are ignored.
+          messaged. Anonymous visitors are ignored.
         </p>
       </Section>
 
@@ -56,7 +56,7 @@ export function GuidePage() {
             <strong>Connect a channel.</strong> Open the{' '}
             <Link
               params={{ organizationId, projectId }}
-              to="/$organizationId/$projectId/nudge/channels"
+              to="/$organizationId/$projectId/marketing/channels"
             >
               <u>Channels</u>
             </Link>{' '}
@@ -66,8 +66,8 @@ export function GuidePage() {
           </li>
           <li>
             <strong>Tell it who to contact.</strong> Your backend sends each
-            person's email, name and push device token to the nudge service (see
-            the example below). Without an email or device, that step is
+            person's email, name and push device token to the marketing service
+            (see the example below). Without an email or device, that step is
             skipped.
           </li>
           <li>
@@ -78,7 +78,7 @@ export function GuidePage() {
           <li>
             <strong>Activate it and watch.</strong> New rules start paused.
             Press Activate. The Results tab shows how many people were enrolled,
-            nudged and converted.
+            messaged and converted.
           </li>
         </ol>
       </Section>
@@ -122,8 +122,8 @@ export function GuidePage() {
           <div>
             <dt className="font-medium">Re-entry</dt>
             <dd className="text-muted-foreground">
-              Whether the same person can be nudged again for the same rule, and
-              how long to wait before they can.
+              Whether the same person can be messaged again for the same rule,
+              and how long to wait before they can.
             </dd>
           </div>
         </dl>
@@ -154,25 +154,25 @@ export function GuidePage() {
 
       <Section title="Limits and quiet hours">
         <p className="text-muted-foreground">
-          On the Channels tab you can cap how many nudges one person gets in a
-          period and block sending during quiet hours (a nudge that is held or
+          On the Channels tab you can cap how many messages one person gets in a
+          period and block sending during quiet hours (a message that is held or
           capped shows as skipped in Results).
         </p>
       </Section>
 
       <Section title="Connect your backend">
         <p className="text-muted-foreground">
-          Your backend sends contacts, push tokens and item lists to the nudge
+          Your backend sends contacts, push tokens and item lists to the message
           service with an API key. For example, to save a person's email and
           name:
         </p>
         <Code>{SYNC_EXAMPLE}</Code>
         <p className="text-muted-foreground">
-          Other calls: <code>PUT /nudge/devices</code> (push token) and{' '}
-          <code>PUT /nudge/reference-sets/&lt;key&gt;</code> (list of items for
-          a set goal). The full guide, with every call, webhook signature
+          Other calls: <code>PUT /marketing/devices</code> (push token) and{' '}
+          <code>PUT /marketing/reference-sets/&lt;key&gt;</code> (list of items
+          for a set goal). The full guide, with every call, webhook signature
           checking and troubleshooting, is in the repository at{' '}
-          <code>packages/nudge/docs/GUIDE.md</code>.
+          <code>packages/marketing/docs/GUIDE.md</code>.
         </p>
       </Section>
     </div>

@@ -7,18 +7,18 @@ import { createProjectTitle } from '@/utils/title';
 const RULES_TAB = 'rules';
 
 export const Route = createFileRoute(
-  '/_app/$organizationId/$projectId/nudge/_tabs'
+  '/_app/$organizationId/$projectId/marketing/_tabs'
 )({
   component: Component,
   head: () => ({
-    meta: [{ title: createProjectTitle('Nudges') }],
+    meta: [{ title: createProjectTitle('Marketing') }],
   }),
 });
 
 function Component() {
   const router = useRouter();
   const { activeTab, tabs } = usePageTabs([
-    { id: RULES_TAB, label: 'Rules' },
+    { id: RULES_TAB, label: 'Journeys' },
     { id: 'channels', label: 'Channels' },
     { id: 'results', label: 'Results' },
     { id: 'guide', label: 'How it works' },
@@ -34,8 +34,8 @@ function Component() {
   return (
     <div className="container p-8">
       <PageHeader
-        description="Nudge profiles by email, push or webhook until they reach a goal"
-        title="Nudges"
+        description="Journeys that message profiles by email, push or webhook until they reach a goal"
+        title="Marketing"
       />
       <Tabs
         className="mt-2 mb-8"

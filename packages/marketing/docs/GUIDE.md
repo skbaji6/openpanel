@@ -92,9 +92,9 @@ Nothing to configure. The worker consumes the topic named by `KAFKA_EVENTS_TOPIC
 
 ### 5b. Dashboard
 
-Open a project: the sidebar has **Marketing** with three tabs.
+Open a project: the sidebar has **Marketing** with four tabs: Journeys, Channels, Results and How it works.
 
-- **Rules**: create from a starter or from scratch, as a vertical timeline with one form per step. Activate or pause. Preview templates with sample data.
+- **Journeys**: create from a starter or from scratch, as a vertical timeline with one form per step. Activate or pause. Preview templates with sample data.
 - **Channels**: email (SMTP), push (Firebase service account) and webhook (URL plus secret), plus the project's caps, quiet hours and API keys.
 - **Results**: per rule: enrolled, messaged, sent, completed after send, conversion, skipped, failed.
 

@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import {
-  describeNudgeError,
-  NudgeApiError,
-  useNudgeFetch,
-  useNudgeQueryKey,
+  describeMarketingError,
+  MarketingApiError,
+  useMarketingFetch,
+  useMarketingQueryKey,
 } from './api';
 import {
   type ApiIssue,
@@ -147,8 +147,8 @@ function ChannelForm({
   channel: Channel;
   loaded: ChannelConfigResponse;
 }) {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
   const formId = useId();
   const [initial] = useState(() => initialValues(channel, loaded.config));
@@ -179,7 +179,7 @@ function ChannelForm({
           ])
           .filter(([, value]) => value !== undefined)
       );
-      return nudgeFetch<ChannelConfigResponse>(`channels/${channel}`, {
+      return marketingFetch<ChannelConfigResponse>(`channels/${channel}`, {
         method: 'PUT',
         body: JSON.stringify({ config }),
       });
@@ -190,8 +190,8 @@ function ChannelForm({
       client.invalidateQueries({ queryKey: queryKey('channels', channel) });
     },
     onError(error) {
-      setServerIssues(error instanceof NudgeApiError ? error.issues : []);
-      toast.error(describeNudgeError(error));
+      setServerIssues(error instanceof MarketingApiError ? error.issues : []);
+      toast.error(describeMarketingError(error));
     },
   });
 
@@ -285,11 +285,11 @@ function ChannelForm({
 }
 
 function ChannelCard({ channel }: { channel: Channel }) {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const config = useQuery({
     queryKey: queryKey('channels', channel),
-    queryFn: () => nudgeFetch<ChannelConfigResponse>(`channels/${channel}`),
+    queryFn: () => marketingFetch<ChannelConfigResponse>(`channels/${channel}`),
     retry: false,
   });
   return (
@@ -304,7 +304,7 @@ function ChannelCard({ channel }: { channel: Channel }) {
       </IntegrationCardHeader>
       {config.error && (
         <p className="p-4 text-destructive text-sm">
-          {describeNudgeError(config.error)}
+          {describeMarketingError(config.error)}
         </p>
       )}
       {config.data && (
@@ -319,12 +319,12 @@ function ChannelCard({ channel }: { channel: Channel }) {
 }
 
 function ApiKeysCard() {
-  const nudgeFetch = useNudgeFetch();
+  const marketingFetch = useMarketingFetch();
   const [label, setLabel] = useState('');
   const [created, setCreated] = useState<CreatedApiKey | null>(null);
   const create = useMutation({
     mutationFn: () =>
-      nudgeFetch<CreatedApiKey>('api-keys', {
+      marketingFetch<CreatedApiKey>('api-keys', {
         method: 'POST',
         body: JSON.stringify({ label }),
       }),
@@ -332,7 +332,7 @@ function ApiKeysCard() {
       setCreated(key);
       setLabel('');
     },
-    onError: (error) => toast.error(describeNudgeError(error)),
+    onError: (error) => toast.error(describeMarketingError(error)),
   });
   return (
     <section aria-label="Server API keys" className="card">

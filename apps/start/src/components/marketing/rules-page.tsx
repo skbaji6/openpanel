@@ -2,7 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDownIcon, PlusIcon, WorkflowIcon } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { describeNudgeError, useNudgeFetch, useNudgeQueryKey } from './api';
+import {
+  describeMarketingError,
+  useMarketingFetch,
+  useMarketingQueryKey,
+} from './api';
 import type { Rule, RuleDefinition, RuleStatus, StarterRule } from './contract';
 import { emptyRuleDefinition, RuleEditor } from './rule-editor';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
@@ -33,25 +37,28 @@ function describeGoal(definition: RuleDefinition): string {
 }
 
 function RuleCard({ rule, onEdit }: { rule: Rule; onEdit: () => void }) {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
   const refresh = () =>
     client.invalidateQueries({ queryKey: queryKey('rules') });
   const path = `rules/${encodeURIComponent(rule.id)}`;
   const setStatus = useMutation({
     mutationFn: (status: RuleStatus) =>
-      nudgeFetch(path, { method: 'PATCH', body: JSON.stringify({ status }) }),
+      marketingFetch(path, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      }),
     onSuccess: refresh,
-    onError: (error) => toast.error(describeNudgeError(error)),
+    onError: (error) => toast.error(describeMarketingError(error)),
   });
   const remove = useMutation({
-    mutationFn: () => nudgeFetch(path, { method: 'DELETE' }),
+    mutationFn: () => marketingFetch(path, { method: 'DELETE' }),
     onSuccess() {
       toast.success('Rule deleted');
       refresh();
     },
-    onError: (error) => toast.error(describeNudgeError(error)),
+    onError: (error) => toast.error(describeMarketingError(error)),
   });
   const isActive = rule.status === 'active';
   return (
@@ -66,7 +73,7 @@ function RuleCard({ rule, onEdit }: { rule: Rule; onEdit: () => void }) {
       </IntegrationCardHeader>
       <p className="p-4 text-sm">
         When <strong>{rule.definition.trigger.event}</strong> happens, send{' '}
-        {rule.definition.steps.length} nudge
+        {rule.definition.steps.length} message
         {rule.definition.steps.length === 1 ? '' : 's'} until{' '}
         <strong>{describeGoal(rule.definition)}</strong>.
       </p>
@@ -76,7 +83,7 @@ function RuleCard({ rule, onEdit }: { rule: Rule; onEdit: () => void }) {
           onClick={() =>
             showConfirm({
               title: `Delete ${rule.name}?`,
-              text: 'Pending nudges of this rule are cancelled. This cannot be undone.',
+              text: 'Pending messages of this rule are cancelled. This cannot be undone.',
               onConfirm: () => remove.mutate(),
             })
           }
@@ -100,16 +107,17 @@ function RuleCard({ rule, onEdit }: { rule: Rule; onEdit: () => void }) {
 }
 
 export function RulesPage() {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const [draft, setDraft] = useState<Draft | null>(null);
   const rules = useQuery({
     queryKey: queryKey('rules'),
-    queryFn: () => nudgeFetch<{ rules: Rule[] }>('rules'),
+    queryFn: () => marketingFetch<{ rules: Rule[] }>('rules'),
   });
   const starters = useQuery({
     queryKey: queryKey('starter-rules'),
-    queryFn: () => nudgeFetch<{ starterRules: StarterRule[] }>('starter-rules'),
+    queryFn: () =>
+      marketingFetch<{ starterRules: StarterRule[] }>('starter-rules'),
     staleTime: Number.POSITIVE_INFINITY,
   });
 
@@ -160,16 +168,16 @@ export function RulesPage() {
   if (rules.error) {
     return (
       <FullPageEmptyState
-        description={describeNudgeError(rules.error)}
+        description={describeMarketingError(rules.error)}
         icon={WorkflowIcon}
-        title="Nudges are not available"
+        title="Journeys are not available"
       />
     );
   }
   if (rules.data.rules.length === 0) {
     return (
       <FullPageEmptyState
-        description="A rule watches for an event, waits, and nudges the profile until it reaches the goal. New here? Pick a template to start, or open the How it works tab."
+        description="A rule watches for an event, waits, and messages the profile until it reaches the goal. New here? Pick a template to start, or open the How it works tab."
         icon={WorkflowIcon}
         title="No rules yet"
       >

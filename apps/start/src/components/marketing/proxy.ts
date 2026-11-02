@@ -1,8 +1,8 @@
-const PROXY_PREFIX = '/nudge-api/';
+const PROXY_PREFIX = '/marketing-api/';
 const MAX_BODY_BYTES = 1024 * 1024;
 const ACCESS_CACHE_TTL_MS = 30_000;
 const ACCESS_CACHE_MAX = 1000;
-// Same format the nudge service accepts for forwarded identities.
+// Same format the marketing service accepts for forwarded identities.
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const CONTROL_CHARACTERS = /\p{Cc}/u;
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -10,7 +10,7 @@ const ORGANIZATION_ADMIN_ROLES = new Set(['owner', 'admin']);
 const DENIED_STATUSES = new Set([401, 403, 404]);
 const CORE_TIMEOUT_MS = 10_000;
 // Pausing or deleting a rule may wait up to 150 s in the service (120 s transaction + 30 s lock wait).
-const NUDGE_TIMEOUT_MS = 155_000;
+const MARKETING_TIMEOUT_MS = 155_000;
 
 type Requirement = 'member' | 'admin';
 
@@ -38,7 +38,7 @@ const ALLOWED_ROUTES: {
 ];
 
 export interface ProxyEnv {
-  nudgeUrl?: string;
+  marketingUrl?: string;
   proxySecret?: string;
   apiUrl?: string;
   dashboardUrl?: string;
@@ -135,7 +135,7 @@ function assertSameOrigin(request: Request, env: ProxyEnv): void {
   const { headers } = request;
   const fetchSite = headers.get('sec-fetch-site');
   const origin = headers.get('origin');
-  const csrfHeaderSet = headers.get('x-nudge-csrf') === '1';
+  const csrfHeaderSet = headers.get('x-marketing-csrf') === '1';
   const fetchSiteAllowed = fetchSite === null || fetchSite === 'same-origin';
   const originAllowed =
     origin !== null && allowedOrigins(request, env).has(origin);
@@ -178,16 +178,16 @@ export async function readCappedBody(
   return body.buffer;
 }
 
-export function createNudgeProxy(deps: {
+export function createMarketingProxy(deps: {
   env: () => ProxyEnv;
   fetch?: typeof fetch;
   now?: () => number;
-  timeouts?: { coreMs: number; nudgeMs: number };
+  timeouts?: { coreMs: number; marketingMs: number };
 }) {
   const fetchImpl = deps.fetch ?? fetch;
   const timeouts = deps.timeouts ?? {
     coreMs: CORE_TIMEOUT_MS,
-    nudgeMs: NUDGE_TIMEOUT_MS,
+    marketingMs: MARKETING_TIMEOUT_MS,
   };
   const now = deps.now ?? Date.now;
   const accessCache = new Map<
@@ -300,8 +300,8 @@ export function createNudgeProxy(deps: {
 
   async function forward(request: Request): Promise<Response> {
     const env = deps.env();
-    const { nudgeUrl, proxySecret, apiUrl } = env;
-    if (!(nudgeUrl && proxySecret && apiUrl)) {
+    const { marketingUrl, proxySecret, apiUrl } = env;
+    if (!(marketingUrl && proxySecret && apiUrl)) {
       throw new ProxyError(404, 'not_found');
     }
     const url = new URL(request.url);
@@ -315,7 +315,7 @@ export function createNudgeProxy(deps: {
     if (isMutating) {
       assertSameOrigin(request, env);
     }
-    const projectId = request.headers.get('x-nudge-project-id') ?? '';
+    const projectId = request.headers.get('x-marketing-project-id') ?? '';
     if (!ID_PATTERN.test(projectId)) {
       throw new ProxyError(400, 'invalid_project');
     }
@@ -330,17 +330,17 @@ export function createNudgeProxy(deps: {
       throw new ProxyError(403, 'forbidden');
     }
     const body = isMutating ? await readCappedBody(request) : null;
-    const target = new URL(`/nudge/${path}${url.search}`, nudgeUrl);
-    if (target.pathname !== `/nudge/${path}`) {
+    const target = new URL(`/marketing/${path}${url.search}`, marketingUrl);
+    if (target.pathname !== `/marketing/${path}`) {
       throw new ProxyError(404, 'not_found');
     }
     const headers: Record<string, string> = {
-      'x-nudge-proxy-secret': proxySecret,
-      'x-nudge-project-id': projectId,
-      'x-nudge-user-id': access.userId,
+      'x-marketing-proxy-secret': proxySecret,
+      'x-marketing-project-id': projectId,
+      'x-marketing-user-id': access.userId,
     };
     if (isMutating) {
-      headers['x-nudge-csrf'] = '1';
+      headers['x-marketing-csrf'] = '1';
       headers['content-type'] = 'application/json';
     }
     let upstream: Response;
@@ -350,13 +350,13 @@ export function createNudgeProxy(deps: {
         headers,
         body,
         redirect: 'manual',
-        signal: AbortSignal.timeout(timeouts.nudgeMs),
+        signal: AbortSignal.timeout(timeouts.marketingMs),
       });
     } catch (error) {
       if (isTimeout(error)) {
-        throw new ProxyError(504, 'nudge_timeout');
+        throw new ProxyError(504, 'marketing_timeout');
       }
-      throw new ProxyError(502, 'nudge_unavailable');
+      throw new ProxyError(502, 'marketing_unavailable');
     }
     return new Response(upstream.body, {
       status: upstream.status,

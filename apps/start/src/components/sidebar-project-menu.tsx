@@ -85,9 +85,9 @@ export default function SidebarProjectMenu({
       />
       <SidebarLink
         exact={false}
-        href={'/nudge'}
+        href={'/marketing'}
         icon={WorkflowIcon}
-        label="Nudges"
+        label="Marketing"
       />
       <SidebarLink href={'..'} icon={UndoDotIcon} label="Back to workspace" />
     </>

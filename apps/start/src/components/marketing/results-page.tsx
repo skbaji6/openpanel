@@ -1,6 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart3Icon } from 'lucide-react';
-import { describeNudgeError, useNudgeFetch, useNudgeQueryKey } from './api';
+import {
+  describeMarketingError,
+  useMarketingFetch,
+  useMarketingQueryKey,
+} from './api';
 import type { RuleResult } from './contract';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
@@ -22,7 +26,7 @@ const percent = new Intl.NumberFormat(undefined, {
 const COLUMNS: { key: Exclude<keyof RuleResult, 'goalKind'>; label: string }[] =
   [
     { key: 'enrolled', label: 'Enrolled' },
-    { key: 'nudged', label: 'Nudged' },
+    { key: 'messaged', label: 'Messaged' },
     { key: 'sent', label: 'Sent' },
     { key: 'completedAfterSend', label: 'Completed after send' },
     { key: 'skipped', label: 'Skipped' },
@@ -30,11 +34,11 @@ const COLUMNS: { key: Exclude<keyof RuleResult, 'goalKind'>; label: string }[] =
   ];
 
 export function ResultsPage() {
-  const nudgeFetch = useNudgeFetch();
-  const queryKey = useNudgeQueryKey();
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
   const results = useQuery({
     queryKey: queryKey('results'),
-    queryFn: () => nudgeFetch<{ results: RuleResult[] }>('results'),
+    queryFn: () => marketingFetch<{ results: RuleResult[] }>('results'),
   });
 
   if (results.isPending) {
@@ -43,7 +47,7 @@ export function ResultsPage() {
   if (results.error) {
     return (
       <FullPageEmptyState
-        description={describeNudgeError(results.error)}
+        description={describeMarketingError(results.error)}
         icon={BarChart3Icon}
         title="Results are not available"
       />
@@ -52,7 +56,7 @@ export function ResultsPage() {
   if (results.data.results.length === 0) {
     return (
       <FullPageEmptyState
-        description="Create a rule to see how many profiles it nudges and how many reach the goal."
+        description="Create a rule to see how many profiles it messages and how many reach the goal."
         icon={BarChart3Icon}
         title="No results yet"
       />
@@ -63,9 +67,9 @@ export function ResultsPage() {
       <Table>
         <TableCaption className="p-4 text-left">
           "Completed after send" counts journeys that reached the goal while
-          they were running, after at least one nudge was sent. A goal reached
+          they were running, after at least one message was sent. A goal reached
           after the final step, or by a journey still running, is not counted,
-          and a count does not prove the nudge caused the goal. Rules with an
+          and a count does not prove the message caused the goal. Rules with an
           inactivity goal have no goal event, so their conversion shows a dash.
           Journeys that ended before the plugin recorded end reasons count as
           not converted.

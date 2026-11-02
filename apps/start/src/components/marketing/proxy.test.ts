@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { createNudgeProxy, type ProxyEnv } from './proxy';
+import { createMarketingProxy, type ProxyEnv } from './proxy';
 
 const DASHBOARD = 'https://dash.example.com';
 const API = 'https://api.example.com';
-const NUDGE = 'http://nudge.internal:4100';
+const MARKETING = 'http://marketing.internal:4100';
 const SECRET = 'proxy-secret-value';
 const PROJECT = 'proj_1';
 const ORGANIZATION = 'org_1';
@@ -36,14 +36,14 @@ function setup({
   env?: Partial<ProxyEnv>;
   role?: string | null;
   projectStatus?: number;
-  hang?: 'core' | 'nudge';
+  hang?: 'core' | 'marketing';
 } = {}) {
   const calls: Call[] = [];
   let now = 0;
   const fetchMock = (input: RequestInfo | URL, init: RequestInit = {}) => {
     const url = String(input);
     calls.push({ url, init });
-    const target = url.startsWith(API) ? 'core' : 'nudge';
+    const target = url.startsWith(API) ? 'core' : 'marketing';
     if (hang === target) {
       return hangUntilAborted(init.signal);
     }
@@ -63,13 +63,13 @@ function setup({
     return Promise.resolve(
       Response.json(
         { ok: true },
-        { headers: { 'x-nudge-proxy-secret': SECRET, 'set-cookie': 'x=1' } }
+        { headers: { 'x-marketing-proxy-secret': SECRET, 'set-cookie': 'x=1' } }
       )
     );
   };
-  const proxy = createNudgeProxy({
+  const proxy = createMarketingProxy({
     env: () => ({
-      nudgeUrl: NUDGE,
+      marketingUrl: MARKETING,
       proxySecret: SECRET,
       apiUrl: API,
       dashboardUrl: DASHBOARD,
@@ -77,12 +77,13 @@ function setup({
     }),
     fetch: fetchMock as typeof fetch,
     now: () => now,
-    timeouts: { coreMs: TEST_TIMEOUT_MS, nudgeMs: TEST_TIMEOUT_MS },
+    timeouts: { coreMs: TEST_TIMEOUT_MS, marketingMs: TEST_TIMEOUT_MS },
   });
   return {
     proxy,
     calls,
-    nudgeCalls: () => calls.filter((call) => call.url.startsWith(NUDGE)),
+    marketingCalls: () =>
+      calls.filter((call) => call.url.startsWith(MARKETING)),
     coreCalls: () => calls.filter((call) => call.url.startsWith(API)),
     advance: (ms: number) => {
       now += ms;
@@ -99,15 +100,15 @@ function request(
   }: { method?: string; headers?: Record<string, string>; body?: string } = {}
 ) {
   const mutating = method !== 'GET';
-  return new Request(`${DASHBOARD}/nudge-api/${path}`, {
+  return new Request(`${DASHBOARD}/marketing-api/${path}`, {
     method,
     body,
     headers: {
       cookie: COOKIE,
-      'x-nudge-project-id': PROJECT,
+      'x-marketing-project-id': PROJECT,
       ...(mutating
         ? {
-            'x-nudge-csrf': '1',
+            'x-marketing-csrf': '1',
             origin: DASHBOARD,
             'sec-fetch-site': 'same-origin',
           }
@@ -117,46 +118,46 @@ function request(
   });
 }
 
-describe('nudge proxy', () => {
+describe('marketing proxy', () => {
   test('forwards an allowed request with its own identity headers', async () => {
-    const { proxy, nudgeCalls } = setup();
+    const { proxy, marketingCalls } = setup();
     const response = await proxy.handle(request('results?ruleId=abc'));
     expect(response.status).toBe(200);
-    const [call] = nudgeCalls();
-    expect(call?.url).toBe(`${NUDGE}/nudge/results?ruleId=abc`);
+    const [call] = marketingCalls();
+    expect(call?.url).toBe(`${MARKETING}/marketing/results?ruleId=abc`);
     const headers = new Headers(call?.init.headers);
-    expect(headers.get('x-nudge-proxy-secret')).toBe(SECRET);
-    expect(headers.get('x-nudge-project-id')).toBe(PROJECT);
-    expect(headers.get('x-nudge-user-id')).toBe(USER);
+    expect(headers.get('x-marketing-proxy-secret')).toBe(SECRET);
+    expect(headers.get('x-marketing-project-id')).toBe(PROJECT);
+    expect(headers.get('x-marketing-user-id')).toBe(USER);
     expect(headers.get('cookie')).toBeNull();
   });
 
-  test('replaces client-supplied nudge headers and never returns upstream headers', async () => {
-    const { proxy, nudgeCalls, coreCalls } = setup();
+  test('replaces client-supplied marketing headers and never returns upstream headers', async () => {
+    const { proxy, marketingCalls, coreCalls } = setup();
     const response = await proxy.handle(
       request('rules', {
         headers: {
-          'x-nudge-proxy-secret': 'guess',
-          'x-nudge-user-id': 'someone-else',
+          'x-marketing-proxy-secret': 'guess',
+          'x-marketing-user-id': 'someone-else',
           'x-forwarded-for': '1.2.3.4',
         },
       })
     );
-    const headers = new Headers(nudgeCalls()[0]?.init.headers);
-    expect(headers.get('x-nudge-proxy-secret')).toBe(SECRET);
-    expect(headers.get('x-nudge-user-id')).toBe(USER);
+    const headers = new Headers(marketingCalls()[0]?.init.headers);
+    expect(headers.get('x-marketing-proxy-secret')).toBe(SECRET);
+    expect(headers.get('x-marketing-user-id')).toBe(USER);
     expect(headers.get('x-forwarded-for')).toBeNull();
-    expect(response.headers.get('x-nudge-proxy-secret')).toBeNull();
+    expect(response.headers.get('x-marketing-proxy-secret')).toBeNull();
     expect(response.headers.get('set-cookie')).toBeNull();
     for (const call of coreCalls()) {
       expect(
-        new Headers(call.init.headers).get('x-nudge-proxy-secret')
+        new Headers(call.init.headers).get('x-marketing-proxy-secret')
       ).toBeNull();
     }
   });
 
-  test('returns 404 when NUDGE_URL is unset', async () => {
-    const { proxy, calls } = setup({ env: { nudgeUrl: undefined } });
+  test('returns 404 when MARKETING_URL is unset', async () => {
+    const { proxy, calls } = setup({ env: { marketingUrl: undefined } });
     expect((await proxy.handle(request('rules'))).status).toBe(404);
     expect(calls).toHaveLength(0);
   });
@@ -173,36 +174,36 @@ describe('nudge proxy', () => {
     'rules/a/b',
     '',
   ])('does not forward %s', async (path) => {
-    const { proxy, nudgeCalls } = setup();
+    const { proxy, marketingCalls } = setup();
     const response = await proxy.handle(request(path));
     expect(response.status).toBeGreaterThanOrEqual(400);
-    expect(nudgeCalls()).toHaveLength(0);
+    expect(marketingCalls()).toHaveLength(0);
   });
 
   test('rejects a method the path does not allow', async () => {
-    const { proxy, nudgeCalls } = setup();
+    const { proxy, marketingCalls } = setup();
     const response = await proxy.handle(
       request('results', { method: 'DELETE' })
     );
     expect(response.status).toBe(405);
-    expect(nudgeCalls()).toHaveLength(0);
+    expect(marketingCalls()).toHaveLength(0);
   });
 
   test.each([
-    ['missing csrf header', { 'x-nudge-csrf': '' }],
+    ['missing csrf header', { 'x-marketing-csrf': '' }],
     ['foreign origin', { origin: 'https://evil.example.com' }],
     ['cross-site fetch', { 'sec-fetch-site': 'cross-site' }],
   ])('rejects a mutating request with %s', async (_label, headers) => {
-    const { proxy, nudgeCalls } = setup();
+    const { proxy, marketingCalls } = setup();
     const response = await proxy.handle(
       request('rules', { method: 'POST', body: '{}', headers })
     );
     expect(response.status).toBe(403);
-    expect(nudgeCalls()).toHaveLength(0);
+    expect(marketingCalls()).toHaveLength(0);
   });
 
   test('rejects a mutating request without an Origin header', async () => {
-    const { proxy, nudgeCalls } = setup();
+    const { proxy, marketingCalls } = setup();
     const req = request('rules', { method: 'POST', body: '{}' });
     const headers = new Headers(req.headers);
     headers.delete('origin');
@@ -210,13 +211,13 @@ describe('nudge proxy', () => {
       new Request(req.url, { method: 'POST', body: '{}', headers })
     );
     expect(response.status).toBe(403);
-    expect(nudgeCalls()).toHaveLength(0);
+    expect(marketingCalls()).toHaveLength(0);
   });
 
   test('returns 403 when core denies the project', async () => {
-    const { proxy, nudgeCalls } = setup({ projectStatus: 403 });
+    const { proxy, marketingCalls } = setup({ projectStatus: 403 });
     expect((await proxy.handle(request('rules'))).status).toBe(403);
-    expect(nudgeCalls()).toHaveLength(0);
+    expect(marketingCalls()).toHaveLength(0);
   });
 
   test('returns 403 without a session cookie', async () => {
@@ -229,7 +230,7 @@ describe('nudge proxy', () => {
   });
 
   test('a member who is not an organization admin may read rules but not change them', async () => {
-    const { proxy, nudgeCalls } = setup({ role: 'member' });
+    const { proxy, marketingCalls } = setup({ role: 'member' });
     expect((await proxy.handle(request('rules'))).status).toBe(200);
     expect(
       (await proxy.handle(request('preview', { method: 'POST', body: '{}' })))
@@ -244,16 +245,16 @@ describe('nudge proxy', () => {
     for (const req of denied) {
       expect((await proxy.handle(req)).status).toBe(403);
     }
-    expect(nudgeCalls()).toHaveLength(2);
+    expect(marketingCalls()).toHaveLength(2);
   });
 
   test('rejects a body over 1 MiB with 413', async () => {
-    const { proxy, nudgeCalls } = setup();
+    const { proxy, marketingCalls } = setup();
     const response = await proxy.handle(
       request('rules', { method: 'POST', body: 'x'.repeat(ONE_MIB + 1) })
     );
     expect(response.status).toBe(413);
-    expect(nudgeCalls()).toHaveLength(0);
+    expect(marketingCalls()).toHaveLength(0);
   });
 
   test('caches the access decision for 30 seconds', async () => {
@@ -281,7 +282,7 @@ describe('nudge proxy', () => {
   test('rejects a malformed project id', async () => {
     const { proxy, coreCalls } = setup();
     const response = await proxy.handle(
-      request('rules', { headers: { 'x-nudge-project-id': '../x' } })
+      request('rules', { headers: { 'x-marketing-project-id': '../x' } })
     );
     expect(response.status).toBe(400);
     expect(coreCalls()).toHaveLength(0);
@@ -289,7 +290,7 @@ describe('nudge proxy', () => {
 
   test.each([
     'core',
-    'nudge',
+    'marketing',
   ] as const)('answers 504 when %s does not respond in time', async (hang) => {
     const { proxy } = setup({ hang });
     const response = await proxy.handle(request('rules'));
@@ -301,7 +302,7 @@ describe('nudge proxy', () => {
     const { proxy, coreCalls } = setup();
     await proxy.handle(
       request('rules?organizationId=org_evil', {
-        headers: { 'x-nudge-organization-id': 'org_evil' },
+        headers: { 'x-marketing-organization-id': 'org_evil' },
       })
     );
     const membership = coreCalls().find((call) =>

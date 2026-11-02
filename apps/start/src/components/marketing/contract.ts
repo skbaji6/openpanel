@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-// Copied verbatim from packages/nudge/src/rules/rule.schema.ts; contract.test.ts fails unless the
+// Copied verbatim from packages/marketing/src/rules/rule.schema.ts; contract.test.ts fails unless the
 // text from MAX_SUBJECT_LENGTH to RuleDefinition matches the service file exactly.
 const MAX_SUBJECT_LENGTH = 300;
 const MAX_BODY_LENGTH = 20_000;
@@ -105,7 +105,7 @@ export interface RuleResult {
   // Inactivity rules end only by running out of steps, so conversion is not measured for them.
   goalKind: string | null;
   enrolled: number;
-  nudged: number;
+  messaged: number;
   sent: number;
   completedAfterSend: number;
   conversionRate: number;

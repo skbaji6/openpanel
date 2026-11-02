@@ -13,7 +13,7 @@ import starterRules from './starter-rules.fixture.json';
 // Read as text, not imported: the dashboard must not depend on the service package's source.
 const SERVICE_SCHEMA_SOURCE = readFileSync(
   new URL(
-    '../../../../../packages/nudge/src/rules/rule.schema.ts',
+    '../../../../../packages/marketing/src/rules/rule.schema.ts',
     import.meta.url
   ),
   'utf8'

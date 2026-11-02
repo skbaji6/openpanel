@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { GuidePage } from '@/components/nudge/guide-page';
+import { GuidePage } from '@/components/marketing/guide-page';
 
 export const Route = createFileRoute(
-  '/_app/$organizationId/$projectId/nudge/_tabs/guide'
+  '/_app/$organizationId/$projectId/marketing/_tabs/guide'
 )({
   component: GuidePage,
 });
