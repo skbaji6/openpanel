@@ -106,4 +106,17 @@ describe('compileFilter', () => {
       parseMapping({ ...example, idColumn: 'id"; DROP TABLE x; --' })
     ).toThrow('invalid audience mapping');
   });
+
+  it('rejects comment and statement markers in an expression', () => {
+    for (const expression of ['1 -- x', '1 /* x */', '1; select 2']) {
+      expect(() =>
+        parseMapping({
+          ...example,
+          dimensions: [
+            { key: 'bad', label: 'Bad', type: 'string', expression },
+          ],
+        })
+      ).toThrow('invalid audience mapping');
+    }
+  });
 });

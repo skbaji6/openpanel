@@ -137,3 +137,13 @@ export const zExplanation = z.object({
   ),
 });
 export type Explanation = z.infer<typeof zExplanation>;
+
+export const zDimensionValueItem = z.object({
+  value: z.string(),
+  label: z.string(),
+});
+// The owner's contract does not pin this shape; accept a bare array or {values}.
+export const zDimensionValues = z.union([
+  z.array(zDimensionValueItem),
+  z.object({ values: z.array(zDimensionValueItem) }).transform((v) => v.values),
+]);

@@ -20,10 +20,12 @@ Point a project's audience source at `http://host:4200<AUDIENCE_BASE_PATH>`. Use
 `mapping.example.json` describes your schema; the plugin has no vocabulary of its own. Names are validated at startup against `/^[a-zA-Z_][a-zA-Z0-9_.]*$/` and quoted. Each dimension is exactly one of:
 
 - `column`: a column on the students table (`s`), single valued.
-- `expression`: a trusted SQL expression over `s` for computed dimensions. The example `purchase_status` is `PURCHASED` for an active, unexpired purchase and `NOT_PURCHASED` otherwise. Expressions are configuration, never user input.
+- `expression`: a trusted SQL expression over `s` for computed dimensions. The example `purchase_status` is `PURCHASED` for an active, unexpired purchase and `NOT_PURCHASED` otherwise. Expressions are configuration, never user input; each must be one self-contained SQL expression (`;`, `--`, `/*` and `*/` are rejected).
 - `exists`: an EXISTS sub-select over a child relation, for multi-valued dimensions such as `course`. Students stay one row, so counts and pages are of distinct students.
 
 Also mapped: the id column (ids are served as text), the display name, contact columns (email, verified flag, phone, suppression flag, consent), traits, and the devices table. Only mapped columns are ever selected, so a password column cannot leak.
+
+Contract notes: `not_in` includes students who have no value for the dimension (single valued: NULL; multi valued: no matching child row). Ids are compared and ordered as `id::text`; if your id column is already text, drop the cast in `idExpression` (compile.ts), otherwise add an expression index on `(id::text)` so paging and `id` conditions can use an index.
 
 ## Signing
 

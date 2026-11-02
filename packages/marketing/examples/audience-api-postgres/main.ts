@@ -1,5 +1,6 @@
 import { SQL } from 'bun';
 import { readFileSync } from 'node:fs';
+import { MAX_BODY_BYTES } from '../../src/audience/http-source';
 import { parseMapping } from './mapping';
 import { createServer } from './server';
 
@@ -47,4 +48,5 @@ const app = createServer({
 Bun.serve({
   port: Number(process.env.AUDIENCE_PORT ?? DEFAULT_PORT),
   fetch: app.fetch,
+  maxRequestBodySize: MAX_BODY_BYTES,
 });

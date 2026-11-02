@@ -60,7 +60,8 @@ INSERT INTO reference_demo.students
   ('s003', 'Chitra', 'Nair', 'chitra@example.test', true, NULL, 'secret-hash-3', 'u1', 'c2', 4, '2025-07-01', false, NULL, NULL),
   ('s004', 'Dev', 'Menon', 'dev@example.test', true, '919000000004', 'secret-hash-4', 'u2', 'c2', 4, '2025-07-15', true, true, true),
   ('s005', 'Esha', 'Pillai', NULL, false, '919000000005', 'secret-hash-5', 'u2', 'c3', 5, '2025-08-01', false, true, false),
-  ('s006', 'Farid', 'Khan', 'farid@example.test', true, '919000000006', 'secret-hash-6', 'u2', NULL, NULL, NULL, false, true, true);
+  ('s006', 'Farid', 'Khan', 'farid@example.test', true, '919000000006', 'secret-hash-6', 'u2', NULL, NULL, NULL, false, true, true),
+  ('s007', 'Gita', 'Sen', NULL, false, NULL, 'secret-hash-7', 'u1', NULL, 3, '2025-09-01', false, NULL, NULL);
 
 INSERT INTO reference_demo.enrollments VALUES ('s001', 'c3'), ('s003', 'c1'), ('s006', 'c3');
 
@@ -76,3 +77,7 @@ INSERT INTO reference_demo.purchases (student_id, is_active, expiry_date) VALUES
   ('s002', true, '2000-01-01'),
   ('s003', false, NULL),
   ('s004', true, '2999-01-01');
+
+-- Integer-keyed table for the numeric-id paging test.
+CREATE TABLE reference_demo.numbered (id integer PRIMARY KEY, university_id text);
+INSERT INTO reference_demo.numbered SELECT g, 'u1' FROM generate_series(1, 12) g;

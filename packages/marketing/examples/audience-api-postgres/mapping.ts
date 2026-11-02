@@ -25,7 +25,10 @@ const zDimensionMapping = z
     column: zIdentifier.optional(),
     expression: z
       .string()
-      .refine((value) => !value.includes(';'), 'no statement separators')
+      .refine(
+        (value) => !/;|--|\/\*|\*\//.test(value),
+        'no statement separators or comments'
+      )
       .optional(),
     exists: zExists.optional(),
     values: z

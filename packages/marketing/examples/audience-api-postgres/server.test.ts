@@ -10,6 +10,7 @@ import {
   zResolveResponse,
   zSchema,
 } from '../../src/audience/contract';
+import { MAX_BODY_BYTES } from '../../src/audience/http-source';
 import { newNonce, signRequest } from '../../src/audience/signing';
 import { parseMapping } from './mapping';
 import example from './mapping.example.json';
@@ -171,7 +172,7 @@ describe('audience routes', () => {
       zCountResponse
     );
     const ids = await pageAll(2);
-    expect(count).toBe(6);
+    expect(count).toBe(7);
     expect(ids).toHaveLength(count);
   });
 
@@ -388,7 +389,7 @@ describe('basePath', () => {
         body: { filter: allStudents },
       })
     );
-    expect(zCountResponse.parse(await count.json()).count).toBe(6);
+    expect(zCountResponse.parse(await count.json()).count).toBe(7);
   });
 
   it('does not serve the unprefixed path', async () => {
@@ -396,5 +397,130 @@ describe('basePath', () => {
       signedRequest('/schema', { method: 'GET' })
     );
     expect(res.status).toBe(404);
+  });
+});
+
+describe('NULL semantics of not_in', () => {
+  const countOf = async (filter: unknown) =>
+    (await call(app, '/audience/count', { filter }, zCountResponse)).count;
+
+  it('includes students with no value, single valued', async () => {
+    // Semester 3: s001, s002, s007. s006 has no semester and is included.
+    expect(
+      await countOf({ dimension: 'semester', op: 'not_in', values: [3] })
+    ).toBe(4);
+  });
+
+  it('includes students with no value, multi valued', async () => {
+    // c1: s001, s002, s003. s007 has no course at all and is included.
+    expect(
+      await countOf({ dimension: 'course', op: 'not_in', values: ['c1'] })
+    ).toBe(4);
+  });
+});
+
+describe('request edge cases', () => {
+  it('a malformed percent escape is 400 once authenticated, 401 before', async () => {
+    const path = '/dimensions/%E0%A4%A/values';
+    const unsigned = await app.fetch(new Request(`${ORIGIN}${path}`));
+    expect(unsigned.status).toBe(401);
+    const signed = await app.fetch(signedRequest(path, { method: 'GET' }));
+    expect(signed.status).toBe(400);
+  });
+
+  it('an oversize Content-Length is 413', async () => {
+    const res = await app.fetch(
+      new Request(`${ORIGIN}/audience/count`, {
+        method: 'POST',
+        headers: { 'content-length': String(MAX_BODY_BYTES + 1) },
+        body: '{}',
+      })
+    );
+    expect(res.status).toBe(413);
+  });
+
+  it('a chunked oversize body is cut off at the cap with 413', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += 1;
+        controller.enqueue(chunk);
+        if (sent > 100) {
+          controller.close();
+        }
+      },
+    });
+    const res = await app.fetch(
+      new Request(`${ORIGIN}/audience/count`, {
+        method: 'POST',
+        body,
+        duplex: 'half',
+      } as RequestInit)
+    );
+    expect(res.status).toBe(413);
+    expect(sent).toBeLessThan(100);
+  });
+
+  it('a body that is not valid UTF-8 is 400', async () => {
+    const res = await app.fetch(
+      new Request(`${ORIGIN}/audience/count`, {
+        method: 'POST',
+        body: new Uint8Array([0xff, 0xfe, 0xfd]),
+      })
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('trailing and double slashes are not routes (404 once signed)', async () => {
+    for (const path of ['/schema/', '//schema']) {
+      const res = await app.fetch(signedRequest(path, { method: 'GET' }));
+      expect(res.status).toBe(404);
+    }
+  });
+
+  it('HEAD is 401 unsigned and 404 signed', async () => {
+    const unsigned = await app.fetch(
+      new Request(`${ORIGIN}/schema`, { method: 'HEAD' })
+    );
+    expect(unsigned.status).toBe(401);
+    const signed = await app.fetch(
+      signedRequest('/schema', { method: 'HEAD' })
+    );
+    expect(signed.status).toBe(404);
+  });
+});
+
+describe('integer ids', () => {
+  it('page without duplicates over a numeric id column', async () => {
+    const numeric = createServer({
+      mapping: parseMapping({
+        studentsTable: 'reference_demo.numbered',
+        idColumn: 'id',
+        dimensions: [],
+      }),
+      db,
+      keys: [KEY],
+      now: () => NOW_MS,
+    });
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await call(
+        numeric,
+        '/audience/members',
+        {
+          filter: { dimension: 'id', op: 'not_in', values: ['0'] },
+          cursor,
+          limit: 5,
+          fields: 'id',
+        },
+        zMembersResponse
+      );
+      ids.push(...page.members.map((m) => m.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(ids).toHaveLength(12);
+    expect(new Set(ids).size).toBe(12);
   });
 });

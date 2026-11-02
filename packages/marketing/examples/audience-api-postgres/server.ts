@@ -136,7 +136,54 @@ function maskName(name: string): string {
     .join(' ');
 }
 
+function decodeKey(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw badRequest();
+  }
+}
+
 const digitsOf = (value: string) => value.replace(/\D/g, '');
+
+// Streams the body with a running byte count so an oversize chunked upload is
+// abandoned at the cap instead of buffered; signing takes a string, so the
+// bytes must be valid UTF-8.
+async function readBodyCapped(
+  req: Request
+): Promise<string | 'too_large' | 'invalid'> {
+  if (Number(req.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) {
+    return 'too_large';
+  }
+  if (!req.body) {
+    return '';
+  }
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        return 'too_large';
+      }
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(
+      Buffer.concat(chunks)
+    );
+  } catch {
+    return 'invalid';
+  }
+}
 
 export function createServer(opts: ServerOptions) {
   const mapping = parseMapping(opts.mapping);
@@ -480,7 +527,7 @@ export function createServer(opts: ServerOptions) {
     const valuesMatch = /^\/dimensions\/([^/]+)\/values$/.exec(path);
     if (method === 'GET' && valuesMatch) {
       return dimensionValues(
-        decodeURIComponent(valuesMatch[1] ?? ''),
+        decodeKey(valuesMatch[1] ?? ''),
         search.get('q') ?? '',
         search.get('limit') ?? ''
       );
@@ -503,11 +550,14 @@ export function createServer(opts: ServerOptions) {
 
   async function fetchHandler(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    const declaredLength = Number(req.headers.get('content-length') ?? 0);
-    if (declaredLength > MAX_BODY_BYTES) {
+    const read = await readBodyCapped(req);
+    if (read === 'too_large') {
       return json({ error: 'payload_too_large' }, STATUS_TOO_LARGE);
     }
-    const rawBody = await req.text();
+    if (read === 'invalid') {
+      return json({ error: 'invalid request' }, STATUS_BAD_REQUEST);
+    }
+    const rawBody = read;
     // Deny by default: nothing below runs unless the signature verifies.
     const verdict = await verifyRequest({
       headers: req.headers,

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import type { z } from 'zod';
 import type { createBreaker } from './breaker';
 import {
   type LookupEntry,
@@ -6,6 +6,7 @@ import {
   MAX_PAGE_SIZE,
   MAX_RESOLVE_INPUTS,
   zCountResponse,
+  zDimensionValues,
   zExplanation,
   zLookupResponse,
   zMembersResponse,
@@ -32,13 +33,6 @@ const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_SERVER_ERROR = 500;
 const HTTP_OK_MIN = 200;
 const HTTP_OK_MAX = 300;
-
-const zValueItem = z.object({ value: z.string(), label: z.string() });
-// The owner's contract does not pin this shape; accept a bare array or {values}.
-const zDimensionValues = z.union([
-  z.array(zValueItem),
-  z.object({ values: z.array(zValueItem) }).transform((v) => v.values),
-]);
 
 interface HttpSourceOptions {
   baseUrl: string;
