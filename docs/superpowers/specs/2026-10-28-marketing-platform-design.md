@@ -6,7 +6,7 @@ Status: draft for approval (scope includes the `sia-backend` API work). Builds o
 
 The nudge plugin sends behaviour-triggered messages ("did A, did not reach goal G in time T"). Marketing needs more: send a message to a chosen group at a chosen time, reuse templates, see what happened, test variants. The aim is one plugin, renamed **marketing**, that covers journeys (what exists) and campaigns (new), with enough throughput that the plugin is never the slow part of a send.
 
-The owner's platform is ed-tech: about 50,000 students, largest single audience about 20,000, on web, mobile and Windows. The first campaign, in the owner's words: "send the notification to specific university, specific course, specific semester users". The owner wants full control of the selection, from a whole university down to one student. Push is Firebase (FCM). Email is today a free Gmail SMTP account. The student id equals the profile id the app sends to OpenPanel.
+The owner's platform is ed-tech: about 50,000 students, largest single audience about 20,000, on web, mobile and Windows. The first campaign, in the owner's words: "send the notification to specific university, specific course, specific semester users". The owner wants full control of the selection, from a whole university down to one student. Push is Firebase (FCM). WhatsApp and SMS go through MSG91, which the owner already uses. Email is today a free Gmail SMTP account; the owner has parked email configuration for later. The student id equals the profile id the app sends to OpenPanel.
 
 Decisions of the owner that shape everything below:
 - **Student data is not copied** to another location. The marketing workers run in AWS Hyderabad next to the owner's database.
@@ -22,12 +22,12 @@ Goals
 - Rename the plugin to **marketing**; journeys become one feature inside it.
 - An **audience source** contract: the plugin asks an HTTP API (built by the adopter) which people match a filter and how to reach them, and never stores that personal data.
 - An audience builder with full control of selection: filters, hand-picked students, exclusions, live count, preview and "why is this student in or out".
-- One-off and scheduled campaigns over email, push and webhook, sent by a high-throughput engine that never delays journey nudges.
+- One-off and scheduled campaigns over **push, WhatsApp and SMS first**, plus email and webhook, sent by a high-throughput engine that never delays journey nudges.
 - No self-imposed throttle: the only rate limits are the provider's and the audience API's, set by the operator.
 - Later: templates and visual editor, delivery and engagement tracking, A/B tests, branching journeys.
 
 Non-goals
-- AI-written messages; SMS and WhatsApp channels; a CRM; a preference centre beyond one opt-out; billing; replicating the owner's tables; a second marketing UI inside `sia-backend`.
+- AI-written messages; a CRM; a preference centre beyond one opt-out per channel; two-way WhatsApp conversations and chatbots (outbound template messages only); billing; replicating the owner's tables; a second marketing UI inside `sia-backend`.
 
 Anti-goals (a failure even if it technically works)
 - Any edit to an existing OpenPanel file beyond the one sidebar link and the generated files already allowed (the fork must stay updatable).
@@ -74,7 +74,7 @@ The marketing workers are a **separate service**, not part of `sia-backend`.
 | Phase | Scope | Where |
 |---|---|---|
 | 1 | Rename to marketing; audience source contract with an HTTP source; secured audience API in `sia-backend` (specified here, built there); reference service; conformance suite; journeys resolve contacts through the source; backend-journey cut-over plan | Section 5 |
-| 2 | Audience builder with full selection control, campaigns, send engine | Section 6 |
+| 2 | Audience builder with full selection control, campaigns, send engine; channels in this order: push, WhatsApp, SMS, then email (built and tested against a fake SMTP server; provider configuration is the owner's, later) | Section 6 |
 | 3 | Templates and visual email editor | Section 7 (outline) |
 | 4 | Delivery and engagement tracking, reports, attribution | Section 7 (outline) |
 | 5 | A/B tests, branching journeys | Section 7 (outline) |
@@ -120,11 +120,11 @@ A project selects its source in settings. The `http` contract (JSON over HTTPS; 
 | `POST /audience/count` | Body: filter tree. Returns `{count, approximate?}`. |
 | `POST /audience/members` | Body: filter tree, `cursor`, `limit` (at most 1,000), `fields` (`id` only, or `preview`: id plus a masked display name). Returns members and `nextCursor`. Keyset pagination on a stable id order; a member who changes during a long read may or may not be included (acceptable). |
 | `POST /audience/explain` | Body: filter tree and one id. Returns which conditions matched or failed, for the "why is this student in or out" check. |
-| `POST /members/lookup` | Body: up to 500 ids and the channel wanted. Returns for each: `email?`, `devices?[{token, platform}]`, `traits{}` (the values templates use, for example `firstName`), `suppressed?` (true for a person who must not be messaged, for example a withdrawn student), or not found. Called only by the send engine, never for the dashboard. |
+| `POST /members/lookup` | Body: up to 500 ids and the channel wanted (`push`, `whatsapp`, `sms`, `email`). Returns for each: `email?`, `phone?` (full international format, for example 91XXXXXXXXXX, only for `sms` and `whatsapp`), `devices?[{token, platform}]`, `traits{}` (the values templates use, for example `firstName`), `suppressed?` (true for a person who must not be messaged, for example a withdrawn student), `consent?{whatsapp, sms_promotional}` (true only where the student has agreed; see 6.5), or not found. Called only by the send engine, never for the dashboard. |
 | `POST /members/resolve` | Body: up to 200 phone numbers or emails the operator pasted. Returns ids only (and which inputs matched nothing), for the hand-picked list. No contact data comes back. |
 
 - **Filter tree.** The plugin's own JSON: groups joined by AND/OR, depth limit 3; conditions `{dimension, op, values}` with ops eq, in, not_in, gt, lt, between, exists. The reserved dimension `id` supports `in` and `not_in` with at most 1,000 values; longer id lists are handled by the plugin (section 6.1). The plugin only sends dimensions the API declared. The API turns it into parameterised SQL; string-built SQL from the filter is forbidden by the contract.
-- **Contactable.** The API decides who can be reached: a student appears in `lookup` with a channel's address only if reachable on that channel, otherwise the plugin records a skip with a reason.
+- **Contactable.** The API decides who can be reached (phone present and valid for SMS and WhatsApp, an active device with a token for push, a verified address for email, and consent where 6.5 requires it): a student appears in `lookup` with a channel's address only if reachable on that channel, otherwise the plugin records a skip with a reason.
 - **Personal data handling.** Contact fields exist only in memory for the duration of one batch and are never logged (the existing redaction also covers API responses). Not stored: email, name, tokens, rendered bodies. Stored: the stable id, status and reason per send, and timestamps. Opt-out and suppression records are keyed by id. Unsubscribe tokens carry ids only. Redis never holds contact data.
 - **Resilience.** Per-call timeouts (defaults 10 s, count 5 s); at most `MARKETING_SOURCE_CONCURRENCY` calls in flight (default 4) **across all replicas**, enforced by a Redis-based counting semaphore with expiring slots (a per-process cap would multiply load by the replica count); retry on 5xx and 429 with jittered exponential backoff honouring `Retry-After`; a circuit breaker. If the API is down, campaigns pause and resume on their own and journey steps stay pending; nothing is marked failed because the source was unreachable.
 - **Recommended service levels** (in the contract; checked by the conformance suite as warnings): `count` under 2 s, a page of 1,000 members under 2 s, a lookup of 500 under 1 s, at the owner's scale.
@@ -199,11 +199,11 @@ Hand-picked and excluded lists are stored as ids only, up to 20,000 ids each. Ph
 ### 6.2 Campaigns
 
 - States: draft, scheduled, running, paused, completed, cancelled, failed.
-- A campaign has: an audience, one channel (a multi-channel send is several campaigns), a template (same variables as journeys, `{{profile.<trait>}}` from the lookup's `traits`), a send time (now, or scheduled with a timezone), optional quiet hours, and an optional per-person frequency cap shared with journeys.
+- A campaign has: an audience, one channel (a multi-channel send is several campaigns), a template (for push and email the same variables as journeys, `{{profile.<trait>}}` from the lookup's `traits`; for SMS and WhatsApp a provider-approved template, see 6.5), a send time (now, or scheduled with a timezone), optional quiet hours, and an optional per-person frequency cap shared with journeys.
 - Safety gates: a test send to the creator's own address or device; a mandatory count preview; confirmation naming count and channel for audiences over a configurable size (default 5,000); only owners and admins can start or schedule (existing role rule); members can draft and preview.
 - People who are opted out, suppressed, unreachable on the channel or capped are **recorded as skipped with a reason**, never silently dropped.
 - Cancel and pause take effect within one dispatch cycle; resume continues where it stopped.
-- **Email quota.** The email channel has a required daily quota and a per-second ceiling (no unlimited default for email). A campaign larger than the remaining quota warns before starting and offers to spread the send over several days (recipients stay pending and resume the next day). The operator guide recommends a transactional provider (Amazon SES in Mumbai, Brevo, Mailgun, SendGrid) with SPF, DKIM and DMARC on the sending domain, because free Gmail SMTP (about 500 messages a day, no bulk allowance) cannot carry a 20,000-person campaign. No code change is needed for that, only channel settings.
+- **Email quota.** (Email configuration is deferred by the owner.) The email channel has a required daily quota and a per-second ceiling (no unlimited default for email). A campaign larger than the remaining quota warns before starting and offers to spread the send over several days (recipients stay pending and resume the next day). The operator guide recommends a transactional provider (Amazon SES in Mumbai, Brevo, Mailgun, SendGrid) with SPF, DKIM and DMARC on the sending domain, because free Gmail SMTP (about 500 messages a day, no bulk allowance) cannot carry a 20,000-person campaign. No code change is needed for that, only channel settings.
 
 ### 6.3 Send engine
 
@@ -211,9 +211,21 @@ Hand-picked and excluded lists are stored as ids only, up to 20,000 ids each. Ph
 - **Dispatch in batches.** Claim a batch with `FOR UPDATE SKIP LOCKED` and a lease, call `/members/lookup` for up to 500 ids, render each message, hand them to the channel adapter, and write a fenced "sent" mark per recipient with a stable idempotency key per campaign and person. Contact details live only in that batch's memory. **Delivery guarantee: at most once for campaigns.** The recipient row is marked `sending` (fenced, with the idempotency key) before the provider call and `sent` after. SMTP and FCM offer no idempotency, so a worker that crashes in between leaves the row `uncertain`: it is not resent automatically, it is counted and shown in the campaign, and the operator can choose to retry those. A lost send is preferred over a duplicate. Rows leased but never marked `sending` return to the pool and are sent normally.
 - **Separate lane.** Campaign dispatch has its own claim query, worker pool and concurrency budget; journeys keep theirs. Both share the adapters and the audience-API concurrency cap, with journeys given priority so a campaign cannot starve them.
 - **Throughput comes from concurrency, not a throttle.** Per channel: `concurrency` and an optional `ratePerSecond` ceiling set to the provider's quota (required for email, optional for push and webhook). The engine adds no delays of its own. A 429 from a provider backs off that channel only and the recipient stays pending.
-- **Channels.** Email: pooled, reused SMTP connections per replica with pipelining. Push: FCM multicast in batches of 500 tokens. Webhook: one signed POST per recipient.
+- **Channels.** Push: FCM multicast in batches of 500 tokens. WhatsApp and SMS: MSG91 HTTPS calls carrying several recipients per call (the batch size follows MSG91's documented limit, which the builder confirms), pooled keep-alive connections. Email: pooled, reused SMTP connections per replica with pipelining. Webhook: one signed POST per recipient.
 - **Scale out.** More replicas claim different batches; no coordination beyond row leases. One running campaign per project by default; extras queue.
 - **Progress.** Counters (queued, sent, failed, skipped) updated in batches and shown live.
+
+### 6.5 Push, WhatsApp and SMS
+
+The owner's focus. Push uses the plugin's existing FCM adapter. WhatsApp and SMS are two new adapters over MSG91's HTTPS API, written by reading `sia-backend`'s working integrations (the WhatsApp bulk-message endpoint with a template name, namespace and positional `header_n`/`body_n` parameters, and the SMS flow endpoint with a template id and variables) and rebuilt in the plugin; `sia-backend`'s code is not called.
+
+- **Provider-approved templates, not free text.** India SMS requires a registered sender and a DLT-approved template, and WhatsApp business messages require a Meta-approved template, so the message body is fixed at the provider. A marketing template for these channels is therefore a **reference to the approved template** (SMS: template id; WhatsApp: template name, namespace, language) plus a **mapping** from the template's positional variables to the plugin's variables (for example body 1 = `{{profile.firstName}}`). The renderer fills variables strictly and fails closed; a campaign cannot start with a missing mapping. The dashboard shows the approved text for preview. Creating the approvals happens in MSG91 and with the regulators, by the owner.
+- **Own credentials.** The plugin uses its own MSG91 auth key and WhatsApp integrated number, stored encrypted in channel settings like other secrets, not `sia-backend`'s key.
+- **Consent.** Promotional WhatsApp requires the student's opt-in, and promotional SMS needs the usual consent and do-not-disturb handling. The contract's `consent` fields let the source say who agreed. Until the owner confirms how consent is captured (open question), the plugin sends WhatsApp and promotional SMS only to students whose `consent` is true, and treats missing consent as not contactable. Service and transactional messages are a separate category, labelled per template (`promotional` or `service`).
+- **Opt-out per channel.** A STOP request or dashboard opt-out applies to the one channel; the plugin keeps the record by id and channel.
+- **Quiet hours by default.** Promotional SMS and WhatsApp default to no sending between 21:00 and 09:00 in India time (the owner confirms against current rules); a recipient inside the window stays pending and is released at the window end.
+- **Rate and cost.** `ratePerSecond` is required for SMS and WhatsApp (set to the MSG91 account's limit). The dashboard shows the recipient count and, if the owner enters a per-message price for the channel, an estimated cost before a campaign starts. WhatsApp pricing is per conversation by category and is the owner's to enter.
+- **Delivery status.** The plugin records the provider's accept response and message id per recipient. Delivered, read and failed reports from MSG91 webhooks arrive in phase 4; until then "sent" means accepted by MSG91.
 
 ### 6.4 Targets (to be measured, not assumed)
 
@@ -241,7 +253,7 @@ Each phase ends only when these have been run and their outputs recorded:
 
 - Package test suite and typecheck, dashboard vitest, `ultracite` on touched files, root `bun run typecheck`.
 - **Phase 1:** no `nudge` identifier remains except in historical docs (a grep test); the fork-discipline diff check passes (only new files plus the allowed three); the conformance suite, including the security negative tests of 5.3, passes against the reference service; a test shows that with the `http` source selected no contact field (email, token, name) appears in the marketing database, Redis or logs after journeys and campaigns run (it asserts on every `marketing` table except the `stored` source's contacts and devices tables, which stay unchanged, are unused with the `http` source and hold personal data only for adopters who choose that source); journeys deliver through the `http` source end to end against the reference service backed by a seeded Postgres. The `sia-backend` implementation is accepted when the same conformance suite passes against it, run by us against a local `sia-backend` with a seeded Postgres.
-- **Phase 2:** filter validation and hostile-input tests; includes, excludes, snapshot and dynamic audiences resolve correctly; no recipient sent twice under crashed workers, cancelled campaigns and concurrent replicas; the lane-isolation and slow or failing API tests of 6.4; opted-out, suppressed, unreachable and capped people skipped with reasons.
+- **Phase 2:** filter validation and hostile-input tests; includes, excludes, snapshot and dynamic audiences resolve correctly; no recipient sent twice under crashed workers, cancelled campaigns and concurrent replicas; the lane-isolation and slow or failing API tests of 6.4; opted-out, suppressed, unreachable and capped people skipped with reasons; WhatsApp and SMS adapters tested against a fake MSG91 server (accepts, rate-limit and error responses, batch splitting, missing template mapping, missing consent); no real message is sent by any test.
 - A full pass of the dashboard flows in a real browser as an owner, a member and a no-access user (never run for the journey plugin; required now).
 
 ## 9. Calls made by the author (not yet agreed by the owner)
@@ -268,6 +280,8 @@ Each phase ends only when these have been run and their outputs recorded:
 20. The audience-API concurrency cap is global across replicas via Redis; journey lookups wait at most 2 s to fill a batch.
 21. Retention: opt-out records are kept until removed; send and frequency-ledger rows are purged after 400 days by the existing hourly purge pattern; the owner confirms for withdrawn students.
 22. Hand-picked and excluded lists are capped at 20,000 ids each; phone or email input is resolved to ids by `/members/resolve`, and the dashboard shows only counts and masked names.
+24. WhatsApp and SMS use MSG91 with the plugin's own credentials and provider-approved templates (6.5); consent defaults to not contactable until the owner says how it is captured; opt-out is per channel; promotional quiet hours default 21:00 to 09:00, to be confirmed.
+25. Email is built and tested against a fake SMTP server in phase 2; real provider configuration is the owner's, later.
 23. Unsubscribe and tracking links use one configurable public base URL (`MARKETING_PUBLIC_URL`); a dedicated sending and tracking domain is recommended for deliverability. The owner supplies the domain.
 
 ## 10. Left to the builder
