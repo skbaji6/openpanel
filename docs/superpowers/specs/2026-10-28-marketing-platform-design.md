@@ -57,7 +57,7 @@ AWS Hyderabad: ▼                                                 │
 ```
 
 - Assumed, owner to confirm: OpenPanel and its Redpanda stay at Hetzner, and `sia-backend` runs in AWS next to its database. The worker consumes the events topic across the WAN over an authenticated, encrypted connection initiated from AWS. Events carry ids and event properties, not student records. The WAN carries the whole topic including events the plugin discards; bandwidth is measured in phase 1 and, if too high, a filtered mirror topic is added.
-- The dashboard at Hetzner reaches the worker through the existing proxy over HTTPS; the worker's port is open in AWS only to the Hetzner addresses, behind TLS. Unsubscribe links go to the dashboard's pass-through route as today.
+- The dashboard at Hetzner reaches the worker through the existing proxy mechanism (shared secret, unchanged) over HTTPS; the worker's port is open in AWS only to the Hetzner addresses, behind TLS. Unsubscribe links go to the dashboard's pass-through route as today.
 - The marketing database lives in AWS next to the workers. By default it is a separate database (`MARKETING_DATABASE_URL`); sharing OpenPanel's database remains supported for small installs but is not this topology.
 - The owner's production database is reached only by `sia-backend`, never by the plugin.
 
@@ -80,6 +80,8 @@ The marketing workers are a **separate service**, not part of `sia-backend`.
 | 5 | A/B tests, branching journeys | Section 7 (outline) |
 
 Each phase gets its own plan and is reviewed and merged separately. Phase N+1 does not start before phase N is reviewed.
+
+**Critical path.** Phase 1's exit is: rename done, contract and conformance suite shipped, the reference service passing them, journeys working through the `http` source against the reference service. The `sia-backend` endpoints are a parallel track owned by the owner's team and do not block phase 1 or the build of phase 2, which is developed against the reference service. They do block the first production campaign: a real send needs the conformance suite to pass against `sia-backend`.
 
 ## 5. Phase 1: rename, audience source, secured API
 
@@ -114,12 +116,13 @@ A project selects its source in settings. The `http` contract (JSON over HTTPS; 
 | `POST /audience/count` | Body: filter tree. Returns `{count, approximate?}`. |
 | `POST /audience/members` | Body: filter tree, `cursor`, `limit` (at most 1,000), `fields` (`id` only, or `preview`: id plus a masked display name). Returns members and `nextCursor`. Keyset pagination on a stable id order; a member who changes during a long read may or may not be included (acceptable). |
 | `POST /audience/explain` | Body: filter tree and one id. Returns which conditions matched or failed, for the "why is this student in or out" check. |
-| `POST /members/lookup` | Body: up to 500 ids and the channel wanted. Returns for each: `email?`, `devices?[{token, platform}]`, `traits{}` (the values templates use, for example `firstName`), `suppressed?` (true for a person who must not be messaged, for example a withdrawn student), or not found. Also accepts phone numbers as a key, used only by the dashboard picker to resolve numbers to ids. |
+| `POST /members/lookup` | Body: up to 500 ids and the channel wanted. Returns for each: `email?`, `devices?[{token, platform}]`, `traits{}` (the values templates use, for example `firstName`), `suppressed?` (true for a person who must not be messaged, for example a withdrawn student), or not found. Called only by the send engine, never for the dashboard. |
+| `POST /members/resolve` | Body: up to 200 phone numbers or emails the operator pasted. Returns ids only (and which inputs matched nothing), for the hand-picked list. No contact data comes back. |
 
-- **Filter tree.** The plugin's own JSON: groups joined by AND/OR, depth limit 3; conditions `{dimension, op, values}` with ops eq, in, not_in, gt, lt, between, exists. The plugin only sends dimensions the API declared. The API turns it into parameterised SQL; string-built SQL from the filter is forbidden by the contract.
+- **Filter tree.** The plugin's own JSON: groups joined by AND/OR, depth limit 3; conditions `{dimension, op, values}` with ops eq, in, not_in, gt, lt, between, exists. The reserved dimension `id` supports `in` and `not_in` with at most 1,000 values; longer id lists are handled by the plugin (section 6.1). The plugin only sends dimensions the API declared. The API turns it into parameterised SQL; string-built SQL from the filter is forbidden by the contract.
 - **Contactable.** The API decides who can be reached: a student appears in `lookup` with a channel's address only if reachable on that channel, otherwise the plugin records a skip with a reason.
 - **Personal data handling.** Contact fields exist only in memory for the duration of one batch and are never logged (the existing redaction also covers API responses). Not stored: email, name, tokens, rendered bodies. Stored: the stable id, status and reason per send, and timestamps. Opt-out and suppression records are keyed by id. Unsubscribe tokens carry ids only. Redis never holds contact data.
-- **Resilience.** Per-call timeouts (defaults 10 s, count 5 s); at most `MARKETING_SOURCE_CONCURRENCY` calls in flight (default 4); retry on 5xx and 429 with jittered exponential backoff honouring `Retry-After`; a circuit breaker. If the API is down, campaigns pause and resume on their own and journey steps stay pending; nothing is marked failed because the source was unreachable.
+- **Resilience.** Per-call timeouts (defaults 10 s, count 5 s); at most `MARKETING_SOURCE_CONCURRENCY` calls in flight (default 4) **across all replicas**, enforced by a Redis-based counting semaphore with expiring slots (a per-process cap would multiply load by the replica count); retry on 5xx and 429 with jittered exponential backoff honouring `Retry-After`; a circuit breaker. If the API is down, campaigns pause and resume on their own and journey steps stay pending; nothing is marked failed because the source was unreachable.
 - **Recommended service levels** (in the contract; checked by the conformance suite as warnings): `count` under 2 s, a page of 1,000 members under 2 s, a lookup of 500 under 1 s, at the owner's scale.
 
 ### 5.3 Securing the calls
@@ -147,7 +150,7 @@ The owner's backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Po
 | Purchases | **Exists**: `purchases` (`user_id`, `book_id`, `purchase_date`, `expiry_date`, `is_active`, `progress`); `subscriptions` per course. |
 | Dimension values | **Exists** as lookup endpoints, but plain lists without search or paging. |
 | Targeted notifications | **Exists and overlaps**: `Notification` targets by `universityId`, `courseId`, `regulationId`, `semesterId` and `purchaseStatus`, with send now/later, recurring, a push queue, a Firebase sender, a scheduler and a hard-coded `NotificationJourneyService` (daily cap 2, weekly cap 10). |
-| Count, paged members, lookup, explain with parameterised filters | **Missing.** These six endpoints are the new work. |
+| Count, paged members, lookup, explain with parameterised filters | **Missing.** These seven endpoints are the new work. |
 | Marketing opt-out field | Not found; the plugin keeps its own opt-out record by id. |
 
 **Purchase status, from the code** (`UserDetailsRepository`): the values are `ALL` (no filter), `PURCHASED` and `NOT_PURCHASED`. *Purchased* means a `purchases` row with `is_active = true` and (`expiry_date` is null or on or after today); *not purchased* is its negation. It is not per book or per course. The audience API exposes this exact predicate as the `purchase_status` dimension so both systems select the same students. Per-book and expired-versus-never-bought dimensions come later from `purchases.book_id` and `expiry_date`.
@@ -162,7 +165,7 @@ The owner's backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Po
 
 ### 5.5 Journeys through the source
 
-With the `http` source selected, journeys no longer read stored contact rows: when steps are due, the engine batches them (up to 500 per lookup), calls `/members/lookup`, personalises and sends. A person returned as not found or suppressed has the step recorded as skipped with that reason. The existing sync endpoints and tables remain only for the `stored` source.
+With the `http` source selected, journeys no longer read stored contact rows: when steps are due, the engine batches them (up to 500 per lookup, waiting at most `MARKETING_LOOKUP_WINDOW_MS`, default 2,000 ms, to fill a batch), calls `/members/lookup`, personalises and sends. A person returned as not found or suppressed has the step recorded as skipped with that reason. The existing sync endpoints and tables remain only for the `stored` source.
 
 ### 5.6 Reference audience service
 
@@ -187,7 +190,7 @@ An audience combines four building blocks, freely:
 3. **Exclude students or groups**: an exclusion list and an exclusion filter, applied last (for example "all semester 3 students of this course except these 40, and anyone who bought").
 4. **Look and verify**: the live count with a timestamp; a paged preview of matching students (id and masked name, fetched on demand, never stored); and the "why is this student in or out" check from `/audience/explain`.
 
-Hand-picked and excluded lists are stored as ids only. An audience is **dynamic** (re-evaluated at send) or a **snapshot** (ids frozen when saved). If the API is slow or down the builder says so, and the count never blocks saving. Starting a campaign materialises the matching **ids** (never contact details) into the campaign's recipient list by paging `/audience/members` with `fields=id`, applying includes and excludes; later data changes do not alter a running campaign. An optional rule excludes ids that already received the same campaign key, to avoid repeats.
+Hand-picked and excluded lists are stored as ids only, up to 20,000 ids each. Phone numbers or emails pasted by the operator are turned into ids by `/members/resolve` (ids only come back, so the dashboard never sees contact data). Exclusions of up to 1,000 ids are sent to the API as an `id not_in` condition; larger ones are subtracted by the plugin while materialising. Includes are added by the plugin after the API's pages, and the dashboard shows only counts and masked names. An audience is **dynamic** (re-evaluated at send) or a **snapshot** (ids frozen when saved). If the API is slow or down the builder says so, and the count never blocks saving. Starting a campaign materialises the matching **ids** (never contact details) into the campaign's recipient list by paging `/audience/members` with `fields=id`, applying includes and excludes; later data changes do not alter a running campaign. An optional rule excludes ids that already received the same campaign key, to avoid repeats.
 
 ### 6.2 Campaigns
 
@@ -201,7 +204,7 @@ Hand-picked and excluded lists are stored as ids only. An audience is **dynamic*
 ### 6.3 Send engine
 
 - **Materialise ids once**, in chunks, into `campaign_recipients(campaign_id, profile_id, status, attempt, due_at, ...)`.
-- **Dispatch in batches.** Claim a batch with `FOR UPDATE SKIP LOCKED` and a lease, call `/members/lookup` for up to 500 ids, render each message, hand them to the channel adapter, and write a fenced "sent" mark per recipient with a stable idempotency key per campaign and person. Contact details live only in that batch's memory. A crashed worker's leased rows return to the pool and are never sent twice, because the durable mark is fenced.
+- **Dispatch in batches.** Claim a batch with `FOR UPDATE SKIP LOCKED` and a lease, call `/members/lookup` for up to 500 ids, render each message, hand them to the channel adapter, and write a fenced "sent" mark per recipient with a stable idempotency key per campaign and person. Contact details live only in that batch's memory. **Delivery guarantee: at most once for campaigns.** The recipient row is marked `sending` (fenced, with the idempotency key) before the provider call and `sent` after. SMTP and FCM offer no idempotency, so a worker that crashes in between leaves the row `uncertain`: it is not resent automatically, it is counted and shown in the campaign, and the operator can choose to retry those. A lost send is preferred over a duplicate. Rows leased but never marked `sending` return to the pool and are sent normally.
 - **Separate lane.** Campaign dispatch has its own claim query, worker pool and concurrency budget; journeys keep theirs. Both share the adapters and the audience-API concurrency cap, with journeys given priority so a campaign cannot starve them.
 - **Throughput comes from concurrency, not a throttle.** Per channel: `concurrency` and an optional `ratePerSecond` ceiling set to the provider's quota (required for email, optional for push and webhook). The engine adds no delays of its own. A 429 from a provider backs off that channel only and the recipient stays pending.
 - **Channels.** Email: pooled, reused SMTP connections per replica with pipelining. Push: FCM multicast in batches of 500 tokens. Webhook: one signed POST per recipient.
@@ -233,7 +236,7 @@ If a target cannot be met, this document is updated with the measured value and 
 Each phase ends only when these have been run and their outputs recorded:
 
 - Package test suite and typecheck, dashboard vitest, `ultracite` on touched files, root `bun run typecheck`.
-- **Phase 1:** no `nudge` identifier remains except in historical docs (a grep test); the fork-discipline diff check passes (only new files plus the allowed three); the conformance suite, including the security negative tests of 5.3, passes against the reference service; a test shows no contact field (email, token, name) in the database, Redis or logs after journeys and campaigns run; journeys deliver through the `http` source end to end against the reference service backed by a seeded Postgres. The `sia-backend` implementation is accepted when the same conformance suite passes against it (run by the owner's team).
+- **Phase 1:** no `nudge` identifier remains except in historical docs (a grep test); the fork-discipline diff check passes (only new files plus the allowed three); the conformance suite, including the security negative tests of 5.3, passes against the reference service; a test shows that with the `http` source selected no contact field (email, token, name) appears in the marketing database, Redis or logs after journeys and campaigns run (it asserts on every `marketing` table except the `stored` source's contacts and devices tables, which stay unchanged, are unused with the `http` source and hold personal data only for adopters who choose that source); journeys deliver through the `http` source end to end against the reference service backed by a seeded Postgres. The `sia-backend` implementation is accepted when the same conformance suite passes against it (run by the owner's team).
 - **Phase 2:** filter validation and hostile-input tests; includes, excludes, snapshot and dynamic audiences resolve correctly; no recipient sent twice under crashed workers, cancelled campaigns and concurrent replicas; the lane-isolation and slow or failing API tests of 6.4; opted-out, suppressed, unreachable and capped people skipped with reasons.
 - A full pass of the dashboard flows in a real browser as an owner, a member and a no-access user (never run for the journey plugin; required now).
 
@@ -250,13 +253,18 @@ Each phase ends only when these have been run and their outputs recorded:
 9. A person deleted at the owner's side stops appearing in the source (or is `suppressed`); the plugin keeps only the id and opt-out record.
 10. Quiet hours defer: a recipient inside the window stays pending and is released at the window end, in the campaign's timezone.
 11. The frequency cap is N messages per person per rolling window across journeys and campaigns, from one ledger table written when a send is marked and checked at claim time (an indexed count, not a shared lock).
-12. The six contract calls, the filter shape, the HMAC scheme and the service-level numbers are my proposal.
+12. The seven contract calls, the filter shape, the HMAC scheme and the service-level numbers are my proposal.
 13. Hetzner remains the home of OpenPanel and its Redpanda, `sia-backend` runs in AWS, and the worker consumes events across the WAN (to be measured; mirror topic if needed).
 14. Nothing is deployed, including staging, at rename time; the builder confirms and stops if not.
 15. The builder creates the owner, member and no-access fixtures for the browser pass.
 16. Contactable students, from the entity fields: `users.active = true`; for email also `email_verified = true`; for push only devices with `active = true` and a non-empty `fcm_token`. The owner confirms.
 17. `purchase_status` follows the existing backend rule exactly (5.4); per-book dimensions wait for a later request.
 18. The new endpoints live under `/internal/audience/**` in `sia-backend` as a separate controller set, with the filter and signature check of 5.3.
+19. Campaign delivery is at most once (a possible lost send over a possible duplicate); uncertain rows are shown and can be retried by the operator (6.3).
+20. The audience-API concurrency cap is global across replicas via Redis; journey lookups wait at most 2 s to fill a batch.
+21. Retention: opt-out records are kept until removed; send and frequency-ledger rows are purged after 400 days by the existing hourly purge pattern; the owner confirms for withdrawn students.
+22. Hand-picked and excluded lists are capped at 20,000 ids each; phone or email input is resolved to ids by `/members/resolve`, and the dashboard shows only counts and masked names.
+23. Unsubscribe and tracking links use one configurable public base URL (`MARKETING_PUBLIC_URL`); a dedicated sending and tracking domain is recommended for deliverability. The owner supplies the domain.
 
 ## 10. Left to the builder
 
