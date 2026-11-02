@@ -1,6 +1,6 @@
 # Marketing platform on OpenPanel: roadmap and design
 
-Status: draft for approval. Builds on the shipped journey-nudge plugin (`packages/nudge`, spec `2026-10-22-journey-nudge-plugin-design.md`). Nothing in this document has been built.
+Status: draft for approval (scope includes the `sia-backend` API work). Builds on the shipped journey-nudge plugin (`packages/nudge`, spec `2026-10-22-journey-nudge-plugin-design.md`). Nothing in this document has been built.
 
 ## 1. Intent
 
@@ -10,7 +10,7 @@ The owner's platform is ed-tech: about 50,000 students, largest single audience 
 
 Decisions of the owner that shape everything below:
 - **Student data is not copied** to another location. The marketing workers run in AWS Hyderabad next to the owner's database.
-- **The owner's backend, `sia-backend`, serves audiences and contact details through APIs.** It already holds the data. Any API it lacks is developed there. This roadmap does not edit that repository; it defines the contract and ships the tests that check it.
+- **The owner's backend, `sia-backend`, serves audiences and contact details through APIs.** It already holds the data. Any API it lacks is developed there, and **the owner has asked for those APIs to be written as part of this work** (Track B below). Nothing is deployed or in production yet, so no data migration is needed anywhere.
 - **The backend's own journeys are switched off** once the plugin's journeys go live (section 5.4).
 - **All calls to those APIs are secured** (section 5.3).
 
@@ -27,7 +27,7 @@ Goals
 - Later: templates and visual editor, delivery and engagement tracking, A/B tests, branching journeys.
 
 Non-goals
-- AI-written messages; SMS and WhatsApp channels; a CRM; a preference centre beyond one opt-out; billing; replicating the owner's tables; editing `sia-backend` from this roadmap.
+- AI-written messages; SMS and WhatsApp channels; a CRM; a preference centre beyond one opt-out; billing; replicating the owner's tables; a second marketing UI inside `sia-backend`.
 
 Anti-goals (a failure even if it technically works)
 - Any edit to an existing OpenPanel file beyond the one sidebar link and the generated files already allowed (the fork must stay updatable).
@@ -81,7 +81,11 @@ The marketing workers are a **separate service**, not part of `sia-backend`.
 
 Each phase gets its own plan and is reviewed and merged separately. Phase N+1 does not start before phase N is reviewed.
 
-**Critical path.** Phase 1's exit is: rename done, contract and conformance suite shipped, the reference service passing them, journeys working through the `http` source against the reference service. The `sia-backend` endpoints are a parallel track owned by the owner's team and do not block phase 1 or the build of phase 2, which is developed against the reference service. They do block the first production campaign: a real send needs the conformance suite to pass against `sia-backend`.
+**Two tracks.**
+- **Track A (this repo, OpenPanel fork):** the marketing plugin, phases 1 to 5.
+- **Track B (`C:\Repos\sia-backend`):** the audience API (section 5.4), written by us, with its own plan, branch and tests in that repo. It follows that repo's conventions and the rules in 5.4 below.
+
+Phase 1's exit is: rename done, contract and conformance suite shipped, the reference service passing them, journeys working through the `http` source against the reference service, and Track B's endpoints passing the same conformance suite. Phase 2 is developed against the reference service and does not wait for Track B, but the first production campaign needs Track B passing.
 
 ## 5. Phase 1: rename, audience source, secured API
 
@@ -159,7 +163,7 @@ The owner's backend is `C:\Repos\sia-backend` (Spring Boot 3.3, Java 17, JPA, Po
 
 **Indexes.** The filter columns (university, course, semester, regulation, state, purchase) need indexes for the audience queries, added by a migration in `sia-backend`. Count and keyset paging are measured against production-sized data.
 
-**Who builds it.** The Java code is written in `sia-backend` by the owner's team, or on request as a separate task with its own plan. This roadmap ships the contract document and the conformance suite so that work can be checked, and the reference service (5.6) as a model.
+**Who builds it, and how.** We write it (Track B), in `sia-backend`, as a separate plan and a separate branch cut from its `dev` branch (the repo's current branch, clean at the time of writing), never pushed without the owner's say-so. Facts about that repo that the plan must respect: Spring Boot 3.3 on Java 17; Flyway for schema changes (so the index migration is a Flyway file); H2 in tests, which means PostgreSQL-specific SQL in the audience queries needs integration tests against a real Postgres (Testcontainers or the project's existing approach, builder to check); it has no AGENTS.md of its own, so the plan reads its existing controller, service and repository conventions first and matches them; and the user-JWT `TokenInterceptor` and `SecurityConfig` are the only edits to existing classes allowed (to exclude and guard the new route), everything else is new classes. The conformance suite from Track A is the acceptance test.
 
 **Backend journeys are switched off** at cut-over, by a configuration flag in `sia-backend` that disables `NotificationJourneyService` and its scheduler path (default unchanged until the cut-over). The plugin's journeys are built to cover the same events: login, registration started, invalid OTP, home view, second app open, buy-now click, checkout view, course bought, topic or LMR click, video started, IQ or PYQ viewed, and 72-hour and 7-day inactivity. The cut-over has a checklist: copy the message wording, run both in shadow with the plugin sending only to a test list, then flip the flag. The admin Notification feature (manual targeted pushes) stays until the owner chooses to replace it with campaigns. Until the cut-over, the plugin's frequency cap does not see the backend's own sends.
 
@@ -177,7 +181,7 @@ An optional, runnable example (`packages/marketing/examples/audience-api-postgre
 
 ### 5.8 What this phase leaves out
 
-Replication or connectors of any kind; traits or memberships tables; a generic mapping UI (the API owns the dimension mapping); any edit to `sia-backend`.
+Replication or connectors of any kind; traits or memberships tables; a generic mapping UI (the API owns the dimension mapping); any change to `sia-backend` other than the audience endpoints, their index migration, the route guard and the journey flag.
 
 ## 6. Phase 2: audiences, campaigns, send engine
 
@@ -236,7 +240,7 @@ If a target cannot be met, this document is updated with the measured value and 
 Each phase ends only when these have been run and their outputs recorded:
 
 - Package test suite and typecheck, dashboard vitest, `ultracite` on touched files, root `bun run typecheck`.
-- **Phase 1:** no `nudge` identifier remains except in historical docs (a grep test); the fork-discipline diff check passes (only new files plus the allowed three); the conformance suite, including the security negative tests of 5.3, passes against the reference service; a test shows that with the `http` source selected no contact field (email, token, name) appears in the marketing database, Redis or logs after journeys and campaigns run (it asserts on every `marketing` table except the `stored` source's contacts and devices tables, which stay unchanged, are unused with the `http` source and hold personal data only for adopters who choose that source); journeys deliver through the `http` source end to end against the reference service backed by a seeded Postgres. The `sia-backend` implementation is accepted when the same conformance suite passes against it (run by the owner's team).
+- **Phase 1:** no `nudge` identifier remains except in historical docs (a grep test); the fork-discipline diff check passes (only new files plus the allowed three); the conformance suite, including the security negative tests of 5.3, passes against the reference service; a test shows that with the `http` source selected no contact field (email, token, name) appears in the marketing database, Redis or logs after journeys and campaigns run (it asserts on every `marketing` table except the `stored` source's contacts and devices tables, which stay unchanged, are unused with the `http` source and hold personal data only for adopters who choose that source); journeys deliver through the `http` source end to end against the reference service backed by a seeded Postgres. The `sia-backend` implementation is accepted when the same conformance suite passes against it, run by us against a local `sia-backend` with a seeded Postgres.
 - **Phase 2:** filter validation and hostile-input tests; includes, excludes, snapshot and dynamic audiences resolve correctly; no recipient sent twice under crashed workers, cancelled campaigns and concurrent replicas; the lane-isolation and slow or failing API tests of 6.4; opted-out, suppressed, unreachable and capped people skipped with reasons.
 - A full pass of the dashboard flows in a real browser as an owner, a member and a no-access user (never run for the journey plugin; required now).
 
@@ -255,7 +259,7 @@ Each phase ends only when these have been run and their outputs recorded:
 11. The frequency cap is N messages per person per rolling window across journeys and campaigns, from one ledger table written when a send is marked and checked at claim time (an indexed count, not a shared lock).
 12. The seven contract calls, the filter shape, the HMAC scheme and the service-level numbers are my proposal.
 13. Hetzner remains the home of OpenPanel and its Redpanda, `sia-backend` runs in AWS, and the worker consumes events across the WAN (to be measured; mirror topic if needed).
-14. Nothing is deployed, including staging, at rename time; the builder confirms and stops if not.
+14. Confirmed by the owner: nothing is in production, so the rename edits migrations in place and needs no data migration.
 15. The builder creates the owner, member and no-access fixtures for the browser pass.
 16. Contactable students, from the entity fields: `users.active = true`; for email also `email_verified = true`; for push only devices with `active = true` and a non-empty `fcm_token`. The owner confirms.
 17. `purchase_status` follows the existing backend rule exactly (5.4); per-book dimensions wait for a later request.
@@ -268,4 +272,4 @@ Each phase ends only when these have been run and their outputs recorded:
 
 ## 10. Left to the builder
 
-Table and index definitions, column types, the filter tree's exact JSON schema, topic and group naming, the reference service's mapping file format, dashboard layout of the new tabs, error wording, and how to split each phase into tasks.
+The Java class layout and test approach of Track B, table and index definitions, column types, the filter tree's exact JSON schema, topic and group naming, the reference service's mapping file format, dashboard layout of the new tabs, error wording, and how to split each phase into tasks.
