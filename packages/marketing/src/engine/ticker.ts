@@ -537,6 +537,7 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
     }),
   ]);
   const lookedUp = await Promise.all(groups.map(routing.lookUp));
+  await routing.recordHealthy();
   await runPool(
     [...laterStored.map((claim) => ({ claim })), ...lookedUp.flat()],
     cfg.sendConcurrency,
@@ -578,6 +579,9 @@ function createSourceRouting(
   const sources = deps.sources ?? ALL_STORED;
   const resolved = new Map<string, Promise<AudienceSource | null>>();
   const loggedProjects = new Set<string>();
+  // A project is ok only if every one of its lookups this tick succeeded, so mixed channels cannot flap.
+  const healthyProjects = new Set<string>();
+  const failedProjects = new Set<string>();
 
   function sourceFor(projectId: string) {
     let source = resolved.get(projectId);
@@ -594,6 +598,7 @@ function createSourceRouting(
     claims: Claim[],
     error: unknown
   ): Promise<void> {
+    failedProjects.add(projectId);
     // Down or busy is transient and says nothing about the setup, so only these are shown.
     const transient =
       error instanceof SourceUnavailableError ||
@@ -632,6 +637,14 @@ function createSourceRouting(
   }
 
   return {
+    async recordHealthy() {
+      for (const projectId of healthyProjects) {
+        if (!failedProjects.has(projectId)) {
+          await setSourceStatus(deps, projectId, 'ok');
+        }
+      }
+    },
+
     async split(claims: Claim[]) {
       const stored: Claim[] = [];
       const lookups: LookupItem[] = [];
@@ -678,7 +691,7 @@ function createSourceRouting(
             channel
           );
           const byId = new Map(entries.map((entry) => [entry.id, entry]));
-          await setSourceStatus(deps, projectId, 'ok');
+          healthyProjects.add(projectId);
           for (const { claim, profileId } of items) {
             const entry = byId.get(profileId) ?? {
               id: profileId,

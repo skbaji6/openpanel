@@ -78,6 +78,8 @@ let answer: (id: string) => LookupEntry = (id) => ({
   traits: { firstName: 'Ada' },
 });
 let lookupError: Error | null = null;
+// Null fails every channel's lookup; otherwise only this one's.
+let failingChannel: LookupChannel | null = null;
 let invalidTokens: string[] | undefined;
 let errorLog: Mock<typeof console.error>;
 
@@ -95,7 +97,10 @@ const fakeSource: AudienceSource = {
   lookup(ids, channel) {
     lookups.push({ ids, channel });
     onLookup();
-    if (lookupError) {
+    if (
+      lookupError &&
+      (failingChannel === null || channel === failingChannel)
+    ) {
       return Promise.reject(lookupError);
     }
     return Promise.resolve(ids.map((id) => answer(id)));
@@ -224,6 +229,7 @@ describe('runTick with an http audience source', () => {
     sends = [];
     lookups = [];
     lookupError = null;
+    failingChannel = null;
     invalidTokens = undefined;
     clock = NOW;
     onLookup = () => undefined;
@@ -539,6 +545,27 @@ describe('runTick with an http audience source', () => {
       await tickAt(new Date(NOW.getTime() + 3 * HOUR * 1000))
     ).toMatchObject({ sent: 1 });
     expect((await stepOf(enrollmentId))?.status).toBe('sent');
+  });
+
+  it('one failing channel keeps the project at source_error although another channel looks up fine', async () => {
+    lookupError = new SourceProtocolError('lookup: invalid JSON');
+    for (const failing of ['push', 'email'] as const) {
+      failingChannel = failing;
+      await enroll({ channel: 'email', profileId: `e-${failing}` });
+      await enroll({ channel: 'push', profileId: `p-${failing}` });
+      await tick();
+      expect(await sourceStatus()).toBe('source_error');
+    }
+  });
+
+  it('a tick whose lookups all succeed sets the status back to ok', async () => {
+    await sql.$executeRawUnsafe(
+      "UPDATE marketing.audience_sources SET status = 'source_error'"
+    );
+    await enroll({ channel: 'email' });
+    await enroll({ channel: 'push', profileId: 'u2' });
+    await tick();
+    expect(await sourceStatus()).toBe('ok');
   });
 
   it('a protocol error sets the source status to source_error and leaves steps pending', async () => {
