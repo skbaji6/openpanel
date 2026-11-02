@@ -60,6 +60,7 @@ export function createSourceResolver(deps: ResolverDeps) {
         slotTtlMs: SLOT_TTL_MS,
         now,
       }),
+      // Rebuilt on every cache refresh: breaker state is per process and resets about every 30 s.
       breaker: createBreaker({
         failureThreshold: BREAKER_FAILURES,
         openMs: BREAKER_OPEN_MS,
