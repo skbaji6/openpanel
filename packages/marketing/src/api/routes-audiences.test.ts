@@ -294,16 +294,24 @@ describe('audience routes', () => {
   it('limit and cursor query params are bounded', async () => {
     const created = await create();
     const base = `/marketing/audiences/${created.id}/ids?list=include`;
+    const errorOf = async (res: Response) => {
+      expect(res.status).toBe(400);
+      return ((await res.json()) as { error: string }).error;
+    };
     for (const limit of ['0', '1001', 'abc', '-1', '1.5']) {
-      expect((await call('GET', `${base}&limit=${limit}`)).status).toBe(400);
+      expect(await errorOf(await call('GET', `${base}&limit=${limit}`))).toBe(
+        'invalid_query'
+      );
     }
     expect(
-      (await call('GET', `${base}&cursor=${'x'.repeat(300)}`)).status
-    ).toBe(400);
+      await errorOf(await call('GET', `${base}&cursor=${'x'.repeat(300)}`))
+    ).toBe('invalid_query');
     expect((await call('GET', `${base}&limit=1000`)).status).toBe(200);
     const values = '/marketing/audience/dimensions/plan/values';
     for (const limit of ['0', '101', 'abc']) {
-      expect((await call('GET', `${values}?limit=${limit}`)).status).toBe(400);
+      expect(await errorOf(await call('GET', `${values}?limit=${limit}`))).toBe(
+        'invalid_query'
+      );
     }
     expect((await call('GET', `${values}?limit=100`)).status).toBe(200);
   });
@@ -346,6 +354,19 @@ describe('audience routes', () => {
       });
       expect(tooMany.status).toBe(400);
       const tooManyText = await tooMany.text();
+      expect(JSON.parse(tooManyText)).toEqual({ error: 'too_many_inputs' });
+
+      // 250 raw lines, but only 200 unique after trimming: within the cap.
+      const padded = [
+        ...many.slice(0, 200),
+        ...many.slice(0, 40).map((value) => ` ${value} `),
+        ...Array.from({ length: 10 }, () => '   '),
+      ];
+      const accepted = await call('POST', '/marketing/audience/resolve', {
+        body: { inputs: padded },
+      });
+      expect(accepted.status).toBe(200);
+      lines.push(await accepted.text());
 
       sourceOverride = {
         resolve: (given: string[]) => {
@@ -405,19 +426,46 @@ describe('audience routes', () => {
     }
   });
 
-  it('a stored-source project gets 409 source_not_http on count and freeze', async () => {
+  it('a stored-source project gets 409 source_not_http on count and freeze, one with no source row 409 source_not_configured', async () => {
     const created = await create({ mode: 'snapshot' });
     hasSource = false;
-    for (const route of ['count', 'freeze']) {
+    const codes = async () => {
+      const found: string[] = [];
+      for (const route of ['count', 'freeze', 'resolve']) {
+        const res =
+          route === 'resolve'
+            ? await call('POST', '/marketing/audience/resolve', {
+                body: { inputs: ['a'] },
+              })
+            : await call('POST', `/marketing/audiences/${created.id}/${route}`);
+        expect(res.status).toBe(409);
+        found.push(((await res.json()) as { error: string }).error);
+      }
+      return found;
+    };
+    expect(await codes()).toEqual(new Array(3).fill('source_not_configured'));
+    await sql.$executeRawUnsafe(
+      "INSERT INTO marketing.audience_sources (project_id, kind) VALUES ('proj-a', 'stored')"
+    );
+    expect(await codes()).toEqual(new Array(3).fill('source_not_http'));
+  });
+
+  it('a dimension key that is too long or holds control characters is 400 and never reaches the source', async () => {
+    let called = false;
+    sourceOverride = {
+      dimensionValues: () => {
+        called = true;
+        return Promise.resolve([]);
+      },
+    } as unknown as AudienceSource;
+    for (const key of ['x'.repeat(300), 'a\nb', 'a\u0000b']) {
       const res = await call(
-        'POST',
-        `/marketing/audiences/${created.id}/${route}`
+        'GET',
+        `/marketing/audience/dimensions/${encodeURIComponent(key)}/values`
       );
-      expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: string }).error).toBe(
-        'source_not_http'
-      );
+      expect(res.status).toBe(400);
     }
+    expect(called).toBe(false);
   });
 
   it('audience/dimensions with a key containing a quote is signed correctly', async () => {
@@ -494,6 +542,48 @@ describe('audience routes', () => {
       user: 'user-9',
     });
     expect(((await res.json()) as Row).createdBy).toBe('user-9');
+  });
+
+  it('a freeze whose lock renewal fails is 409 freeze_lock_lost and never goes live', async () => {
+    const created = await create({ mode: 'snapshot' });
+    pageDelayMs = FREEZE_DELAY_MS;
+    const failingRenewal = {
+      set: (...args: unknown[]) =>
+        (redis.set as (...a: unknown[]) => unknown)(...args),
+      eval: (script: string, ...rest: unknown[]) =>
+        script.includes('PEXPIRE')
+          ? Promise.resolve(0)
+          : (redis.eval as (...a: unknown[]) => unknown)(script, ...rest),
+    } as unknown as typeof redis;
+    const server = createServer({
+      cfg,
+      sql,
+      redis: failingRenewal,
+      sources: resolver,
+      freezeLockTtlMs: 60,
+    });
+    const logged = spyOn(console, 'error').mockImplementation(() => undefined);
+    const res = await call(
+      'POST',
+      `/marketing/audiences/${created.id}/freeze`,
+      {
+        server,
+      }
+    );
+    const logLines = logged.mock.calls.map((args) =>
+      args.map(String).join(' ')
+    );
+    logged.mockRestore();
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      'freeze_lock_lost'
+    );
+    expect(logLines.join('\n')).toContain('lock lost');
+    expect(logLines.join('\n')).not.toContain(created.id);
+    const row = await call('GET', `/marketing/audiences/${created.id}`);
+    expect(
+      ((await row.json()) as { snapshotCount: number | null }).snapshotCount
+    ).toBeNull();
   });
 
   it('two concurrent freezes: exactly one runs, the other is 409 freeze_in_progress', async () => {

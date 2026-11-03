@@ -8,7 +8,7 @@ import {
   previewAudience,
   resolveInputs,
 } from '../audience/builder';
-import { MAX_PAGE_SIZE, MAX_RESOLVE_INPUTS } from '../audience/contract';
+import { MAX_PAGE_SIZE } from '../audience/contract';
 import { zAudienceInput, zIdListChange } from '../audience/definition';
 import type { SourceResolver } from '../audience/resolver';
 import type { AudienceSource } from '../audience/source';
@@ -22,8 +22,8 @@ const MAX_VALUES_LIMIT = 100;
 const MAX_QUERY_LENGTH = 200;
 const MAX_CURSOR_LENGTH = 256;
 const MAX_RESOLVE_INPUT_LENGTH = 256;
-// Above the cap so an oversize paste is a clear 400 from the builder, not a schema failure.
-const MAX_RESOLVE_BODY_INPUTS = MAX_RESOLVE_INPUTS * 5;
+// A paste may hold blank and duplicate lines; the builder caps what is left after trimming.
+const MAX_RESOLVE_BODY_INPUTS = 1000;
 const DEFAULT_PREVIEW_LIMIT = 20;
 const FREEZE_LOCK_PREFIX = 'marketing:audience-freeze:';
 // Renewed while the freeze runs; only bounds how long a crashed holder blocks the audience.
@@ -79,6 +79,19 @@ interface Deps {
   redis: Redis;
   resolver: SourceResolver;
   now?: () => number;
+  freezeLockTtlMs?: number;
+}
+
+// Path and query parameters are not the body, so their failures get their own code.
+function validateQuery<T>(schema: z.ZodType<T>, data: unknown): T {
+  try {
+    return validate(schema, data);
+  } catch (error) {
+    if (error instanceof HttpError && error.code === 'invalid_body') {
+      throw new HttpError(400, 'invalid_query', error.issues);
+    }
+    throw error;
+  }
 }
 
 // The audience API reports every upstream protocol failure as source_error.
@@ -92,11 +105,18 @@ function apiError(error: unknown): unknown {
 export function audienceRoutes(deps: Deps): Route[] {
   const { sql, redis, resolver } = deps;
   const now = deps.now ?? Date.now;
+  const lockTtlMs = deps.freezeLockTtlMs ?? FREEZE_LOCK_TTL_MS;
   const store = createAudienceStore({
     sql,
     source: (projectId) => resolver.forProject(projectId),
     now: () => new Date(now()),
   });
+
+  async function missingSourceError(projectId: string) {
+    return (await store.hasSourceRow(projectId))
+      ? new HttpError(409, 'source_not_http')
+      : new HttpError(409, 'source_not_configured');
+  }
 
   async function withSource<T>(
     projectId: string,
@@ -104,7 +124,7 @@ export function audienceRoutes(deps: Deps): Route[] {
   ): Promise<T> {
     const source = await resolver.forProject(projectId);
     if (!source) {
-      throw new HttpError(409, 'source_not_http');
+      throw await missingSourceError(projectId);
     }
     try {
       return await run(source);
@@ -116,27 +136,38 @@ export function audienceRoutes(deps: Deps): Route[] {
   // One freeze per audience at a time: a second would wipe the pages the first is writing.
   async function withFreezeLock<T>(
     audienceId: string,
-    run: () => Promise<T>
+    run: (assertHeld: () => void) => Promise<T>
   ): Promise<T> {
     const key = `${FREEZE_LOCK_PREFIX}${audienceId}`;
     const token = randomUUID();
-    const acquired = await redis.set(
-      key,
-      token,
-      'PX',
-      FREEZE_LOCK_TTL_MS,
-      'NX'
-    );
+    const acquired = await redis.set(key, token, 'PX', lockTtlMs, 'NX');
     if (acquired !== 'OK') {
       throw new HttpError(409, 'freeze_in_progress');
     }
+    let lost = false;
+    const markLost = () => {
+      if (!lost) {
+        lost = true;
+        console.error('marketing api: audience freeze lock lost');
+      }
+    };
     const timer = setInterval(() => {
       redis
-        .eval(RENEW_LOCK, 1, key, token, FREEZE_LOCK_TTL_MS)
-        .catch(() => undefined);
-    }, FREEZE_LOCK_TTL_MS / RENEW_DIVISOR);
+        .eval(RENEW_LOCK, 1, key, token, lockTtlMs)
+        .then((renewed) => {
+          if (renewed !== 1) {
+            markLost();
+          }
+        })
+        .catch(markLost);
+    }, lockTtlMs / RENEW_DIVISOR);
+    const assertHeld = () => {
+      if (lost) {
+        throw new HttpError(409, 'freeze_lock_lost');
+      }
+    };
     try {
-      return await run();
+      return await run(assertHeld);
     } finally {
       clearInterval(timer);
       await redis.eval(RELEASE_LOCK, 1, key, token).catch(() => undefined);
@@ -177,9 +208,10 @@ export function audienceRoutes(deps: Deps): Route[] {
       pattern: /^\/marketing\/audience\/dimensions\/([^/]+)\/values$/,
       auth: 'dashboard',
       async handle(ctx) {
-        const { q, limit } = validate(zValuesQuery, query(ctx.url));
+        const { q, limit } = validateQuery(zValuesQuery, query(ctx.url));
+        const key = validateQuery(zIdentifier, ctx.params[0]);
         const values = await withSource(ctx.projectId, (source) =>
-          source.dimensionValues(ctx.params[0] as string, q, limit)
+          source.dimensionValues(key, q, limit)
         );
         return json({ values });
       },
@@ -190,9 +222,6 @@ export function audienceRoutes(deps: Deps): Route[] {
       auth: 'dashboard',
       async handle(ctx) {
         const { inputs } = await parseJsonBody(ctx.req, zResolve);
-        if (inputs.length > MAX_RESOLVE_INPUTS) {
-          throw new HttpError(400, 'too_many_inputs');
-        }
         return json(
           await withSource(ctx.projectId, async (source) => {
             try {
@@ -267,7 +296,10 @@ export function audienceRoutes(deps: Deps): Route[] {
       pattern: audiencePath('/ids'),
       auth: 'dashboard',
       async handle(ctx) {
-        const { list, cursor, limit } = validate(zIdsQuery, query(ctx.url));
+        const { list, cursor, limit } = validateQuery(
+          zIdsQuery,
+          query(ctx.url)
+        );
         return json(
           await store.listIds(
             ctxOf(ctx),
@@ -336,8 +368,8 @@ export function audienceRoutes(deps: Deps): Route[] {
         const { id } = await parseJsonBody(ctx.req, zExplain);
         const audienceId = ctx.params[0] as string;
         const definition = await store.definition(ctxOf(ctx), audienceId);
-        const lists = await sql.$queryRawUnsafe<{ list: string }[]>(
-          'SELECT list FROM marketing.audience_ids WHERE audience_id = $1::uuid AND profile_id = $2',
+        const membership = await store.listMembership(
+          ctxOf(ctx),
           audienceId,
           id
         );
@@ -348,8 +380,7 @@ export function audienceRoutes(deps: Deps): Route[] {
               {
                 filter: definition.filter,
                 excludeFilter: definition.excludeFilter,
-                included: lists.some((row) => row.list === 'include'),
-                excludedByList: lists.some((row) => row.list === 'exclude'),
+                ...membership,
               },
               id
             )
@@ -366,10 +397,16 @@ export function audienceRoutes(deps: Deps): Route[] {
         // Scoped lookup first, so another project's audience id never touches its lock.
         await store.get(ctxOf(ctx), audienceId);
         return json(
-          await withFreezeLock(audienceId, async () => {
+          await withFreezeLock(audienceId, async (assertHeld) => {
             try {
-              return await store.freeze(ctxOf(ctx), audienceId);
+              return await store.freeze(ctxOf(ctx), audienceId, assertHeld);
             } catch (error) {
+              if (
+                error instanceof HttpError &&
+                error.code === 'source_not_http'
+              ) {
+                throw await missingSourceError(ctx.projectId);
+              }
               throw apiError(error);
             }
           })

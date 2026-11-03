@@ -477,7 +477,12 @@ export function createAudienceStore(deps: StoreDeps) {
       }, TRANSACTION);
     },
 
-    async freeze(ctx: StoreContext, id: string): Promise<AudienceRow> {
+    async freeze(
+      ctx: StoreContext,
+      id: string,
+      // Throws to abort after materialising and before the snapshot goes live.
+      beforeSwitch?: () => void
+    ): Promise<AudienceRow> {
       const locked = await sql.$transaction(
         (tx) => lockEditable(tx, ctx, id, null),
         TRANSACTION
@@ -496,12 +501,39 @@ export function createAudienceStore(deps: StoreDeps) {
       const jobId = randomUUID();
       try {
         const total = await materializeSnapshot(source, ctx, id, locked, jobId);
+        beforeSwitch?.();
         return await switchSnapshot(ctx, id, locked.version, total);
       } catch (error) {
         await sql.$executeRawUnsafe(WIPE_STAGING, jobId);
         await sql.$executeRawUnsafe(DISCARD_UNFROZEN, id, locked.version);
         throw sourceHttpError(error);
       }
+    },
+
+    async listMembership(
+      ctx: StoreContext,
+      id: string,
+      profileId: string
+    ): Promise<{ included: boolean; excludedByList: boolean }> {
+      await fetchRow(sql, ctx, id);
+      const rows = await sql.$queryRawUnsafe<{ list: IdList }[]>(
+        'SELECT list FROM marketing.audience_ids WHERE audience_id = $1::uuid AND profile_id = $2',
+        id,
+        profileId
+      );
+      return {
+        included: rows.some((row) => row.list === 'include'),
+        excludedByList: rows.some((row) => row.list === 'exclude'),
+      };
+    },
+
+    // Tells "never configured" from "configured as stored"; the resolver returns null for both.
+    async hasSourceRow(projectId: string): Promise<boolean> {
+      const rows = await sql.$queryRawUnsafe<unknown[]>(
+        'SELECT 1 FROM marketing.audience_sources WHERE project_id = $1',
+        projectId
+      );
+      return rows.length > 0;
     },
 
     async definition(

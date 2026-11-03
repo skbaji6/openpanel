@@ -1,3 +1,4 @@
+import { HttpError } from '../api/http';
 import type { Explanation, Member } from './contract';
 import { type AudienceDefinition, buildSourceFilter } from './definition';
 import { normalizeResolveInputs } from './filter';
@@ -149,7 +150,7 @@ export async function resolveInputs(
   const { inputs, errors } = normalizeResolveInputs(raw);
   if (errors.length > 0) {
     // Echoes nothing: the raw values are contact details.
-    throw new Error('too many inputs');
+    throw new HttpError(400, 'too_many_inputs');
   }
   const idByInput = new Map<string, string>();
   if (inputs.length > 0) {

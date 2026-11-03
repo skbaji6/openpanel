@@ -33,6 +33,8 @@ export interface ServerDeps {
   redis?: Redis;
   sources?: SourceResolver;
   sourceFetch?: typeof fetch;
+  // Tests shorten it so a lost lock shows within a freeze.
+  freezeLockTtlMs?: number;
 }
 
 function matchRoute(routes: Route[], method: string, pathname: string) {
@@ -122,6 +124,7 @@ export function createServer(deps: ServerDeps) {
             redis: deps.redis,
             resolver: deps.sources,
             now: deps.now,
+            freezeLockTtlMs: deps.freezeLockTtlMs,
           }),
         ]
       : []),
