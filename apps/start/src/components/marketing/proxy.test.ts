@@ -428,20 +428,33 @@ describe('marketing proxy', () => {
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(
       (name) => vi.spyOn(console, name).mockImplementation(() => undefined)
     );
-    const { proxy } = setup();
-    await proxy.handle(
-      request('audience/resolve', {
-        method: 'POST',
-        body: JSON.stringify({ phone: canary }),
-      })
-    );
-    const logged = spies
-      .flatMap((spy) => spy.mock.calls)
-      .flat()
-      .map(String);
-    for (const spy of spies) {
-      spy.mockRestore();
+    try {
+      const { proxy } = setup();
+      await proxy.handle(
+        request('audience/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ phone: canary }),
+        })
+      );
+      const logged = spies
+        .flatMap((spy) => spy.mock.calls)
+        .flat()
+        .map(String);
+      expect(logged.join(' ')).not.toContain(canary);
+    } finally {
+      for (const spy of spies) {
+        spy.mockRestore();
+      }
     }
-    expect(logged.join(' ')).not.toContain(canary);
+  });
+
+  test.each([
+    ['GET', 'campaigns/c1/start'],
+    ['PATCH', 'audiences/a1'],
+    ['PUT', 'campaigns/c1'],
+  ])('%s %s is 405 and never reaches marketing', async (method, path) => {
+    const { proxy, marketingCalls } = setup();
+    expect((await proxy.handle(send(path, method))).status).toBe(405);
+    expect(marketingCalls()).toHaveLength(0);
   });
 });

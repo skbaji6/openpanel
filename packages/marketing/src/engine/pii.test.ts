@@ -13,7 +13,11 @@ import { getRedisCache } from '@openpanel/redis';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
 import { audienceSourceRoutes } from '../api/routes-audience-source';
+import { createServer } from '../api/server';
+import type { FilterTree, Schema } from '../audience/contract';
+import { createFakeSource, type FakeMember } from '../audience/fake-source';
 import { createSourceResolver } from '../audience/resolver';
+import { runMaterializeTick } from '../campaign/materialize-runner';
 import { getAdapter, registerAdapter } from '../channels/registry';
 import type {
   ChannelAdapter,
@@ -50,6 +54,19 @@ const PROJECT = 'project-pii';
 const ENCRYPTION_KEY = 'a'.repeat(64);
 const SOURCE_SECRET = 'source-secret-for-pii-test';
 const MAX_TICKS = 6;
+const PROXY_SECRET = 'proxy-secret-for-pii-test';
+const SCHEMA: Schema = {
+  dimensions: [
+    {
+      key: 'plan',
+      label: 'Plan',
+      type: 'string',
+      multiValued: false,
+      valuesListable: true,
+    },
+  ],
+};
+const PRO_FILTER: FilterTree = { dimension: 'plan', op: 'eq', values: ['pro'] };
 
 const CFG: MarketingConfig = {
   databaseUrl: '',
@@ -469,6 +486,130 @@ describe('personal data from an http audience source', () => {
       PROJECT
     );
     expect(row?.status).toBe('source_error');
+
+    expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
+  });
+
+  it('an audience and campaign built from canary members store and log none of them', async () => {
+    const canary: FakeMember = {
+      id: 'canary-1',
+      values: { plan: 'pro' },
+      displayName: CANARY_NAME,
+      contact: { phone: CANARY_PHONE, email: CANARY_EMAIL },
+      traits: { firstName: CANARY_NAME },
+      devices: [{ token: CANARY_TOKEN, platform: 'android' }],
+    };
+    const members = [
+      canary,
+      { id: 'plain-1', values: { plan: 'pro' } },
+      { id: 'plain-2', values: { plan: 'free' } },
+    ];
+    const sources = {
+      forProject: async () => createFakeSource({ members, schema: SCHEMA }),
+      invalidate: () => undefined,
+    } as unknown as ReturnType<typeof createSourceResolver>;
+    const cfg = { ...CFG, proxySecret: PROXY_SECRET };
+    const app = createServer({
+      cfg,
+      sql,
+      redis,
+      sources,
+      now: () => clock.getTime(),
+    });
+    const call = async (method: string, path: string, body?: unknown) => {
+      const res = await app.fetch(
+        new Request(`http://marketing.internal${path}`, {
+          method,
+          headers: {
+            ...(body === undefined
+              ? {}
+              : { 'content-type': 'application/json' }),
+            'x-marketing-proxy-secret': PROXY_SECRET,
+            'x-marketing-project-id': PROJECT,
+            'x-marketing-user-id': 'user-pii',
+            'x-marketing-csrf': '1',
+          },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        })
+      );
+      const text = await res.text();
+      return {
+        status: res.status,
+        body: (text ? JSON.parse(text) : null) as Record<string, unknown>,
+      };
+    };
+
+    const resolved = await call('POST', '/marketing/audience/resolve', {
+      inputs: [CANARY_PHONE, CANARY_EMAIL],
+    });
+    expect(resolved.body).toEqual({
+      ids: ['canary-1'],
+      unmatchedPositions: [],
+    });
+    const created = await call('POST', '/marketing/audiences', {
+      name: 'Canaries',
+      mode: 'snapshot',
+      filter: PRO_FILTER,
+      excludeFilter: null,
+    });
+    expect(created.status).toBe(201);
+    const audienceId = created.body.id as string;
+    const changed = await call(
+      'POST',
+      `/marketing/audiences/${audienceId}/ids`,
+      {
+        list: 'include',
+        add: resolved.body.ids,
+        expectedVersion: created.body.version,
+      }
+    );
+    expect(changed.status).toBe(200);
+    // The preview really carried the canary name, so the scan below is not vacuous.
+    const previewed = await call(
+      'POST',
+      `/marketing/audiences/${audienceId}/preview`,
+      {}
+    );
+    expect(previewed.body.members).toContainEqual({
+      id: 'canary-1',
+      displayName: CANARY_NAME,
+    });
+    const explained = await call(
+      'POST',
+      `/marketing/audiences/${audienceId}/explain`,
+      { id: 'canary-1' }
+    );
+    expect(explained.body.verdict).toBe('in');
+    const frozen = await call(
+      'POST',
+      `/marketing/audiences/${audienceId}/freeze`
+    );
+    expect(frozen.status).toBe(200);
+
+    const campaign = await call('POST', '/marketing/campaigns', {
+      name: 'Canary launch',
+      channel: 'push',
+      template: { subject: 'Hi', body: 'Hello' },
+      audienceId,
+    });
+    expect(campaign.status).toBe(201);
+    const campaignId = campaign.body.id as string;
+    expect(
+      (await call('POST', `/marketing/campaigns/${campaignId}/count-preview`))
+        .status
+    ).toBe(200);
+    const started = await call(
+      'POST',
+      `/marketing/campaigns/${campaignId}/start`
+    );
+    expect(started.body.state).toBe('running');
+    await runMaterializeTick({ sql, sources, redis, cfg, now: () => clock });
+    const [recipients] = await sql.$queryRawUnsafe<{ ids: string[] }[]>(
+      `SELECT array_agg(profile_id ORDER BY profile_id) AS ids
+       FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid`,
+      campaignId
+    );
+    expect(recipients?.ids).toEqual(['canary-1', 'plain-1']);
 
     expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
   });

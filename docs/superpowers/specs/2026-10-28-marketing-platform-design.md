@@ -228,6 +228,7 @@ Hand-picked and excluded lists are stored as ids only, up to 20,000 ids each. Ph
 |---|---|---|
 | Plugin overhead per send with a no-op channel and an instant fake API | at least 1,000 sends/s per replica | load script |
 | Materialise 20,000 ids from a fake API serving 1,000 per page | plugin time under 5 s on top of the API's own time | load script |
+| Materialise 100,000 ids (the snapshot cap) from the same fake API | none; measured plugin time 6,520 ms (rss 224 MB), the 5 s target is for 20,000 ids | load script with `--ids 100000` |
 | Journey step latency during a 20,000-person campaign | no worse than 2x the idle median | load script runs both lanes together |
 | Behaviour against a slow API (2 s per page) | no timeouts, no duplicates, campaign finishes | load script with a delaying fake API |
 | Behaviour when the API fails for 60 s | campaign pauses and resumes, no failed marks, no duplicates | integration test |

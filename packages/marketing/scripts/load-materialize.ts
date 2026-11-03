@@ -1,7 +1,8 @@
 // Materialises a campaign audience from a fake source and reports the plugin's own time.
 // Usage: DATABASE_URL=<..._test database> REDIS_URL=... bun scripts/load-materialize.ts [--ids 20000] [--page 1000] [--delay-ms 0]
 // Works under project id LOAD_PREFIX and removes it at the end. Refuses any database whose name does not end in _test
-// unless MARKETING_LOAD_ALLOW=1. Exits 1 on duplicates, missing ids, or (with --delay-ms 0) plugin time at the spec 6.4 target.
+// unless MARKETING_LOAD_ALLOW=1. Exits 1 on duplicates, missing ids, or (with --delay-ms 0 and at most TARGET_IDS ids)
+// plugin time at the spec 6.4 target.
 
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -10,6 +11,8 @@ import type { MarketingConfig } from '../src/config';
 const LOAD_PREFIX = 'marketing-load-';
 const PROJECT = `${LOAD_PREFIX}materialize-${randomUUID()}`;
 const PLUGIN_TARGET_MS = 5000;
+// The spec 6.4 target is defined for 20,000 recipients; larger runs only report their time.
+const TARGET_IDS = 20_000;
 const BYTES_PER_MB = 1024 * 1024;
 const CONFIRM_THRESHOLD = 1_000_000;
 const CFG = { sourceConcurrency: 4 } as MarketingConfig;
@@ -141,7 +144,13 @@ async function main() {
   console.log(
     `ids=${ids} pages=${pages} total=${totalMs.toFixed(0)} ms source=${sourceMs.toFixed(0)} ms plugin=${pluginMs.toFixed(0)} ms duplicates=${duplicates} missing=${missing} rss=${rssMb.toFixed(0)} MB`
   );
-  const overTarget = delayMs === 0 && pluginMs >= PLUGIN_TARGET_MS;
+  const targetApplies = delayMs === 0 && ids <= TARGET_IDS;
+  if (delayMs === 0 && !targetApplies) {
+    console.log(
+      `plugin time not checked: the ${PLUGIN_TARGET_MS} ms target is defined for ${TARGET_IDS} ids`
+    );
+  }
+  const overTarget = targetApplies && pluginMs >= PLUGIN_TARGET_MS;
   if (duplicates > 0 || missing > 0 || overTarget) {
     process.exitCode = 1;
   }
