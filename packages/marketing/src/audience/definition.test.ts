@@ -3,6 +3,7 @@ import type { FilterTree, Schema } from './contract';
 import {
   buildSourceFilter,
   checkAudienceInput,
+  zAudienceInput,
   zIdListChange,
 } from './definition';
 import { validateFilterStructure } from './filter';
@@ -39,7 +40,7 @@ describe('validateFilterStructure', () => {
   });
 
   test('rejects __proto__ keys, NUL in a value, a 100,000-character value and a 10,000-deep JSON nesting without throwing', () => {
-    const deep = `${'['.repeat(10_000)}${']'.repeat(10_000)}`;
+    const deep = `${'{"op":"and","children":['.repeat(10_000)}${']}'.repeat(10_000)}`;
     const cases = [
       JSON.parse(
         '{"__proto__":{"x":1},"dimension":"c","op":"eq","values":[1]}'
@@ -61,10 +62,28 @@ describe('checkAudienceInput', () => {
   });
 
   test('with a schema rejects an undeclared dimension and the error text contains no input value', () => {
-    const bad = { dimension: 'secret-dim', op: 'eq', values: ['v'] };
+    const bad = {
+      dimension: 'zz-hostile-dim',
+      op: 'eq',
+      values: ['zz-hostile-val'],
+    };
     const result = checkAudienceInput(input(bad), schema);
     expect(result.ok).toBe(false);
-    expect(JSON.stringify(result)).not.toContain('secret-dim');
+    expect(JSON.stringify(result)).not.toContain('zz-hostile');
+  });
+
+  test('zAudienceInput requires filter and excludeFilter keys to be explicit', () => {
+    const base = { name: 'x', mode: 'dynamic' as const };
+    expect(
+      zAudienceInput.safeParse({ ...base, filter: null, excludeFilter: null })
+        .success
+    ).toBe(true);
+    expect(
+      zAudienceInput.safeParse({ ...base, excludeFilter: null }).success
+    ).toBe(false);
+    expect(zAudienceInput.safeParse({ ...base, filter: null }).success).toBe(
+      false
+    );
   });
 });
 
@@ -79,6 +98,9 @@ describe('zIdListChange', () => {
       zIdListChange.safeParse({ list: 'include', add: ids(2000) }).success
     ).toBe(true);
     expect(zIdListChange.safeParse({ list: 'include' }).success).toBe(false);
+    expect(zIdListChange.safeParse({ list: 'include', add: [] }).success).toBe(
+      false
+    );
   });
 });
 

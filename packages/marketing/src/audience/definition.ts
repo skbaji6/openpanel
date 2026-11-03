@@ -14,11 +14,17 @@ export const MAX_IDS_PER_CHANGE = 2000;
 export const MAX_SNAPSHOT_IDS = 100_000;
 export const MAX_AUDIENCE_NAME = 200;
 
+// A missing key must fail: null means "no filter" and has to be said.
+const zExplicitFilter = z.custom<unknown>(
+  (value) => value !== undefined,
+  'filter is required, use null'
+);
+
 export const zAudienceInput = z.strictObject({
   name: z.string().trim().min(1).max(MAX_AUDIENCE_NAME),
   mode: z.enum(['dynamic', 'snapshot']),
-  filter: z.unknown().nullable(),
-  excludeFilter: z.unknown().nullable(),
+  filter: zExplicitFilter,
+  excludeFilter: zExplicitFilter,
 });
 
 const zIdChangeList = z.array(zIdentifier).max(MAX_IDS_PER_CHANGE);
@@ -31,7 +37,7 @@ export const zIdListChange = z
     clear: z.literal(true).optional(),
   })
   .refine(
-    (change) => change.add || change.remove || change.clear,
+    (change) => change.add?.length || change.remove?.length || change.clear,
     'add, remove or clear is required'
   );
 
@@ -73,7 +79,6 @@ export function checkAudienceInput(
       };
 }
 
-// Counted as validateFilter does: a lone condition is 1.
 function depthOf(node: FilterTree): number {
   return 'children' in node ? 1 + Math.max(...node.children.map(depthOf)) : 1;
 }

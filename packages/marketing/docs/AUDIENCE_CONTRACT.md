@@ -136,9 +136,12 @@ A filter is either a **condition** or a **group**:
 | `resolve` inputs | 200 |
 | `id` condition values | 1,000 |
 | Filter depth | 3 |
+| Filter string value | 512 characters |
 | Request and response body | 8 MiB |
 
 Depth rule: every group counts 1 and a lone condition counts 1. A single condition is depth 1; a group of conditions is 2; a group in a group of conditions is 3. Three nested groups plus a leaf is 4 and is rejected.
+
+The 512-character string limit is enforced by the plugin and the reference service; a server may accept more, but clients never send more.
 
 Anything over a limit is a `400` with a fixed message that does not echo the input.
 
