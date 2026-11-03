@@ -7,7 +7,7 @@ import type { MarketingConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
-import { createCampaignService } from './service';
+import { createCampaignService, isOneActiveViolation } from './service';
 
 const PROJECT = 'p1';
 const CTX = { projectId: PROJECT, userId: 'u1' };
@@ -491,23 +491,26 @@ describe('campaign service', () => {
     });
   });
 
-  it('schedule without a send time is invalid_send_time', async () => {
-    const { campaigns, draft } = await previewedDraft();
+  it('schedule without a send time is invalid_send_time, before the preview gate', async () => {
+    const { campaigns } = makeDeps();
+    const audience = await dynamicAudience();
+    const draft = await pushDraft(audience.id);
     expect(await codeOf(campaigns.schedule(CTX, draft.id, {}))).toEqual([
       400,
       'invalid_send_time',
     ]);
   });
 
-  it('schedule in the past is schedule_in_past', async () => {
-    const { campaigns, draft } = await previewedDraft();
+  it('schedule in the past is schedule_in_past, before the preview gate', async () => {
+    const { campaigns } = makeDeps();
+    const audience = await dynamicAudience();
+    const draft = await pushDraft(audience.id);
     await campaigns.update(
       CTX,
       draft.id,
       { sendAtLocal: '2026-11-03T15:29' },
       1
     );
-    await campaigns.countPreview(CTX, draft.id);
     expect(await codeOf(campaigns.schedule(CTX, draft.id, {}))).toEqual([
       409,
       'schedule_in_past',
@@ -565,14 +568,85 @@ describe('campaign service', () => {
     expect(await campaigns.completeIfDone(draft.id)).toBe(false);
   });
 
-  it('failCampaign fails a running campaign with its reason', async () => {
+  it('failCampaign fails a running campaign and skips its pending and leased recipients with reason failed', async () => {
     const { campaigns, draft } = await previewedDraft();
     await campaigns.start(CTX, draft.id, {});
+    await insertRecipients(draft.id, ['pending', 'leased', 'sending']);
     await campaigns.failCampaign(draft.id, 'materialize_failed');
-    expect(await campaigns.get(CTX, draft.id)).toMatchObject({
+    const failed = await campaigns.get(CTX, draft.id);
+    expect(failed).toMatchObject({
       state: 'failed',
       stateReason: 'materialize_failed',
     });
+    expect(failed.counters.skipped).toBe(2);
+    expect(await recipients(draft.id)).toEqual([
+      { profile_id: 'r0', status: 'skipped', reason: 'failed' },
+      { profile_id: 'r1', status: 'skipped', reason: 'failed' },
+      { profile_id: 'r2', status: 'sending', reason: null },
+    ]);
+  });
+
+  it('failCampaign on a terminal campaign leaves its recipients alone', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await insertRecipients(draft.id, ['pending']);
+    await setState(draft.id, 'completed');
+    await campaigns.failCampaign(draft.id, 'materialize_failed');
+    expect((await campaigns.get(CTX, draft.id)).state).toBe('completed');
+    expect((await recipients(draft.id))[0]?.status).toBe('pending');
+  });
+
+  it('countPreview is refused once a campaign runs and keeps the stored preview', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await campaigns.start(CTX, draft.id, {});
+    const before = (await campaigns.get(CTX, draft.id)).countPreview;
+    now = new Date(START.getTime() + MINUTE_MS);
+    expect(await codeOf(campaigns.countPreview(CTX, draft.id))).toEqual([
+      409,
+      'invalid_transition',
+    ]);
+    expect((await campaigns.get(CTX, draft.id)).countPreview).toEqual(before);
+  });
+
+  it('requestTestSend on a terminal campaign is invalid_transition', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    await campaigns.requestTestSend(CTX, draft.id, 'me');
+    await setState(draft.id, 'cancelled');
+    expect(
+      await codeOf(campaigns.requestTestSend(CTX, draft.id, 'me'))
+    ).toEqual([409, 'invalid_transition']);
+  });
+
+  it('an audience of another project is missing_audience at start', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.audiences SET project_id = 'p2' WHERE id = (SELECT audience_id FROM marketing.campaigns WHERE id = $1::uuid)`,
+      draft.id
+    );
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'missing_audience',
+    ]);
+  });
+
+  it('only a one-active-index violation counts as the project being busy', () => {
+    const violation = (code: string, message: string) => ({
+      meta: { code, message },
+    });
+    expect(
+      isOneActiveViolation(
+        violation('23505', 'Key (project_id)=(p1) already exists.')
+      )
+    ).toBe(true);
+    expect(
+      isOneActiveViolation(violation('23505', 'Key (id)=(x) already exists.'))
+    ).toBe(false);
+    expect(
+      isOneActiveViolation(
+        violation('23514', 'Key (project_id)=(p1) already exists.')
+      )
+    ).toBe(false);
+    expect(isOneActiveViolation(new Error('boom'))).toBe(false);
   });
 
   it('an audience edit committed while start waits for the audience lock makes start count_preview_required', async () => {

@@ -115,4 +115,14 @@ describe('fromStates', () => {
       expect(fromStates(action).sort()).toEqual([...expected].sort());
     }
   });
+
+  // The campaign service's fenced update sets one target state per action.
+  it('every from-state of an action leads to the same target', () => {
+    for (const action of ACTIONS) {
+      const targets = new Set(
+        fromStates(action).map((state) => nextState(state, action))
+      );
+      expect(targets.size).toBe(1);
+    }
+  });
 });

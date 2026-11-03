@@ -20,6 +20,7 @@ import {
   type CampaignState,
   fromStates,
   nextState,
+  TERMINAL_STATES,
 } from './state';
 
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
@@ -28,6 +29,9 @@ const PREVIEW_TTL_MS = 15 * MS_PER_MINUTE;
 const TEST_SEND_WINDOW_MS = 60 * MS_PER_MINUTE;
 const MAX_TEST_SENDS_PER_WINDOW = 10;
 const UNIQUE_VIOLATION = '23505';
+const ONE_ACTIVE_KEY = 'Key (project_id)=';
+const TERMINAL = new Set<CampaignState>(TERMINAL_STATES);
+const PREVIEWABLE = new Set<CampaignState>(['draft', 'scheduled']);
 const REGISTRY_CHANNELS = new Set(['sms', 'whatsapp']);
 const zCampaignId = z.uuid();
 
@@ -126,12 +130,12 @@ const SELECT_ROWS = `SELECT c.id::text, c.project_id, c.name, c.state, c.state_r
 const LOCK_CAMPAIGN = `SELECT state, version FROM marketing.campaigns
   WHERE id = $1::uuid AND project_id = $2 FOR UPDATE`;
 const LOCK_AUDIENCE =
-  'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid FOR UPDATE';
+  'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid AND project_id = $2 FOR UPDATE';
 // Read after the lock in its own statement, so it sees an edit committed while the lock was awaited.
 const READ_AUDIENCE = `SELECT mode, filter, exclude_filter, version, snapshot_version
-  FROM marketing.audiences WHERE id = $1::uuid`;
-const CANCEL_RECIPIENTS = `WITH skipped AS (
-    UPDATE marketing.campaign_recipients SET status = 'skipped', reason = 'cancelled', lease_until = NULL, updated_at = $2
+  FROM marketing.audiences WHERE id = $1::uuid AND project_id = $2`;
+const SKIP_UNSENT_RECIPIENTS = `WITH skipped AS (
+    UPDATE marketing.campaign_recipients SET status = 'skipped', reason = $3, lease_until = NULL, updated_at = $2
     WHERE campaign_id = $1::uuid AND status IN ('pending', 'leased') RETURNING 1
   )
   INSERT INTO marketing.campaign_counters (campaign_id, skipped, updated_at)
@@ -154,9 +158,15 @@ function toRow(row: Record<string, unknown>): CampaignRow {
   return Object.fromEntries(entries) as CampaignRow;
 }
 
-const isUniqueViolation = (error: unknown) =>
-  (error as { meta?: { code?: string } } | null)?.meta?.code ===
-  UNIQUE_VIOLATION;
+// Prisma's raw errors drop the constraint name; the detail names the key, and only the one-active index is keyed on project_id alone.
+export function isOneActiveViolation(error: unknown): boolean {
+  const meta = (error as { meta?: { code?: string; message?: string } } | null)
+    ?.meta;
+  return (
+    meta?.code === UNIQUE_VIOLATION &&
+    (meta.message ?? '').startsWith(ONE_ACTIVE_KEY)
+  );
+}
 
 function assertId(id: string) {
   if (!zCampaignId.safeParse(id).success) {
@@ -243,6 +253,10 @@ export function createCampaignService(deps: CampaignDeps) {
   ) {
     assertId(id);
     const from = fromStates(action);
+    const targets = new Set(from.map((state) => nextState(state, action)));
+    if (targets.size !== 1) {
+      throw new Error(`action ${action} has no single target state`);
+    }
     const target = to ?? nextState(from[0] as CampaignState, action);
     const columns = Object.keys(set);
     const assignments = columns
@@ -333,7 +347,8 @@ export function createCampaignService(deps: CampaignDeps) {
     ctx: CampaignContext,
     id: string,
     action: CampaignAction,
-    confirm: Confirmation | undefined
+    confirm: Confirmation | undefined,
+    checkCampaign?: (campaign: CampaignRow) => void
   ): Promise<{ campaign: CampaignRow; audience: LockedAudience }> {
     const locked = await lockCampaign(tx, ctx, id);
     if (!nextState(locked.state, action)) {
@@ -343,10 +358,12 @@ export function createCampaignService(deps: CampaignDeps) {
     if (!campaign.audienceId) {
       throw new HttpError(409, 'missing_audience');
     }
-    await tx.$queryRawUnsafe(LOCK_AUDIENCE, campaign.audienceId);
+    checkCampaign?.(campaign);
+    await tx.$queryRawUnsafe(LOCK_AUDIENCE, campaign.audienceId, ctx.projectId);
     const [audience] = await tx.$queryRawUnsafe<LockedAudience[]>(
       READ_AUDIENCE,
-      campaign.audienceId
+      campaign.audienceId,
+      ctx.projectId
     );
     if (!audience) {
       throw new HttpError(409, 'missing_audience');
@@ -388,7 +405,7 @@ export function createCampaignService(deps: CampaignDeps) {
         materialize_state: 'not_started',
       });
     } catch (error) {
-      if (!isUniqueViolation(error)) {
+      if (!isOneActiveViolation(error)) {
         throw error;
       }
       await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT campaign_start');
@@ -523,6 +540,9 @@ export function createCampaignService(deps: CampaignDeps) {
       id: string
     ): Promise<AudienceCount> {
       const campaign = await fetchRow(sql, ctx, id);
+      if (!PREVIEWABLE.has(campaign.state)) {
+        throw new HttpError(409, 'invalid_transition');
+      }
       if (!campaign.audienceId) {
         throw new HttpError(409, 'missing_audience');
       }
@@ -555,11 +575,12 @@ export function createCampaignService(deps: CampaignDeps) {
         audienceVersion: audience.version,
       };
       const saved = await sql.$executeRawUnsafe(
-        'UPDATE marketing.campaigns SET count_preview = $3::jsonb WHERE id = $1::uuid AND project_id = $2 AND version = $4',
+        'UPDATE marketing.campaigns SET count_preview = $3::jsonb WHERE id = $1::uuid AND project_id = $2 AND version = $4 AND state = ANY($5::text[])',
         id,
         ctx.projectId,
         JSON.stringify(preview),
-        campaign.version
+        campaign.version,
+        [...PREVIEWABLE]
       );
       if (saved === 0) {
         throw new HttpError(409, 'version_conflict');
@@ -591,22 +612,18 @@ export function createCampaignService(deps: CampaignDeps) {
       body: { confirm?: Confirmation }
     ): Promise<CampaignRow> {
       return await sql.$transaction(async (tx) => {
-        const { campaign } = await passGates(
-          tx,
-          ctx,
-          id,
-          'schedule',
-          body.confirm
-        );
-        const sendAt = campaign.sendAtLocal
-          ? zonedTimeToUtc(campaign.sendAtLocal, campaign.timezone)
-          : null;
-        if (!sendAt) {
-          throw new HttpError(400, 'invalid_send_time');
-        }
-        if (sendAt.getTime() < deps.now().getTime()) {
-          throw new HttpError(409, 'schedule_in_past');
-        }
+        let sendAt: Date | null = null;
+        await passGates(tx, ctx, id, 'schedule', body.confirm, (campaign) => {
+          sendAt = campaign.sendAtLocal
+            ? zonedTimeToUtc(campaign.sendAtLocal, campaign.timezone)
+            : null;
+          if (!sendAt) {
+            throw new HttpError(400, 'invalid_send_time');
+          }
+          if (sendAt.getTime() < deps.now().getTime()) {
+            throw new HttpError(409, 'schedule_in_past');
+          }
+        });
         await transition(tx, ctx, id, 'schedule', {
           send_kind: 'scheduled',
           send_at: sendAt,
@@ -630,7 +647,8 @@ export function createCampaignService(deps: CampaignDeps) {
       try {
         return await simpleTransition(ctx, id, 'resume');
       } catch (error) {
-        if (isUniqueViolation(error)) {
+        // Unreachable while a paused campaign holds the project's slot; kept in case the one-active index changes.
+        if (isOneActiveViolation(error)) {
           throw new HttpError(409, 'another_campaign_active');
         }
         throw error;
@@ -642,7 +660,12 @@ export function createCampaignService(deps: CampaignDeps) {
         const now = deps.now();
         await transition(tx, ctx, id, 'cancel', { finished_at: now });
         // Rows already sending belong to the dispatcher, which records their outcome.
-        await tx.$executeRawUnsafe(CANCEL_RECIPIENTS, id, now);
+        await tx.$executeRawUnsafe(
+          SKIP_UNSENT_RECIPIENTS,
+          id,
+          now,
+          'cancelled'
+        );
         return await fetchRow(tx, ctx, id);
       }, TRANSACTION);
     },
@@ -656,7 +679,10 @@ export function createCampaignService(deps: CampaignDeps) {
         throw new HttpError(400, 'invalid_profile_id');
       }
       return await sql.$transaction(async (tx) => {
-        await lockCampaign(tx, ctx, id);
+        const locked = await lockCampaign(tx, ctx, id);
+        if (TERMINAL.has(locked.state)) {
+          throw new HttpError(409, 'invalid_transition');
+        }
         const now = deps.now();
         const [recent] = await tx.$queryRawUnsafe<{ n: number }[]>(
           'SELECT count(*)::int AS n FROM marketing.campaign_test_sends WHERE campaign_id = $1::uuid AND created_at > $2',
@@ -697,14 +723,24 @@ export function createCampaignService(deps: CampaignDeps) {
     async failCampaign(campaignId: string, reason: string): Promise<void> {
       assertId(campaignId);
       const now = deps.now();
-      await sql.$executeRawUnsafe(
-        `UPDATE marketing.campaigns SET state = 'failed', state_reason = $2, finished_at = $3, updated_at = $3
-         WHERE id = $1::uuid AND state = ANY($4::text[])`,
-        campaignId,
-        reason,
-        now,
-        fromStates('fail')
-      );
+      await sql.$transaction(async (tx) => {
+        const failed = await tx.$executeRawUnsafe(
+          `UPDATE marketing.campaigns SET state = 'failed', state_reason = $2, finished_at = $3, updated_at = $3
+           WHERE id = $1::uuid AND state = ANY($4::text[])`,
+          campaignId,
+          reason,
+          now,
+          fromStates('fail')
+        );
+        if (failed === 1) {
+          await tx.$executeRawUnsafe(
+            SKIP_UNSENT_RECIPIENTS,
+            campaignId,
+            now,
+            'failed'
+          );
+        }
+      }, TRANSACTION);
     },
   };
 }
