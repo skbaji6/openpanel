@@ -123,6 +123,8 @@ export async function startWorker(
     { createRedisInterestSet },
     { createLagReporter, LAG_REPORT_INTERVAL_MS },
     { createSourceResolver },
+    { runScheduleTick },
+    { runMaterializeTick },
   ] = await Promise.all([
     import('./db/client'),
     import('./db/migrate'),
@@ -134,6 +136,8 @@ export async function startWorker(
     import('./kafka/interest'),
     import('./kafka/lag'),
     import('./audience/resolver'),
+    import('./campaign/scheduler'),
+    import('./campaign/materialize-runner'),
   ]);
   const secrets = secretsOf(cfg);
   const started: Stoppable[] = [];
@@ -199,6 +203,16 @@ export async function startWorker(
     } else {
       console.warn(LOG_PREFIX, 'no unsubscribe link renderer; sending is off');
     }
+
+    // Not gated on the unsubscribe renderer: neither job sends anything.
+    started.push(
+      every(cfg.tickMs, 'campaign schedules', secrets, () =>
+        runScheduleTick({ sql, now: () => new Date() })
+      ),
+      every(cfg.tickMs, 'campaign materialisation', secrets, () =>
+        runMaterializeTick({ sql, sources, redis, cfg, now: () => new Date() })
+      )
+    );
 
     // Separate jobs: a persistent failure in one must not stop the other's retention.
     started.push(

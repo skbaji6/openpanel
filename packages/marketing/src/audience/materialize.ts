@@ -59,6 +59,12 @@ interface MaterializeDeps {
 }
 
 class LostClaim extends Error {}
+export class RestartAfterSendingError extends Error {
+  constructor() {
+    super('materialisation restart after sending began');
+    this.name = 'RestartAfterSendingError';
+  }
+}
 class SnapshotTooLarge extends Error {}
 
 const FRESH_START: MaterializeProgress = { phase: 'exclusions', cursor: null };
@@ -152,7 +158,7 @@ async function clearTarget(
     target.campaignId
   );
   if (started.length > 0) {
-    throw new Error('materialisation restart after sending began');
+    throw new RestartAfterSendingError();
   }
   await tx.$executeRawUnsafe(
     'DELETE FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid',

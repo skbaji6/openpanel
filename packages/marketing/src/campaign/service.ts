@@ -168,6 +168,31 @@ export function isOneActiveViolation(error: unknown): boolean {
   );
 }
 
+// Takes the caller's transaction, so a runner can record its own state in the same commit.
+export async function failCampaignIn(
+  tx: Queryable,
+  campaignId: string,
+  reason: string,
+  now: Date
+): Promise<void> {
+  const failed = await tx.$executeRawUnsafe(
+    `UPDATE marketing.campaigns SET state = 'failed', state_reason = $2, finished_at = $3, updated_at = $3
+     WHERE id = $1::uuid AND state = ANY($4::text[])`,
+    campaignId,
+    reason,
+    now,
+    fromStates('fail')
+  );
+  if (failed === 1) {
+    await tx.$executeRawUnsafe(
+      SKIP_UNSENT_RECIPIENTS,
+      campaignId,
+      now,
+      'failed'
+    );
+  }
+}
+
 function assertId(id: string) {
   if (!zCampaignId.safeParse(id).success) {
     throw new HttpError(404, 'not_found');
@@ -723,24 +748,10 @@ export function createCampaignService(deps: CampaignDeps) {
     async failCampaign(campaignId: string, reason: string): Promise<void> {
       assertId(campaignId);
       const now = deps.now();
-      await sql.$transaction(async (tx) => {
-        const failed = await tx.$executeRawUnsafe(
-          `UPDATE marketing.campaigns SET state = 'failed', state_reason = $2, finished_at = $3, updated_at = $3
-           WHERE id = $1::uuid AND state = ANY($4::text[])`,
-          campaignId,
-          reason,
-          now,
-          fromStates('fail')
-        );
-        if (failed === 1) {
-          await tx.$executeRawUnsafe(
-            SKIP_UNSENT_RECIPIENTS,
-            campaignId,
-            now,
-            'failed'
-          );
-        }
-      }, TRANSACTION);
+      await sql.$transaction(
+        (tx) => failCampaignIn(tx, campaignId, reason, now),
+        TRANSACTION
+      );
     },
   };
 }
