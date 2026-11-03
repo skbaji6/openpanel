@@ -11,10 +11,34 @@ const PROJECT_ID = `test-${randomUUID()}`;
 const LANE_KEY = `marketing:source-sem:${PROJECT_ID}:campaign-lane`;
 const SHARED_KEY = `marketing:source-sem:${PROJECT_ID}`;
 const SLOT_TTL_MS = 60_000;
-const SETTLE_MS = 100;
 const SHORT_WAIT_MS = 150;
+const POLL_TIMEOUT_MS = 3000;
+const POLL_STEP_MS = 10;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForInFlight(
+  held: { inFlight: () => number },
+  expected: number
+) {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  while (held.inFlight() !== expected) {
+    if (Date.now() > deadline) {
+      throw new Error(`in-flight never reached ${expected}`);
+    }
+    await sleep(POLL_STEP_MS);
+  }
+}
+
+async function waitForCard(key: string, expected: number) {
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  while ((await redis.zcard(key)) !== expected) {
+    if (Date.now() > deadline) {
+      throw new Error(`${key} never reached ${expected}`);
+    }
+    await sleep(POLL_STEP_MS);
+  }
+}
 
 beforeEach(async () => {
   await redis.del(LANE_KEY, SHARED_KEY);
@@ -66,6 +90,7 @@ function createHeldSource(sharedCap: number) {
       failNext = true;
     },
     maxInFlight: () => maxInFlight,
+    inFlight: () => inFlight,
   };
 }
 
@@ -85,28 +110,30 @@ describe('campaign lane', () => {
       sourceConcurrency: 4,
     });
     const calls = Array.from({ length: 5 }, () => callCount(lane));
-    await sleep(SETTLE_MS);
+    await waitForCard(LANE_KEY, 3);
+    await waitForInFlight(held, 3);
     expect(held.maxInFlight()).toBe(3);
-    expect(await redis.zcard(LANE_KEY)).toBe(3);
     // Release until all five have run, so no promise dangles.
     for (let i = 0; i < 5; i += 1) {
       held.releaseAll();
-      await sleep(SETTLE_MS);
+      await sleep(POLL_STEP_MS * 3);
     }
     await Promise.all(calls);
     expect(held.maxInFlight()).toBe(3);
   });
 
-  it('a journey call through the shared limiter acquires while 3 campaign-lane calls are in flight', async () => {
+  it('a journey call through the shared limiter acquires while an extra campaign call is queued', async () => {
     const held = createHeldSource(4);
     const lane = withCampaignLane(held.source, {
       redis,
       projectId: PROJECT_ID,
       sourceConcurrency: 4,
     });
-    const calls = Array.from({ length: 3 }, () => callCount(lane));
-    await sleep(SETTLE_MS);
-    expect(await redis.zcard(SHARED_KEY)).toBe(3);
+    const calls = Array.from({ length: 4 }, () => callCount(lane));
+    await waitForCard(LANE_KEY, 3);
+    await waitForInFlight(held, 3);
+    // The fourth campaign call is queued in the lane, so one shared slot stays free.
+    expect(held.maxInFlight()).toBe(3);
     const journeyLimiter = createSourceLimiter(redis, {
       key: PROJECT_ID,
       cap: 4,
@@ -115,7 +142,10 @@ describe('campaign lane', () => {
     });
     const release = await journeyLimiter.acquire();
     await release();
-    held.releaseAll();
+    for (let i = 0; i < 4; i += 1) {
+      held.releaseAll();
+      await sleep(POLL_STEP_MS * 3);
+    }
     await Promise.all(calls);
   });
 
@@ -127,11 +157,11 @@ describe('campaign lane', () => {
       sourceConcurrency: 1,
     });
     const first = callCount(lane);
-    await sleep(SETTLE_MS);
+    await waitForInFlight(held, 1);
     held.releaseAll();
     expect(await first).toEqual({ count: 1 });
     const second = callCount(lane);
-    await sleep(SETTLE_MS);
+    await waitForInFlight(held, 1);
     held.releaseAll();
     expect(await second).toEqual({ count: 1 });
   });
@@ -145,7 +175,7 @@ describe('campaign lane', () => {
       maxWaitMs: SHORT_WAIT_MS,
     });
     const holder = callCount(lane);
-    await sleep(SETTLE_MS);
+    await waitForCard(LANE_KEY, 1);
     const error = await callCount(lane).catch((e) => e);
     expect(error).toBeInstanceOf(SourceBusyError);
     held.releaseAll();
@@ -161,6 +191,19 @@ describe('campaign lane', () => {
     });
     held.failNextCall();
     await expect(callCount(lane)).rejects.toThrow('boom');
+    expect(await redis.zcard(LANE_KEY)).toBe(0);
+  });
+
+  it('an inner SourceBusyError releases the lane slot', async () => {
+    const inner = {
+      count: () => Promise.reject(new SourceBusyError('limiter_timeout')),
+    } as unknown as AudienceSource;
+    const lane = withCampaignLane(inner, {
+      redis,
+      projectId: PROJECT_ID,
+      sourceConcurrency: 2,
+    });
+    await expect(callCount(lane)).rejects.toBeInstanceOf(SourceBusyError);
     expect(await redis.zcard(LANE_KEY)).toBe(0);
   });
 });

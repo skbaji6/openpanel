@@ -102,3 +102,33 @@ describe('source limiter', () => {
     expect(error.message).toBe('limiter_timeout');
   });
 });
+
+describe('source limiter withSlot', () => {
+  it('keeps the slot past slotTtlMs while the call runs, then releases it', async () => {
+    const limiter = createSourceLimiter(redis, {
+      key: KEY,
+      cap: 1,
+      slotTtlMs: 300,
+      maxWaitMs: 100,
+    });
+    const call = limiter.withSlot(() => sleep(900));
+    await sleep(700);
+    const error = await limiter.acquire().catch((e) => e);
+    expect(error).toBeInstanceOf(SourceBusyError);
+    await call;
+    expect(await redis.zcard(REDIS_KEY)).toBe(0);
+  });
+
+  it('a renew does not re-add an evicted slot', async () => {
+    const limiter = createSourceLimiter(redis, {
+      key: KEY,
+      cap: 1,
+      slotTtlMs: 300,
+    });
+    const call = limiter.withSlot(() => sleep(400));
+    await sleep(50);
+    await redis.del(REDIS_KEY);
+    await call;
+    expect(await redis.zcard(REDIS_KEY)).toBe(0);
+  });
+});

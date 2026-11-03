@@ -2,7 +2,7 @@ import type { Redis } from '@openpanel/redis';
 import { createSourceLimiter } from './limiter';
 import type { AudienceSource } from './source';
 
-// Above the source's 10 s request timeout, so a slot outlives any call that still holds it.
+// Renewed while a call runs, so a call may outlast it; it only bounds how long a crashed holder blocks the lane.
 const LANE_SLOT_TTL_MS = 30_000;
 const METHODS = [
   'schema',
@@ -14,6 +14,7 @@ const METHODS = [
   'resolve',
 ] as const satisfies readonly (keyof AudienceSource)[];
 
+// Needs sourceConcurrency >= 2: at 1 the lane cap is 1 too, so a campaign call can hold the only shared slot (accepted).
 // Leaves one shared source slot that campaign work can never take, so a journey lookup always finds one free.
 export const campaignLaneCap = (sourceConcurrency: number) =>
   Math.max(1, sourceConcurrency - 1);
@@ -40,14 +41,9 @@ export function withCampaignLane(
   const lane = {} as Record<string, unknown>;
   for (const method of METHODS) {
     lane[method] = async (...args: unknown[]) => {
-      const release = await limiter.acquire();
-      try {
-        return await (
-          source[method] as (...inner: unknown[]) => Promise<unknown>
-        )(...args);
-      } finally {
-        await release();
-      }
+      return limiter.withSlot(() =>
+        (source[method] as (...inner: unknown[]) => Promise<unknown>)(...args)
+      );
     };
   }
   return lane as unknown as AudienceSource;

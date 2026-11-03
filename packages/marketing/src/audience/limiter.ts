@@ -18,6 +18,16 @@ const ACQUIRE_SCRIPT = `
   return 0
 `;
 
+// XX: a slot already evicted is never re-added, so a refresh cannot push the set past the cap.
+const RENEW_SCRIPT = `
+  if redis.call('ZADD', KEYS[1], 'XX', 'CH', ARGV[1], ARGV[2]) == 1 then
+    redis.call('PEXPIRE', KEYS[1], ARGV[3])
+    return 1
+  end
+  return 0
+`;
+const RENEW_INTERVAL_DIVISOR = 3;
+
 interface LimiterOptions {
   key: string;
   cap: number;
@@ -34,31 +44,53 @@ export function createSourceLimiter(redis: Redis, options: LimiterOptions) {
   const now = options.now ?? Date.now;
   const maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
 
+  async function acquireSlot() {
+    const slotId = randomUUID();
+    const startedAt = now();
+    for (;;) {
+      const acquired = await redis.eval(
+        ACQUIRE_SCRIPT,
+        1,
+        redisKey,
+        now(),
+        slotId,
+        options.slotTtlMs,
+        options.cap
+      );
+      if (acquired === 1) {
+        break;
+      }
+      if (now() - startedAt >= maxWaitMs) {
+        throw new SourceBusyError('limiter_timeout');
+      }
+      await sleep(POLL_MS + Math.random() * POLL_JITTER_MS);
+    }
+    return {
+      slotId,
+      release: async () => {
+        await redis.zrem(redisKey, slotId);
+      },
+    };
+  }
+
   return {
     async acquire(): Promise<() => Promise<void>> {
-      const slotId = randomUUID();
-      const startedAt = now();
-      for (;;) {
-        const acquired = await redis.eval(
-          ACQUIRE_SCRIPT,
-          1,
-          redisKey,
-          now(),
-          slotId,
-          options.slotTtlMs,
-          options.cap
-        );
-        if (acquired === 1) {
-          break;
-        }
-        if (now() - startedAt >= maxWaitMs) {
-          throw new SourceBusyError('limiter_timeout');
-        }
-        await sleep(POLL_MS + Math.random() * POLL_JITTER_MS);
+      return (await acquireSlot()).release;
+    },
+    // Keeps the slot alive for calls that outlast slotTtlMs; released in finally.
+    async withSlot<T>(run: () => Promise<T>): Promise<T> {
+      const { slotId, release } = await acquireSlot();
+      const timer = setInterval(() => {
+        redis
+          .eval(RENEW_SCRIPT, 1, redisKey, now(), slotId, options.slotTtlMs)
+          .catch(() => undefined);
+      }, options.slotTtlMs / RENEW_INTERVAL_DIVISOR);
+      try {
+        return await run();
+      } finally {
+        clearInterval(timer);
+        await release();
       }
-      return async () => {
-        await redis.zrem(redisKey, slotId);
-      };
     },
   };
 }
