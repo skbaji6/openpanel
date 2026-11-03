@@ -192,6 +192,79 @@ function campaignJob(opts: CampaignJobOptions): MaterializeJob {
 
 const sorted = (ids: Iterable<string>) => [...new Set(ids)].sort();
 
+function wrapMembers(
+  inner: AudienceSource,
+  change: (
+    req: Parameters<AudienceSource['members']>[0],
+    page: Awaited<ReturnType<AudienceSource['members']>>
+  ) => Awaited<ReturnType<AudienceSource['members']>>
+): AudienceSource {
+  return {
+    ...inner,
+    members: async (req) => change(req, await inner.members(req)),
+  };
+}
+
+function snapshotJob(
+  audienceId: string,
+  scratch: { id: string; token: string },
+  snapshotVersion: number
+): MaterializeJob {
+  return {
+    ...campaignJob({ audienceId, campaign: scratch }),
+    jobId: audienceId,
+    target: { kind: 'snapshot', audienceId, snapshotVersion },
+  };
+}
+
+async function snapshotIds(
+  audienceId: string,
+  snapshotVersion: number
+): Promise<string[]> {
+  const rows = await sql.$queryRawUnsafe<{ profile_id: string }[]>(
+    `SELECT profile_id FROM marketing.audience_snapshot_ids
+     WHERE audience_id = $1::uuid AND snapshot_version = $2 ORDER BY profile_id`,
+    audienceId,
+    snapshotVersion
+  );
+  return rows.map((row) => row.profile_id);
+}
+
+// The source goes down once the first members page is committed.
+function downAfterFirstPage(job: MaterializeJob, members: FakeMember[]) {
+  let down = false;
+  const source = createFakeSource({ members, down: () => down });
+  const failing: MaterializeJob = {
+    ...job,
+    saveProgress: async (tx, next, inserted) => {
+      down =
+        next !== 'done' && next.phase === 'members' && next.cursor !== null;
+      return await job.saveProgress(tx, next, inserted);
+    },
+  };
+  return {
+    source,
+    failing,
+    recover: () => {
+      down = false;
+    },
+  };
+}
+
+const idNotInSizes = (calls: { filter?: FilterTree }[]) =>
+  calls.map((call) => {
+    const filter = call.filter;
+    if (!(filter && 'children' in filter)) {
+      return 0;
+    }
+    const idCondition = filter.children.find(
+      (child) => 'dimension' in child && child.dimension === 'id'
+    );
+    return idCondition && 'values' in idCondition
+      ? idCondition.values.length
+      : 0;
+  });
+
 describe('runMaterialization', () => {
   beforeAll(async () => {
     await migrate();
@@ -269,20 +342,6 @@ describe('runMaterialization', () => {
     });
 
     it('40 excludes are sent as id not_in, 1,500 are subtracted in Postgres', async () => {
-      const notInSizes = (calls: { filter?: FilterTree }[]) =>
-        calls.map((call) => {
-          const filter = call.filter;
-          if (!(filter && 'children' in filter)) {
-            return 0;
-          }
-          const idCondition = filter.children.find(
-            (child) => 'dimension' in child && child.dimension === 'id'
-          );
-          return idCondition && 'values' in idCondition
-            ? idCondition.values.length
-            : 0;
-        });
-
       for (const excludes of [40, 1500]) {
         await resetMarketingTables();
         const audienceId = await insertAudience();
@@ -300,7 +359,9 @@ describe('runMaterialization', () => {
           (call) => call.method === 'members'
         );
         const pushed = excludes === 40 ? 40 : 0;
-        expect(notInSizes(memberCalls)).toEqual(memberCalls.map(() => pushed));
+        expect(idNotInSizes(memberCalls)).toEqual(
+          memberCalls.map(() => pushed)
+        );
         const ids = await recipientIds(campaign.id);
         expect(ids).toHaveLength(MATCHING - excludes);
         expect(ids.some((id) => excludedIds.includes(id))).toBe(false);
@@ -469,7 +530,15 @@ describe('runMaterialization', () => {
       const audienceId = await insertAudience();
       const campaign = await insertCampaign({ audienceId });
       await addIds(audienceId, 'exclude', [proId(1)]);
-      const source = createFakeSource({ members: proMembers(50) });
+      const fake = createFakeSource({ members: proMembers(50) });
+      const fields: string[] = [];
+      const source: AudienceSource = {
+        ...fake,
+        members: (req) => {
+          fields.push(req.fields);
+          return fake.members(req);
+        },
+      };
 
       await runMaterialization(
         { sql, source },
@@ -489,6 +558,34 @@ describe('runMaterialization', () => {
         }
       }
       expect(await recipientIds(campaign.id)).toHaveLength(49);
+      expect(fields.length).toBeGreaterThan(0);
+      expect(fields.every((field) => field === 'id')).toBe(true);
+    });
+
+    it('more than 1,000 staged excludes from the list and the exclude filter push nothing and are still subtracted', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId });
+      // 980 listed plus 30 churned, 9 of them listed too: 1,001 distinct.
+      const listed = range(980, 2001).map(proId);
+      await addIds(audienceId, 'exclude', listed);
+      const source = createFakeSource({ members: proMembers() });
+
+      await runMaterialization(
+        { sql, source },
+        campaignJob({ audienceId, campaign, excludeFilter: CHURNED })
+      );
+
+      expect(idNotInSizes(source.calls).every((size) => size === 0)).toBe(true);
+      const excluded = new Set([
+        ...listed,
+        ...range(30).map((n) => proId(n * 100)),
+      ]);
+      expect(excluded.size).toBe(1001);
+      expect(await recipientIds(campaign.id)).toEqual(
+        range(MATCHING)
+          .map(proId)
+          .filter((id) => !excluded.has(id))
+      );
     });
   });
 
@@ -595,27 +692,18 @@ describe('runMaterialization', () => {
     it('the source going down after page 1 propagates SourceUnavailableError and leaves page 1 committed; a rerun completes', async () => {
       const audienceId = await insertAudience();
       const campaign = await insertCampaign({ audienceId });
-      let down = false;
-      const source = createFakeSource({
-        members: proMembers(),
-        down: () => down,
-      });
       const job = campaignJob({ audienceId, campaign });
-      const failing: MaterializeJob = {
-        ...job,
-        saveProgress: async (tx, next, inserted) => {
-          down =
-            next !== 'done' && next.phase === 'members' && next.cursor !== null;
-          return await job.saveProgress(tx, next, inserted);
-        },
-      };
+      const { source, failing, recover } = downAfterFirstPage(
+        job,
+        proMembers()
+      );
 
       await expect(
         runMaterialization({ sql, source }, failing)
       ).rejects.toBeInstanceOf(SourceUnavailableError);
       expect(await recipientIds(campaign.id)).toHaveLength(PAGE_SIZE);
 
-      down = false;
+      recover();
       const result = await runMaterialization(
         { sql, source },
         { ...job, progress: await savedProgress(campaign.id) }
@@ -624,6 +712,107 @@ describe('runMaterialization', () => {
       expect(result).toEqual({ status: 'done', total: MATCHING });
     });
 
+    it('a crash in an exclusions page with a non-null cursor rolls that page back; a rerun resumes the exclude filter', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId });
+      const source = createFakeSource({ members: proMembers() });
+      const job = campaignJob({ audienceId, campaign, excludeFilter: CHURNED });
+      let exclusionSaves = 0;
+      const crashing: MaterializeJob = {
+        ...job,
+        saveProgress: async (tx, next, inserted) => {
+          const saved = await job.saveProgress(tx, next, inserted);
+          if (next !== 'done' && next.phase === 'exclusions') {
+            exclusionSaves += 1;
+          }
+          if (exclusionSaves === 2) {
+            throw new Error('crash');
+          }
+          return saved;
+        },
+      };
+
+      await expect(
+        runMaterialization({ sql, source, pageSize: 10 }, crashing)
+      ).rejects.toThrow('crash');
+      expect(await stagingCount()).toBe(10);
+      const progress = await savedProgress(campaign.id);
+      expect(progress).toEqual({ phase: 'exclusions', cursor: proId(1000) });
+
+      await runMaterialization({ sql, source }, { ...job, progress });
+
+      expect(await recipientIds(campaign.id)).toEqual(
+        range(MATCHING)
+          .filter((n) => n % 100 !== 0)
+          .map(proId)
+      );
+      expect(await stagingCount()).toBe(0);
+    });
+
+    it('a stolen claim between page 1 and page 2 rolls page 2 back and returns lost_claim', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId });
+      const fake = createFakeSource({ members: proMembers() });
+      const stealing: AudienceSource = {
+        ...fake,
+        members: async (req) => {
+          if (req.cursor) {
+            await sql.$executeRawUnsafe(
+              'UPDATE marketing.campaigns SET materialize_lease_token = gen_random_uuid() WHERE id = $1::uuid',
+              campaign.id
+            );
+          }
+          return await fake.members(req);
+        },
+      };
+
+      const result = await runMaterialization(
+        { sql, source: stealing },
+        campaignJob({ audienceId, campaign })
+      );
+
+      expect(result).toEqual({ status: 'lost_claim' });
+      expect(await recipientIds(campaign.id)).toEqual(
+        range(PAGE_SIZE).map(proId)
+      );
+      expect(await savedProgress(campaign.id)).toEqual({
+        phase: 'members',
+        cursor: proId(PAGE_SIZE),
+      });
+    });
+
+    it('a rerun with skipPrevious does not mark its own earlier rows already_received', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId, key: 'diwali' });
+      const source = createFakeSource({ members: proMembers() });
+      const job = campaignJob({
+        audienceId,
+        campaign,
+        key: 'diwali',
+        skipPrevious: true,
+      });
+      let checks = 0;
+      await runMaterialization(
+        {
+          sql,
+          source,
+          shouldStop: async () => {
+            checks += 1;
+            return checks === 2;
+          },
+        },
+        job
+      );
+
+      await runMaterialization(
+        { sql, source },
+        { ...job, progress: await savedProgress(campaign.id) }
+      );
+
+      const rows = await recipients(campaign.id);
+      expect(rows).toHaveLength(MATCHING);
+      expect(rows.every((row) => row.status === 'pending')).toBe(true);
+    });
     it('shouldStop true between pages returns stopped', async () => {
       const audienceId = await insertAudience();
       const campaign = await insertCampaign({ audienceId });
@@ -651,20 +840,73 @@ describe('runMaterialization', () => {
     });
   });
 
-  describe('page validation', () => {
-    function wrapMembers(
-      inner: AudienceSource,
-      change: (
-        req: Parameters<AudienceSource['members']>[0],
-        page: Awaited<ReturnType<AudienceSource['members']>>
-      ) => Awaited<ReturnType<AudienceSource['members']>>
-    ): AudienceSource {
-      return {
-        ...inner,
-        members: async (req) => change(req, await inner.members(req)),
-      };
-    }
+  describe('fresh restarts', () => {
+    it('a snapshot restarted from null progress drops ids an earlier attempt committed that the filter no longer matches', async () => {
+      const audienceId = await insertAudience();
+      const scratch = await insertCampaign({ audienceId });
+      const job = snapshotJob(audienceId, scratch, 4);
+      const { source, failing } = downAfterFirstPage(job, proMembers());
 
+      await expect(
+        runMaterialization({ sql, source }, failing)
+      ).rejects.toBeInstanceOf(SourceUnavailableError);
+      expect(await snapshotIds(audienceId, 4)).toContain(proId(1));
+
+      const changed = createFakeSource({ members: proMembers().slice(1) });
+      const result = await runMaterialization({ sql, source: changed }, job);
+
+      expect(result).toEqual({ status: 'done', total: MATCHING - 1 });
+      expect(await snapshotIds(audienceId, 4)).not.toContain(proId(1));
+    });
+
+    it('a campaign restarted from null progress drops recipients an earlier attempt committed that the filter no longer matches', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId });
+      const job = campaignJob({ audienceId, campaign });
+      const { source, failing } = downAfterFirstPage(job, proMembers());
+
+      await expect(
+        runMaterialization({ sql, source }, failing)
+      ).rejects.toBeInstanceOf(SourceUnavailableError);
+      expect(await recipientIds(campaign.id)).toContain(proId(1));
+
+      const changed = createFakeSource({ members: proMembers().slice(1) });
+      const result = await runMaterialization({ sql, source: changed }, job);
+
+      expect(result).toEqual({ status: 'done', total: MATCHING - 1 });
+      expect(await recipientIds(campaign.id)).not.toContain(proId(1));
+    });
+
+    it('a fresh restart refuses a campaign that already has a sent recipient', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId });
+      await sql.$executeRawUnsafe(
+        `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, status)
+         VALUES ($1::uuid, $2, $3, 'sent')`,
+        campaign.id,
+        proId(1),
+        PROJECT
+      );
+      const source = createFakeSource({ members: proMembers(5) });
+
+      await expect(
+        runMaterialization(
+          { sql, source },
+          campaignJob({ audienceId, campaign })
+        )
+      ).rejects.toThrow('materialisation restart after sending began');
+      expect(await recipients(campaign.id)).toEqual([
+        {
+          profile_id: proId(1),
+          status: 'sent',
+          reason: null,
+          project_id: PROJECT,
+        },
+      ]);
+    });
+  });
+
+  describe('page validation', () => {
     it('a page with an id repeated from the previous page is absorbed', async () => {
       const audienceId = await insertAudience();
       const campaign = await insertCampaign({ audienceId });
@@ -685,6 +927,31 @@ describe('runMaterialization', () => {
       expect(await recipientIds(campaign.id)).toEqual(
         range(MATCHING).map(proId)
       );
+    });
+
+    it('a cursor cycle A, B, A is a SourceProtocolError', async () => {
+      const audienceId = await insertAudience();
+      const campaign = await insertCampaign({ audienceId });
+      const pages: Record<string, { id: string; next: string }> = {
+        start: { id: 'a', next: 'a' },
+        a: { id: 'b', next: 'b' },
+        b: { id: 'c', next: 'a' },
+      };
+      const cycling: AudienceSource = {
+        ...createFakeSource({ members: [] }),
+        members: async (req) => {
+          const page = pages[req.cursor ?? 'start'] ?? { id: 'z', next: 'z' };
+          return { members: [{ id: page.id }], nextCursor: page.next };
+        },
+      };
+
+      const error = await runMaterialization(
+        { sql, source: cycling },
+        campaignJob({ audienceId, campaign })
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(SourceProtocolError);
+      expect((error as Error).message).toBe('cursor_not_advancing');
     });
 
     it('a 257-character id and a non-advancing cursor are SourceProtocolErrors', async () => {

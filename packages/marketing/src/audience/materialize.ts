@@ -37,7 +37,7 @@ export interface MaterializeJob {
   filter: FilterTree | null;
   excludeFilter: FilterTree | null;
   target: MaterializeTarget;
-  // null, or exclusions with a null cursor, is a fresh start: staging rows of earlier attempts are wiped.
+  // null, or exclusions with a null cursor, is a fresh start: the target and staging rows of earlier attempts are wiped.
   progress: MaterializeProgress | null;
   saveProgress(
     tx: Queryable,
@@ -131,6 +131,35 @@ function writeCandidates(
   );
 }
 
+const SENDING_STARTED = `SELECT 1 FROM marketing.campaign_recipients
+  WHERE campaign_id = $1::uuid AND status IN ('sending', 'sent', 'uncertain') LIMIT 1`;
+
+// A restart rebuilds the target, so rows of an earlier attempt cannot outlive a definition change.
+async function clearTarget(
+  tx: Queryable,
+  target: MaterializeTarget
+): Promise<void> {
+  if (target.kind === 'snapshot') {
+    await tx.$executeRawUnsafe(
+      'DELETE FROM marketing.audience_snapshot_ids WHERE audience_id = $1::uuid AND snapshot_version = $2::int',
+      target.audienceId,
+      target.snapshotVersion
+    );
+    return;
+  }
+  const started = await tx.$queryRawUnsafe<unknown[]>(
+    SENDING_STARTED,
+    target.campaignId
+  );
+  if (started.length > 0) {
+    throw new Error('materialisation restart after sending began');
+  }
+  await tx.$executeRawUnsafe(
+    'DELETE FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid',
+    target.campaignId
+  );
+}
+
 async function countTarget(
   tx: Queryable,
   target: MaterializeTarget
@@ -187,14 +216,27 @@ export async function runMaterialization(
     }, PAGE_TRANSACTION);
   }
 
-  async function fetchPage(filter: FilterTree, cursor: string | null) {
+  // Per stream: the exclude filter and the filter page through different id sequences.
+  const seenCursors = {
+    exclusions: new Set<string>(),
+    members: new Set<string>(),
+  };
+
+  async function fetchPage(
+    filter: FilterTree,
+    cursor: string | null,
+    seen: Set<string>
+  ) {
+    if (cursor !== null) {
+      seen.add(cursor);
+    }
     const page = await deps.source.members({
       filter,
       ...(cursor === null ? {} : { cursor }),
       limit: pageSize,
       fields: 'id',
     });
-    if (cursor !== null && page.nextCursor === cursor) {
+    if (page.nextCursor !== null && seen.has(page.nextCursor)) {
       throw new SourceProtocolError('cursor_not_advancing');
     }
     const ids = page.members.map((member) => member.id);
@@ -223,13 +265,14 @@ export async function runMaterialization(
     cursor: string | null
   ): Promise<MaterializeProgress> {
     const page = job.excludeFilter
-      ? await fetchPage(job.excludeFilter, cursor)
+      ? await fetchPage(job.excludeFilter, cursor, seenCursors.exclusions)
       : null;
     const next: MaterializeProgress = page?.nextCursor
       ? { phase: 'exclusions', cursor: page.nextCursor }
       : afterExclusions;
     await commit(next, async (tx) => {
       if (cursor === null) {
+        await clearTarget(tx, target);
         await tx.$executeRawUnsafe(WIPE_STAGING, job.jobId);
         await tx.$executeRawUnsafe(
           STAGE_EXCLUDE_LIST,
@@ -255,7 +298,7 @@ export async function runMaterialization(
       job.filter,
       await loadPushableExcludes()
     );
-    const page = await fetchPage(filter, cursor);
+    const page = await fetchPage(filter, cursor, seenCursors.members);
     const next: MaterializeProgress = page.nextCursor
       ? { phase: 'members', cursor: page.nextCursor }
       : { phase: 'includes', cursor: null };
@@ -285,12 +328,13 @@ export async function runMaterialization(
         if (!fromSnapshot) {
           throw new Error('snapshot_copy phase without a snapshot');
         }
-        await commit('done', (tx) =>
-          writeCandidates(tx, job, SNAPSHOT_IDS, [
+        await commit('done', async (tx) => {
+          await clearTarget(tx, target);
+          return await writeCandidates(tx, job, SNAPSHOT_IDS, [
             fromSnapshot.audienceId,
             fromSnapshot.snapshotVersion,
-          ])
-        );
+          ]);
+        });
         return 'done';
       }
       default:
@@ -304,11 +348,7 @@ export async function runMaterialization(
       return;
     }
     await deps.sql.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe(
-        'DELETE FROM marketing.audience_snapshot_ids WHERE audience_id = $1::uuid AND snapshot_version = $2::int',
-        target.audienceId,
-        target.snapshotVersion
-      );
+      await clearTarget(tx, target);
       await tx.$executeRawUnsafe(WIPE_STAGING, job.jobId);
       if (!(await job.saveProgress(tx, FRESH_START, 0))) {
         throw new LostClaim();
