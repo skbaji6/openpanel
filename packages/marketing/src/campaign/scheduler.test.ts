@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
-import { resetMarketingTables } from '../db/test-helpers';
+import { truncateMarketingTables } from '../db/test-helpers';
 import { runScheduleTick } from './scheduler';
 
 const START = new Date('2026-11-03T10:00:00.000Z');
@@ -72,7 +72,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   now = START;
-  await resetMarketingTables();
+  await truncateMarketingTables(['campaigns', 'audiences']);
 });
 
 describe('runScheduleTick', () => {
@@ -153,16 +153,26 @@ describe('runScheduleTick', () => {
   });
 
   it('two runScheduleTick calls in parallel start each due campaign once', async () => {
-    const ids: string[] = [];
-    for (let i = 0; i < PARALLEL_PROJECTS; i++) {
-      ids.push(await insertCampaign({ projectId: `p${i}` }));
-    }
+    await sql.$executeRawUnsafe(
+      `WITH a AS (
+         INSERT INTO marketing.audiences (id, project_id, name, mode, created_by, version)
+         SELECT gen_random_uuid(), 'p' || n, 'a', 'dynamic', 'u1', $2 FROM generate_series(1, $1::int) AS n
+         RETURNING id, project_id)
+       INSERT INTO marketing.campaigns (id, project_id, name, state, channel, template, audience_id, send_kind,
+         send_at, if_late_minutes, confirm_threshold, created_by)
+       SELECT gen_random_uuid(), a.project_id, 'c', 'scheduled', 'push', '{}'::jsonb, a.id, 'scheduled', $3, 60,
+         5000, 'u1' FROM a`,
+      PARALLEL_PROJECTS,
+      AUDIENCE_VERSION,
+      now
+    );
     const results = await Promise.all([tick(), tick(), tick()]);
     const started = results.reduce((sum, result) => sum + result.started, 0);
     expect(started).toBe(PARALLEL_PROJECTS);
-    for (const id of ids) {
-      expect((await campaign(id))?.state).toBe('running');
-    }
+    const states = await sql.$queryRawUnsafe<{ state: string; n: number }[]>(
+      'SELECT state, count(*)::int AS n FROM marketing.campaigns GROUP BY state'
+    );
+    expect(states).toEqual([{ state: 'running', n: PARALLEL_PROJECTS }]);
   });
 
   it('two due campaigns of one project: one running, one still scheduled', async () => {

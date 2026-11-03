@@ -6,6 +6,7 @@ const DEFAULT_BATCH = 20;
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 
 // Late once a whole minute past the ifLate window, so ifLate 0 still allows a claim within the due minute.
+// That "due minute" assumes send_at is minute-aligned, as send_at_local (no seconds) makes it.
 // A queued start (send_kind 'now') is never late.
 const CLAIM_DUE = `SELECT c.id::text, l.late
   FROM marketing.campaigns c

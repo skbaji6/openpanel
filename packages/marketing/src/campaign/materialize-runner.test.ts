@@ -5,6 +5,7 @@ import {
   describe,
   expect,
   it,
+  spyOn,
 } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
@@ -35,6 +36,8 @@ const MAX_PROTOCOL_ATTEMPTS = 5;
 const PRO: FilterTree = { dimension: 'plan', op: 'eq', values: ['pro'] };
 const CFG = { sourceConcurrency: 4 } as MarketingConfig;
 const POLL_STEP_MS = 10;
+const AUTH_RETRY_SECONDS = 300;
+const CONCURRENT_TIMEOUT_MS = 10_000;
 
 const redis = getRedisCache();
 let now = START;
@@ -80,13 +83,46 @@ function gate() {
   return { open, opened };
 }
 
-const tick = (source: AudienceSource | null) =>
+async function insertSourceRow() {
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.audience_sources (project_id, kind, base_url) VALUES ($1, 'http', 'https://x.test')`,
+    PROJECT
+  );
+}
+
+async function sourceStatus(): Promise<string | undefined> {
+  const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
+    'SELECT status FROM marketing.audience_sources WHERE project_id = $1',
+    PROJECT
+  );
+  return row?.status;
+}
+
+async function waitForLockWait() {
+  const deadline = Date.now() + CONCURRENT_TIMEOUT_MS;
+  for (;;) {
+    const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE datname = current_database() AND wait_event_type = 'Lock'`
+    );
+    if ((row?.n ?? 0) > 0) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error('the page commit never waited on the cancel');
+    }
+    await sleep(POLL_STEP_MS);
+  }
+}
+
+const tick = (source: AudienceSource | null, stopping?: () => boolean) =>
   runMaterializeTick({
     sql,
     sources: resolverOf(source),
     redis,
     cfg: CFG,
     now: () => now,
+    stopping,
   });
 
 async function insertCampaign(): Promise<string> {
@@ -306,8 +342,118 @@ describe('runMaterializeTick', () => {
     expect(await campaign(id)).toMatchObject({
       state: 'cancelled',
       materialize_state: 'in_progress',
+      materialize_lease_token: null,
     });
     expect(await tick(fake())).toEqual({ ran: 0 });
+  });
+
+  it('stop mid-run returns after the current page and a later run resumes from saved progress', async () => {
+    const id = await insertCampaign();
+    let stopping = false;
+    const first = hooked(fake(), (call) => {
+      if (call === 2) {
+        stopping = true;
+      }
+    });
+    expect(await tick(first, () => stopping)).toEqual({ ran: 1 });
+    expect(first.calls()).toBe(2);
+    expect(await recipients(id)).toHaveLength(2 * PAGE_SIZE);
+    expect(await campaign(id)).toMatchObject({
+      state: 'running',
+      materialize_state: 'in_progress',
+      materialize_lease_token: null,
+    });
+
+    const second = hooked(fake(), () => undefined);
+    expect(await tick(second)).toEqual({ ran: 1 });
+    expect(second.calls()).toBe(1);
+    expect(await recipients(id, 'pending')).toEqual(proIds());
+    expect((await campaign(id)).materialize_state).toBe('done');
+  });
+
+  it('a page commit that waits on a concurrent cancel leaves no pending recipients', async () => {
+    const id = await insertCampaign();
+    const locked = gate();
+    const release = gate();
+    let cancelling: Promise<unknown> = Promise.resolve();
+    const source = hooked(fake(), async (call) => {
+      if (call !== 2) {
+        return;
+      }
+      cancelling = sql.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(
+            `UPDATE marketing.campaigns SET state = 'cancelled', finished_at = $2 WHERE id = $1::uuid`,
+            id,
+            now
+          );
+          locked.open();
+          await release.opened;
+          await tx.$executeRawUnsafe(
+            `UPDATE marketing.campaign_recipients SET status = 'skipped', reason = 'cancelled'
+             WHERE campaign_id = $1::uuid AND status IN ('pending', 'leased')`,
+            id
+          );
+        },
+        { timeout: CONCURRENT_TIMEOUT_MS }
+      );
+      await locked.opened;
+    });
+    const run = tick(source);
+    await waitForLockWait();
+    release.open();
+    await cancelling;
+    expect(await run).toEqual({ ran: 1 });
+    expect(await recipients(id, 'pending')).toEqual([]);
+    expect(await recipients(id, 'skipped')).toHaveLength(PAGE_SIZE);
+    expect((await campaign(id)).state).toBe('cancelled');
+  });
+
+  it('a source failure after a cancel records no retry and leaves the source status alone', async () => {
+    const id = await insertCampaign();
+    await insertSourceRow();
+    const source = hooked(fake(), async (call) => {
+      if (call === 2) {
+        await sql.$executeRawUnsafe(
+          `UPDATE marketing.campaigns SET state = 'cancelled' WHERE id = $1::uuid`,
+          id
+        );
+        throw new SourceAuthError('http_401');
+      }
+    });
+    expect(await tick(source)).toEqual({ ran: 1 });
+    expect(await campaign(id)).toMatchObject({
+      materialize_error: null,
+      materialize_retry_at: null,
+    });
+    expect(await sourceStatus()).toBe('unknown');
+  });
+
+  it('unexpected errors count toward the attempt limit and are rethrown', async () => {
+    const id = await insertCampaign();
+    const broken = hooked(fake(), (call) => {
+      if (call > 1) {
+        throw new Error('boom');
+      }
+    });
+    await expect(tick(broken)).rejects.toThrow('boom');
+    expect(await campaign(id)).toMatchObject({
+      state: 'running',
+      materialize_error: 'internal_error',
+      materialize_attempts: 1,
+    });
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.campaigns SET materialize_attempts = $2 WHERE id = $1::uuid',
+      id,
+      MAX_PROTOCOL_ATTEMPTS - 1
+    );
+    advance(RETRY_SECONDS);
+    await expect(tick(broken)).rejects.toThrow('boom');
+    expect(await campaign(id)).toMatchObject({
+      state: 'failed',
+      state_reason: 'materialize_failed',
+      materialize_state: 'failed',
+    });
   });
 
   it('a cancel between pages is noticed before the next page is fetched', async () => {
@@ -343,6 +489,7 @@ describe('runMaterializeTick', () => {
     });
     expect(result).toEqual({ ran: 1 });
     expect(source.calls()).toBe(0);
+    expect((await campaign(id)).materialize_lease_token).toBeNull();
   });
 
   it('five protocol errors fail the campaign with materialize_failed', async () => {
@@ -377,25 +524,36 @@ describe('runMaterializeTick', () => {
 
   it('a 401 sets source_auth_failed on the source row', async () => {
     const id = await insertCampaign();
-    await sql.$executeRawUnsafe(
-      `INSERT INTO marketing.audience_sources (project_id, kind, base_url) VALUES ($1, 'http', 'https://x.test')`,
-      PROJECT
-    );
+    await insertSourceRow();
     const denied = hooked(fake(), () => {
       throw new SourceAuthError('http_401');
     });
-    expect(await tick(denied)).toEqual({ ran: 1 });
-    expect(await campaign(id)).toMatchObject({
-      state: 'running',
-      materialize_error: 'source_auth_failed',
-      materialize_attempts: 0,
-      materialize_retry_at: new Date(now.getTime() + RETRY_SECONDS * SECOND_MS),
-    });
-    const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
-      'SELECT status FROM marketing.audience_sources WHERE project_id = $1',
-      PROJECT
-    );
-    expect(row?.status).toBe('source_auth_failed');
+    const logged = spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect(await tick(denied)).toEqual({ ran: 1 });
+      expect(await campaign(id)).toMatchObject({
+        state: 'running',
+        materialize_error: 'source_auth_failed',
+        materialize_attempts: 0,
+        materialize_retry_at: new Date(
+          now.getTime() + AUTH_RETRY_SECONDS * SECOND_MS
+        ),
+      });
+      expect(await sourceStatus()).toBe('source_auth_failed');
+
+      advance(RETRY_SECONDS);
+      expect(await tick(denied)).toEqual({ ran: 0 });
+      advance(AUTH_RETRY_SECONDS);
+      expect(await tick(denied)).toEqual({ ran: 1 });
+      expect(logged).toHaveBeenCalledTimes(1);
+    } finally {
+      logged.mockRestore();
+    }
+
+    advance(AUTH_RETRY_SECONDS);
+    expect(await tick(fake())).toEqual({ ran: 1 });
+    expect((await campaign(id)).materialize_state).toBe('done');
+    expect(await sourceStatus()).toBe('ok');
   });
 
   it('a project without an http source waits with source_not_http', async () => {

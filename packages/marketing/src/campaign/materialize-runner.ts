@@ -21,7 +21,10 @@ import { failCampaignIn } from './service';
 
 const LEASE_MS = 60_000;
 const RETRY_MS = 30_000;
-const MAX_PROTOCOL_ATTEMPTS = 5;
+// Bad credentials stay bad until an operator fixes them, so the campaign asks the source less often.
+const AUTH_RETRY_MS = 300_000;
+const MAX_ATTEMPTS = 5;
+const LOG_PREFIX = 'marketing materialisation:';
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 
 // Only the state the claim leaves behind matters to the dispatcher: it claims recipients
@@ -53,13 +56,18 @@ const SET_COUNTERS = `INSERT INTO marketing.campaign_counters (campaign_id, queu
   FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid
   ON CONFLICT (campaign_id) DO UPDATE SET queued = EXCLUDED.queued,
     skipped = marketing.campaign_counters.skipped + EXCLUDED.skipped, updated_at = EXCLUDED.updated_at`;
+const SOURCE_OK = `UPDATE marketing.audience_sources SET status = 'ok', status_at = $2
+  WHERE project_id = $1 AND status IS DISTINCT FROM 'ok'`;
+// Fenced on the token: a run that stopped hands the campaign straight to the next claimer.
+const RELEASE_LEASE = `UPDATE marketing.campaigns SET materialize_lease_token = NULL, materialize_lease_until = NULL
+  WHERE id = $1::uuid AND materialize_lease_token = $2::uuid`;
 const IS_ACTIVE = `SELECT 1 FROM marketing.campaigns WHERE id = $1::uuid AND state IN ('running', 'paused')`;
-// Releases the lease so the retry is claimable at once when due; the attempt counts only for protocol errors.
+// Releases the lease so the retry is claimable at once when due; transient source errors spend no attempt.
 const RETRY_LATER = `UPDATE marketing.campaigns SET materialize_retry_at = $3, materialize_error = $4,
     materialize_attempts = materialize_attempts + $5::int,
     materialize_state = CASE WHEN materialize_attempts + $5::int >= $6::int THEN 'failed' ELSE materialize_state END,
     materialize_lease_token = NULL, materialize_lease_until = NULL, updated_at = $7
-  WHERE id = $1::uuid AND materialize_lease_token = $2::uuid
+  WHERE id = $1::uuid AND materialize_lease_token = $2::uuid AND state IN ('running', 'paused')
   RETURNING materialize_state`;
 const MARK_FAILED = `UPDATE marketing.campaigns SET materialize_state = 'failed', materialize_error = $3,
     materialize_lease_token = NULL, materialize_lease_until = NULL, updated_at = $4
@@ -90,6 +98,8 @@ interface RunnerDeps {
   redis: Redis;
   cfg: MarketingConfig;
   now: () => Date;
+  // Shutdown: the run stops after the page in flight instead of finishing the whole audience.
+  stopping?: () => boolean;
 }
 
 const later = (now: Date, ms: number) => new Date(now.getTime() + ms);
@@ -140,6 +150,7 @@ async function buildJob(
         );
         if (done === 1) {
           await tx.$executeRawUnsafe(SET_COUNTERS, claim.id, now);
+          await tx.$executeRawUnsafe(SOURCE_OK, claim.project_id, now);
         }
         return done === 1;
       }
@@ -165,24 +176,40 @@ async function retryLater(
   countsAsAttempt: boolean
 ): Promise<void> {
   const now = deps.now();
-  await deps.sql.$transaction(async (tx) => {
+  const isAuth = code === 'source_auth_failed';
+  const newlyAuthFailed = await deps.sql.$transaction(async (tx) => {
     const [row] = await tx.$queryRawUnsafe<{ materialize_state: string }[]>(
       RETRY_LATER,
       claim.id,
       token,
-      later(now, RETRY_MS),
+      later(now, isAuth ? AUTH_RETRY_MS : RETRY_MS),
       code,
       countsAsAttempt ? 1 : 0,
-      MAX_PROTOCOL_ATTEMPTS,
+      MAX_ATTEMPTS,
       now
     );
-    if (row?.materialize_state === 'failed') {
+    if (!row) {
+      return false;
+    }
+    if (row.materialize_state === 'failed') {
       await failCampaignIn(tx, claim.id, 'materialize_failed', now);
     }
-    if (code === 'source_auth_failed') {
-      await tx.$executeRawUnsafe(SOURCE_AUTH_FAILED, claim.project_id, now);
-    }
+    return (
+      isAuth &&
+      (await tx.$executeRawUnsafe(
+        SOURCE_AUTH_FAILED,
+        claim.project_id,
+        now
+      )) === 1
+    );
   }, TRANSACTION);
+  if (newlyAuthFailed) {
+    console.error(
+      LOG_PREFIX,
+      'audience source rejected the credentials, campaigns wait:',
+      claim.project_id
+    );
+  }
 }
 
 async function failMaterialization(
@@ -234,7 +261,7 @@ async function materialize(
     return;
   }
   try {
-    await runMaterialization(
+    const result = await runMaterialization(
       {
         sql: deps.sql,
         source: withCampaignLane(source, {
@@ -243,11 +270,15 @@ async function materialize(
           sourceConcurrency: deps.cfg.sourceConcurrency,
         }),
         shouldStop: async () =>
+          Boolean(deps.stopping?.()) ||
           (await deps.sql.$queryRawUnsafe<unknown[]>(IS_ACTIVE, claim.id))
             .length === 0,
       },
       await buildJob(deps, claim, token)
     );
+    if (result.status !== 'done') {
+      await deps.sql.$executeRawUnsafe(RELEASE_LEASE, claim.id, token);
+    }
   } catch (error) {
     if (error instanceof RestartAfterSendingError) {
       await failMaterialization(
@@ -259,16 +290,17 @@ async function materialize(
       return;
     }
     const code = retryCode(error);
-    if (!code) {
-      throw error;
-    }
+    // Unclassified errors (a bug, the database) spend attempts like protocol errors, so they cannot loop forever.
     await retryLater(
       deps,
       claim,
       token,
-      code,
-      error instanceof SourceProtocolError
+      code ?? 'internal_error',
+      code === null || error instanceof SourceProtocolError
     );
+    if (code === null) {
+      throw error;
+    }
   }
 }
 

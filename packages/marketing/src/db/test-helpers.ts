@@ -17,6 +17,13 @@ async function assertTestDatabase(): Promise<void> {
   }
 }
 
+// Faster than a full reset for suites that touch few tables; CASCADE also empties tables that reference them.
+export async function truncateMarketingTables(tables: string[]): Promise<void> {
+  await assertTestDatabase();
+  const list = tables.map((table) => `marketing."${table}"`).join(', ');
+  await sql.$executeRawUnsafe(`TRUNCATE ${list} CASCADE`);
+}
+
 export async function resetMarketingTables(): Promise<void> {
   await assertTestDatabase();
   const tables = await sql.$queryRawUnsafe<{ tablename: string }[]>(

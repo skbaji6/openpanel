@@ -46,17 +46,18 @@ function secretsOf(cfg: MarketingConfig): string[] {
 }
 
 // Runs the task now and then intervalMs after each run ends, so runs never overlap; stop waits for the current one.
+// A long task can poll `stopping` to cut that wait short.
 function every(
   intervalMs: number,
   label: string,
   secrets: string[],
-  task: () => Promise<unknown>
+  task: (stopping: () => boolean) => Promise<unknown>
 ): Stoppable {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running: Promise<void> = Promise.resolve();
   const run = () => {
-    running = task()
+    running = task(() => stopped)
       .then(
         () => undefined,
         (error: unknown) => {
@@ -209,8 +210,15 @@ export async function startWorker(
       every(cfg.tickMs, 'campaign schedules', secrets, () =>
         runScheduleTick({ sql, now: () => new Date() })
       ),
-      every(cfg.tickMs, 'campaign materialisation', secrets, () =>
-        runMaterializeTick({ sql, sources, redis, cfg, now: () => new Date() })
+      every(cfg.tickMs, 'campaign materialisation', secrets, (stopping) =>
+        runMaterializeTick({
+          sql,
+          sources,
+          redis,
+          cfg,
+          now: () => new Date(),
+          stopping,
+        })
       )
     );
 
