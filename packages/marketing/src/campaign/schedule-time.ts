@@ -37,7 +37,7 @@ function offsetAt(formatter: Intl.DateTimeFormat, instant: number) {
 }
 
 // Returns null for a malformed string, an unknown zone, or a wall time the zone skips.
-// An ambiguous (repeated) wall time resolves to whichever instant the two-pass offset lands on.
+// An ambiguous (repeated) wall time resolves to the earlier instant west of UTC (New York 01:30 is 05:30Z) and the later one east of it (Berlin 2026-10-25T02:30 is 01:30Z).
 export function zonedTimeToUtc(local: string, timeZone: string): Date | null {
   const match = LOCAL_TIME.exec(local);
   if (!(match && isTimeZone(timeZone))) {
