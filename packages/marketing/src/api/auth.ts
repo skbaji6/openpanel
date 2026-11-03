@@ -61,7 +61,7 @@ export function authenticateDashboard(req: Request, proxySecret: string) {
   ) {
     throw new HttpError(403, 'csrf_header_required');
   }
-  return projectId;
+  return { projectId, userId };
 }
 
 async function verifySecret(secret: string, keyHash: string) {

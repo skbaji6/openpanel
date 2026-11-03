@@ -451,6 +451,7 @@ describe('personal data from an http audience source', () => {
       url,
       params: [],
       projectId: PROJECT,
+      userId: '',
       ip: '127.0.0.1',
     });
     expect(res?.status).toBe(200);

@@ -13,6 +13,7 @@ import {
 import { HttpError, json, MAX_BODY_BYTES, type Route } from './http';
 import { createRateLimiter } from './rate-limit';
 import { audienceSourceRoutes } from './routes-audience-source';
+import { audienceRoutes } from './routes-audiences';
 import { dashboardRoutes } from './routes-dashboard';
 import { syncRoutes } from './routes-sync';
 import { createUnsubscribeHandlers } from './unsubscribe';
@@ -107,14 +108,22 @@ export function createServer(deps: ServerDeps) {
     ...syncRoutes(sql),
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),
     ...(deps.redis && deps.sources
-      ? audienceSourceRoutes({
-          cfg,
-          sql,
-          redis: deps.redis,
-          resolver: deps.sources,
-          fetch: deps.sourceFetch,
-          now: deps.now,
-        })
+      ? [
+          ...audienceSourceRoutes({
+            cfg,
+            sql,
+            redis: deps.redis,
+            resolver: deps.sources,
+            fetch: deps.sourceFetch,
+            now: deps.now,
+          }),
+          ...audienceRoutes({
+            sql,
+            redis: deps.redis,
+            resolver: deps.sources,
+            now: deps.now,
+          }),
+        ]
       : []),
     {
       method: 'GET',
@@ -148,16 +157,20 @@ export function createServer(deps: ServerDeps) {
     return projectId;
   }
 
-  async function authenticate(route: Route, req: Request, ip: string) {
+  async function authenticate(
+    route: Route,
+    req: Request,
+    ip: string
+  ): Promise<{ projectId: string; userId: string }> {
     const usesApiKey =
       route.auth === 'apiKey' ||
       (route.auth === 'apiKeyOrDashboard' &&
         req.headers.has('x-marketing-api-key'));
     if (route.auth === 'public') {
-      return '';
+      return { projectId: '', userId: '' };
     }
     if (usesApiKey) {
-      return await authenticateApiKey(req, ip);
+      return { projectId: await authenticateApiKey(req, ip), userId: '' };
     }
     return authenticateDashboard(req, cfg.proxySecret);
   }
@@ -168,17 +181,19 @@ export function createServer(deps: ServerDeps) {
         const url = new URL(req.url);
         const { route, params } = matchRoute(routes, req.method, url.pathname);
         const ip = clientIp(req, server, cfg.trustProxy);
-        const projectId = await authenticate(route, req, ip);
-        return await route.handle({ req, url, params, projectId, ip });
+        const { projectId, userId } = await authenticate(route, req, ip);
+        return await route.handle({ req, url, params, projectId, userId, ip });
       } catch (error) {
         if (error instanceof URIError) {
           return json({ error: 'invalid_path' }, 400);
         }
         if (error instanceof HttpError) {
           return json(
-            error.issues
-              ? { error: error.code, issues: error.issues }
-              : { error: error.code },
+            {
+              error: error.code,
+              ...(error.issues && { issues: error.issues }),
+              ...(error.details && { details: error.details }),
+            },
             error.status
           );
         }

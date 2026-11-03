@@ -17,6 +17,8 @@ export interface RouteContext {
   params: string[];
   // Empty for public routes.
   projectId: string;
+  // Empty unless the route is authenticated as the dashboard.
+  userId: string;
   ip: string;
 }
 
