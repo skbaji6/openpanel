@@ -18,6 +18,7 @@ const MANY_EXCLUDES = 1500;
 const OVER_RESOLVE_LIMIT = 201;
 const OVER_PREVIEW_LIMIT = 51;
 const MAX_PREVIEW = 50;
+const PAGE_SIZE = 7;
 
 const members: FakeMember[] = Array.from({ length: MEMBER_COUNT }, (_, i) => ({
   id: `m${String(i).padStart(4, '0')}`,
@@ -56,11 +57,21 @@ describe('countAudience', () => {
   });
 
   it('count with includes overlapping the filter is approximate and an upper bound', async () => {
-    // m0000 is gold and hand-picked, so it is counted twice.
-    const result = await countAudience(source(), def({ includeCount: 2 }), now);
-    const actualSize = GOLD_COUNT + 1;
+    const includeIds = ['m0000', 'm0001'];
+    const actual = new Set([
+      ...members
+        .filter((m) => m.values.tier === 'gold')
+        .map((member) => member.id),
+      ...includeIds,
+    ]);
+    const result = await countAudience(
+      source(),
+      def({ includeCount: includeIds.length }),
+      now
+    );
     expect(result.approximate).toBe(true);
-    expect(result.count).toBeGreaterThanOrEqual(actualSize);
+    expect(result.count).toBeGreaterThanOrEqual(actual.size);
+    expect(result.count).toBeGreaterThan(actual.size);
   });
 
   it('count with an exclude filter is approximate and an upper bound', async () => {
@@ -85,6 +96,39 @@ describe('countAudience', () => {
     expect(result.approximate).toBe(false);
     expect(result.count).toBe(GOLD_COUNT - 2);
     expect(JSON.stringify(fake.calls.at(-1)?.filter)).toContain('not_in');
+  });
+
+  it('the API approximate flag passes through', async () => {
+    const fake = source();
+    const approx = {
+      ...fake,
+      count: async () => ({ count: 7, approximate: true }),
+    };
+    const result = await countAudience(approx, def(), now);
+    expect(result.approximate).toBe(true);
+    expect(result.count).toBe(7);
+  });
+
+  it('a filterless audience counts only its includes, exactly', async () => {
+    const fake = source();
+    const result = await countAudience(
+      fake,
+      def({ filter: null, includeCount: 3 }),
+      now
+    );
+    expect(result.count).toBe(3);
+    expect(result.filterCount).toBeNull();
+    expect(result.approximate).toBe(false);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it('an exclude list that disagrees with excludeCount is approximate', async () => {
+    const result = await countAudience(
+      source(),
+      def({ excludeIds: ['m0000'], excludeCount: 2 }),
+      now
+    );
+    expect(result.approximate).toBe(true);
   });
 
   it('count with 1,500 excludes is approximate', async () => {
@@ -123,6 +167,44 @@ describe('previewAudience', () => {
     expect(got).not.toContain('m0000');
     expect(got).not.toContain('m0002');
     expect(result.members[0]?.displayName).toBeDefined();
+    expect(result.exclusionsApplied).toBe(true);
+  });
+
+  it('excluded ids that were not pushed never appear, and paging continues', async () => {
+    const excludeIds = ['m0000', 'm0002', ...fillerIds(MANY_EXCLUDES)];
+    const walked: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await previewAudience(
+        source(),
+        def({ excludeIds, excludeCount: excludeIds.length }),
+        cursor,
+        PAGE_SIZE
+      );
+      expect(page.exclusionsApplied).toBe(true);
+      walked.push(...page.members.map((m) => m.id));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    expect(walked).toHaveLength(GOLD_COUNT - 2);
+    expect(walked).not.toContain('m0000');
+    expect(walked).not.toContain('m0002');
+  });
+
+  it('an exclude filter cannot be pushed, so exclusionsApplied is false', async () => {
+    const excludeFilter: FilterTree = {
+      dimension: 'id',
+      op: 'in',
+      values: ['m0000'],
+    };
+    const fake = source();
+    const page = await previewAudience(
+      fake,
+      def({ excludeFilter }),
+      undefined,
+      MAX_PREVIEW
+    );
+    expect(page.exclusionsApplied).toBe(false);
+    expect(fake.calls.map((c) => c.method)).toEqual(['members']);
   });
 });
 
@@ -166,7 +248,38 @@ describe('explainAudience', () => {
       'm0000'
     );
     expect(result.verdict).toBe('out');
-    expect(result.reasons).toContain('excluded_by_list');
+    expect(result.reasons).toEqual([
+      'matched_filter',
+      'included',
+      'excluded_by_list',
+    ]);
+  });
+
+  it('explain: a suppressed or unknown id is out and not matched', async () => {
+    const withSuppressed = createFakeSource({
+      members: [
+        ...members,
+        { id: 'zsup', values: { tier: 'gold' }, suppressed: true },
+      ],
+    });
+    for (const id of ['zsup', 'nobody']) {
+      const result = await explainAudience(withSuppressed, base, id);
+      expect(result.verdict).toBe('out');
+      expect(result.reasons).toEqual(['not_matched']);
+    }
+  });
+
+  it('explain: no filter and nothing else still gives a reason', async () => {
+    const result = await explainAudience(
+      source(),
+      { ...base, filter: null },
+      'm0000'
+    );
+    expect(result).toEqual({
+      id: 'm0000',
+      verdict: 'out',
+      reasons: ['not_matched'],
+    });
   });
 });
 
@@ -185,6 +298,18 @@ describe('resolveInputs', () => {
       unmatchedPositions: [1, 3],
     });
     expect(JSON.stringify(result)).not.toContain('example.com');
+  });
+
+  it('resolve still maps positions when the server echoes the input', async () => {
+    const echoing = {
+      ...source(),
+      resolve: async (inputs: string[]) => ({
+        matches: [{ input: inputs[0] as string, id: 'm0009' }],
+        unmatched: inputs.slice(1),
+      }),
+    };
+    const result = await resolveInputs(echoing, ['a@x.test', 'b@x.test']);
+    expect(result).toEqual({ ids: ['m0009'], unmatchedPositions: [1] });
   });
 
   it('resolve with 201 inputs throws before any source call', async () => {
