@@ -1,6 +1,6 @@
 # @openpanel/marketing
 
-Journey messages for OpenPanel: a separate worker that consumes the events Kafka topic and sends email, push and webhook journey messages. Its tables live in the Postgres schema `marketing`.
+Journey messages for OpenPanel: a separate worker that consumes the events Kafka topic and sends email, push and webhook journey messages. It also keeps audiences and campaigns: an audience selects people from an `http` audience source, and a campaign materialises that audience into a recipient list (sending campaigns is the send engine's job and is not part of this version; see "Audiences and campaigns"). Its tables live in the Postgres schema `marketing`.
 
 New here? Start with the [setup and integration guide](docs/GUIDE.md). This README is the reference.
 
@@ -18,13 +18,14 @@ New here? Start with the [setup and integration guide](docs/GUIDE.md). This READ
 | `MARKETING_TRUST_PROXY` | false | Take the client IP from `x-forwarded-for` (see below) |
 | `MARKETING_GRACE_SECONDS` | 300 | Window in which an observed goal cancels a pending journey message |
 | `MARKETING_MAX_LAG` | 1000 | Consumer lag above which the ticker pauses sending (nothing is dropped) |
-| `MARKETING_TICK_MS` | 5000 | Ticker interval |
+| `MARKETING_TICK_MS` | 5000 | Ticker interval; also how often each replica runs the campaign scheduler and the campaign materialiser |
 | `MARKETING_LEASE_SECONDS` | 120 | Lease on claimed steps; must be greater than `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31 (30 s send timeout plus mark retries), so more than 33 with the default window |
 | `MARKETING_EVENT_RETENTION_DAYS` | 30 | Event retention |
 | `MARKETING_CLAIM_BATCH` | 200 | Steps claimed per tick |
 | `MARKETING_SEND_CONCURRENCY` | 10 | Concurrent sends |
 | `MARKETING_DB_POOL` | 15 | Prisma pool size per replica, against the marketing database (`MARKETING_DATABASE_URL`, the intended topology; it falls back to core's `DATABASE_URL`, and then counts against core's `max_connections`); must be at least `MARKETING_SEND_CONCURRENCY` + 3 |
-| `MARKETING_SOURCE_CONCURRENCY` | 4 | Audience API calls in flight, across all replicas (Redis semaphore) |
+| `MARKETING_SOURCE_CONCURRENCY` | 4 | Audience API calls in flight per project, across all replicas (Redis semaphore). Campaign materialisation may use at most this minus one, so journeys always keep a slot; set it to at least 2 (see "Lane priority") |
+| `MARKETING_CONFIRM_THRESHOLD` | 5000 | A campaign whose count preview is above this needs an explicit confirmation naming the count and channel. Copied onto each campaign when it is created, so a change applies to new campaigns only |
 | `MARKETING_LOOKUP_WINDOW_MS` | 2000 | How long the engine waits to fill a lookup batch (up to 500 ids) before calling `/members/lookup` |
 | `MARKETING_MAX_LATENESS` | 86400 | Seconds. A step more than this past its scheduled time is skipped as `expired`, not sent, for both sources. Retries and audience-source deferrals do not reset the clock; quiet hours and the inactivity debounce move the scheduled time |
 | `MARKETING_WEBHOOK_ALLOW_HOSTS` | empty | Comma list of internal hosts webhooks may reach |
@@ -55,7 +56,7 @@ Both answer 404 until these are set on the dashboard process (the proxy needs bo
 | `MARKETING_URL` | Where the dashboard reaches the worker, e.g. `http://op-marketing:4100` |
 | `MARKETING_PROXY_SECRET` | Same value as the worker's |
 
-Roles: every `/marketing-api/*` call is checked against core first. Organization owners and admins can change rules, channels, settings, reference sets and API keys, and read channel configuration; members can read rules, starter rules, settings, results and reference sets, and preview templates. Contact and device sync are never reachable through the dashboard. The unsubscribe route forwards only the query string, a POST body of at most 64 KiB, `content-type` and `x-forwarded-for` (verbatim), never the proxy secret, and returns only the worker's status, body, `content-type`, `content-security-policy` and `cache-control`.
+Roles: every `/marketing-api/*` call is checked against core first. Organization owners and admins can change rules, channels, settings, reference sets and API keys, and read channel configuration; members can read rules, starter rules, settings, results and reference sets, and preview templates. For audiences and campaigns see the role table in "Audiences and campaigns". Contact and device sync are never reachable through the dashboard. The unsubscribe route forwards only the query string, a POST body of at most 64 KiB, `content-type` and `x-forwarded-for` (verbatim), never the proxy secret, and returns only the worker's status, body, `content-type`, `content-security-policy` and `cache-control`.
 
 ## Audience source and topology
 
@@ -64,6 +65,134 @@ A project's people can come from two sources, chosen on the Channels tab: `store
 Intended topology (spec section 3.1): OpenPanel (dashboard, API, Redpanda, ClickHouse) at Hetzner; the marketing worker replicas, the marketing Postgres and Redis in AWS Hyderabad next to the owner's backend. The worker consumes the events topic across the WAN over TLS and SASL, initiated from AWS, and calls the owner's `/internal/audience/**` over signed HTTPS; the dashboard reaches the worker through the existing proxy over HTTPS with the shared secret, and the worker's port is open only to the Hetzner addresses. The worker is a **separate service** from the owner's backend: it never connects to the student database. Set `MARKETING_DATABASE_URL` to a dedicated database in AWS; sharing OpenPanel's database through `DATABASE_URL` stays supported for small installs. Keep the Redpanda topic retention longer than the longest outage you accept (at least 7 days); after an outage, steps later than `MARKETING_MAX_LATENESS` are skipped as `expired`. `scripts/consumer-bytes.ts` measures the WAN bandwidth of the topic.
 
 Source calls: 5 s timeout for `count`, 10 s for the others, 3 attempts with jittered backoff on 5xx and 429, no retry on 401 or 403, responses over 8 MiB rejected, redirects never followed. If the source is down, journey steps stay pending and resume by themselves; nothing is marked failed because of it.
+
+## Audiences and campaigns
+
+The how-to is in the guide, sections 9 and 10. This is the reference. Every route below is a dashboard route (`/marketing/...` on the worker, `/marketing-api/...` through the dashboard proxy). Audiences need the project's `http` audience source; contact details never reach the plugin's tables or logs (`src/engine/pii.test.ts` checks the whole audience and campaign path).
+
+### Audiences
+
+Tables: `marketing.audiences`, `marketing.audience_ids` (hand-picked `include` and `exclude` lists, ids only), `marketing.audience_snapshot_ids` (frozen ids per `snapshot_version`).
+
+- **Blocks.** `filter` (a filter tree over the source's `/schema`: AND/OR groups, depth 3, string values up to 512 characters), the include list, the exclude list and `excludeFilter`. `null` means "no filter" and must be sent explicitly.
+- **Precedence.** (filter matches plus include list) minus (exclude list and exclude filter): an exclusion always wins. An exclude list of up to 1,000 ids is sent to the source as an `id not_in` condition (unless that would make the filter deeper than 3); a larger one, and the exclude filter (the contract has no negation), is paged and subtracted by the plugin.
+- **Caps.** 20,000 ids per list (`ids_limit`), 2,000 ids per change call (the 1 MiB body cap), 100,000 ids per snapshot (`snapshot_too_large`), 200 inputs per resolve call after trimming blanks and duplicates (`too_many_inputs`; the body may hold up to 1,000 lines).
+- **Dynamic or snapshot.** A `dynamic` audience is evaluated when a campaign using it starts. A `snapshot` audience is evaluated by `POST .../freeze`, which pages the source into `audience_snapshot_ids` at the audience's current `version`; every edit bumps `version` and leaves the snapshot stale until the next freeze. Freezing needs the source at that moment; a failed freeze leaves the previous snapshot in place. Freezing an already frozen version does nothing. One freeze per audience runs at a time (Redis key `marketing:audience-freeze:<id>`, 60 s TTL renewed while it runs).
+- **Saving never waits on the source.** Create and update check the filter against the live schema with a 2 s limit; when the source is slow, down or not configured, only the structure is checked.
+- **In use.** An audience used by a `scheduled`, `running` or `paused` campaign cannot be edited, frozen or deleted (`audience_in_use`). Any campaign referencing it, draft or finished, blocks deletion.
+- **Counts.** `count` is the filter's count plus the include list. Overlap between them, and exclusions the source could not apply, are unknown, so the count is an upper bound and `approximate` says so.
+- **Unknown hand-picked ids** are not dropped: they stay in the recipient list and are skipped with a reason when a send reaches them (send engine).
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /marketing/audience/schema` | none | the source's schema |
+| `GET /marketing/audience/dimensions/{key}/values?q=&limit=` | none | `{ values }`, `limit` 1 to 100, default 20 |
+| `POST /marketing/audience/resolve` | `{ inputs: string[] }` | `{ ids, unmatchedPositions }`; an input that matches several people matches none |
+| `GET /marketing/audiences` | none | `{ audiences }` |
+| `POST /marketing/audiences` | `{ name, mode, filter, excludeFilter }` | 201, the audience |
+| `GET /marketing/audiences/{id}` | none | the audience (`includeCount`, `excludeCount`, `version`, `snapshotVersion`, `snapshotCount`, `inUse`, ...) |
+| `PUT /marketing/audiences/{id}` | the create body plus `expectedVersion` | the audience |
+| `DELETE /marketing/audiences/{id}` | none | 204, no body |
+| `GET /marketing/audiences/{id}/ids?list=include\|exclude&cursor=&limit=` | none | `{ ids, nextCursor }`, `limit` up to 1,000 |
+| `POST /marketing/audiences/{id}/ids` | `{ list, add?, remove?, clear?: true, expectedVersion }` | the audience |
+| `POST /marketing/audiences/{id}/count` | none | `{ count, approximate, countedAt, filterCount, includeCount, excludeCount }` |
+| `POST /marketing/audiences/{id}/preview` | JSON, `{}` is fine: `{ cursor?, limit? }` (1 to 50, default 20) | `{ members: [{ id, displayName? }], nextCursor, exclusionsApplied }`: filter matches only; `exclusionsApplied` is `false` when an exclude filter exists, because the page may then hold excluded people |
+| `POST /marketing/audiences/{id}/explain` | `{ id }` | `{ id, verdict: in\|out, reasons, filter?, excludeFilter? }` |
+| `POST /marketing/audiences/{id}/freeze` | none | the audience |
+
+### Campaigns
+
+Tables: `marketing.campaigns`, `marketing.campaign_recipients` (one row per recipient, ids only), `marketing.campaign_counters`, `marketing.campaign_test_sends`, `marketing.materialize_exclusions` (staging while materialising).
+
+| State | Meaning | Actions |
+|---|---|---|
+| `draft` | Editable (`PATCH` with `expectedVersion`) and deletable | `schedule`, `start`, `count-preview` |
+| `scheduled` | Waiting for its send time, or a queued start waiting for the project's slot | `unschedule` (back to draft), `start`, `cancel`, `count-preview`; the scheduler starts it or marks it `missed` |
+| `running` | Materialising, then (send engine) sending; holds the project's slot | `pause`, `cancel`; completes or fails |
+| `paused` | Stopped by an operator; **keeps the slot** and keeps materialising, resumes where it stopped | `resume`, `cancel` |
+| `completed`, `cancelled`, `failed`, `missed` | Final | none |
+
+Cancel (and a failed campaign) records every recipient not yet being sent as `skipped` with reason `cancelled` (or `failed`).
+
+**Gates**, checked in this order by `start` and `schedule` inside one transaction that locks the campaign and its audience:
+
+1. The state allows the action (`invalid_transition`); the campaign has an audience (`missing_audience`).
+2. `schedule` only: `sendAtLocal` (`YYYY-MM-DDTHH:mm`, in the campaign's `timezone`, default `Asia/Kolkata`) is set and valid (`invalid_send_time`) and not in the past (`schedule_in_past`).
+3. A snapshot audience is frozen at its current version (`audience_snapshot_stale`).
+4. The filter and exclude filter are still valid against the live schema (`invalid_filter`; needs the `http` source: `source_not_http`).
+5. The channel is ready (`channel_not_ready`).
+6. A count preview exists, at most 15 minutes old, made for the current campaign and audience versions (`count_preview_required`).
+7. When the preview count is above the campaign's threshold (`MARKETING_CONFIRM_THRESHOLD` when it was created), the body carries `{ "confirm": { "count", "channel" } }` equal to the preview's count and the campaign's channel (`confirmation_required`, with `details: { count, channel }`; `confirmation_mismatch`).
+
+**One active campaign per project.** A `running` or `paused` campaign holds the project's slot (unique index `campaigns_one_active_per_project`). A `start` while the slot is taken passes the same gates, then queues: the campaign becomes `scheduled` with `sendKind: "now"`, and the scheduler starts it when the slot frees. A queued start is never `missed`, and its confirmation counts as given when it was queued: the count is not checked again, so a dynamic audience may have grown by then.
+
+**Schedules and `ifLate`.** Every replica's scheduler claims due campaigns each `MARKETING_TICK_MS` (`FOR UPDATE SKIP LOCKED`, 20 per tick). A scheduled campaign is late once a whole minute has passed beyond its window: late when `now >= send_at + (ifLateMinutes + 1) minutes` (`ifLateMinutes` 0 to 1440, default 60), so `ifLateMinutes: 0` still allows a start within the due minute. A late campaign becomes `missed` with `stateReason: "late"`. A scheduled campaign whose time comes while another campaign holds the slot waits, and is missed if it is still waiting past its window.
+
+**Roles** (dashboard proxy): members may read, create and edit audiences and drafts, resolve, count, preview, explain, freeze and run `count-preview`. Deleting an audience or a campaign, and `start`, `schedule`, `unschedule`, `pause`, `resume`, `cancel` and `test-send`, need an organization owner or admin. A wrong method is 405, an unknown path 404.
+
+| Route | Body | Answer |
+|---|---|---|
+| `GET /marketing/campaigns` | none | `{ campaigns }` |
+| `POST /marketing/campaigns` | `{ name, channel, template, audienceId?, campaignKey?, skipPreviousRecipients?, sendAtLocal?, timezone?, ifLateMinutes?, quietHoursOverride?, frequencyCap? }` | 201, the campaign |
+| `GET /marketing/campaigns/{id}` | none | the campaign with `counters { queued, sent, failed, skipped, uncertain }` |
+| `PATCH /marketing/campaigns/{id}` | any draft fields plus `expectedVersion` | the campaign; drafts only (`not_draft`) |
+| `DELETE /marketing/campaigns/{id}` | none | 204, no body; drafts only |
+| `POST /marketing/campaigns/{id}/count-preview` | none | the count (as for an audience); also stored on the campaign with `campaignVersion` and `audienceVersion` |
+| `POST /marketing/campaigns/{id}/start`, `/schedule` | none, or `{ confirm: { count, channel } }` | the campaign |
+| `POST /marketing/campaigns/{id}/unschedule`, `/pause`, `/resume`, `/cancel` | none | the campaign |
+| `POST /marketing/campaigns/{id}/test-send` | `{ profileId }` | `{ id }`: recorded only in this version; at most 10 per campaign per hour (`test_send_limit`) |
+
+Action routes accept an empty body; a body with fields the action does not take is `invalid_body`. Responses never carry the materialiser's lease token, lease time, cursor or retry time.
+
+### Materialiser
+
+Every `MARKETING_TICK_MS` each replica claims one campaign that is `running` or `paused` and not yet materialised, with a 60 s lease renewed by every page it commits. It pages the source with `fields=id` (1,000 ids a page): staged exclusions first, then the filter's members, then the include list; a snapshot audience's frozen ids are copied instead. The phase and cursor commit with each page, so a run that stops (shutdown stops after the page in flight) or crashes resumes from the last committed page once the lease is free. A page commits only while the campaign is still `running` or `paused` and the lease is still its own, so a cancel either wins or waits for the page and then skips its rows. With `campaignKey` and `skipPreviousRecipients`, ids already `sent` or `uncertain` in an earlier campaign of the same project and key are recorded as skipped, `already_received` (ids still pending in that earlier campaign are not). When done, `materializeState` is `done`; only then may the send engine claim recipients.
+
+- Source unavailable or busy: `materializeError: "source_unavailable"`, retried after 30 s without spending an attempt. The campaign stays `running`; it is not paused.
+- Credentials rejected: `source_auth_failed`, retried after 5 minutes, and the project's source status is set to `source_auth_failed`; a materialisation that finishes sets it back to `ok`.
+- Protocol and unexpected errors (`source_protocol_error`, `internal_error`) spend an attempt; after 5 the campaign fails with `stateReason: "materialize_failed"`.
+- A restart from scratch after recipients were already being sent fails the campaign with `materialize_restart_after_sending` rather than risk duplicates.
+
+### Lane priority
+
+Campaign calls to the source go through a per-project lane capped at `MARKETING_SOURCE_CONCURRENCY` minus one, on top of the shared cap, so one shared slot is always free for journey lookups. Keep `MARKETING_SOURCE_CONCURRENCY` at 2 or more: at 1 the lane cap is also 1, and a campaign call can hold the only slot while journey steps wait and retry.
+
+### Errors
+
+Error bodies are `{ "error": "<code>", "issues"?: [{ "path", "message" }], "details"?: { ... } }`.
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `invalid_body`, `invalid_json` | The body does not match the route's schema |
+| 400 | `invalid_query` | A path or query parameter is invalid |
+| 400 | `invalid_filter` | A filter fails the schema check on save (409 at the campaign gates) |
+| 400 | `ids_limit`, `too_many_inputs` | Over 20,000 ids in a list; over 200 resolve inputs |
+| 400 | `invalid_campaign`, `invalid_audience` | The merged draft is invalid; the audience is not in this project |
+| 400 | `invalid_send_time` | `schedule` without a valid `sendAtLocal` |
+| 404 | `not_found` | Unknown id, or another project's |
+| 409 | `version_conflict` | `expectedVersion` is stale, or the audience changed during a freeze |
+| 409 | `audience_in_use` | See "In use" |
+| 409 | `not_snapshot` | `freeze` on a dynamic audience |
+| 409 | `freeze_in_progress`, `freeze_lock_lost` | Another freeze of the audience runs; this freeze lost its lock and was discarded |
+| 409 | `snapshot_too_large` | Over 100,000 ids |
+| 409 | `source_not_configured`, `source_not_http` | No audience source; the source is `stored` |
+| 409 | `source_auth_failed` | The source rejected the credentials |
+| 502 | `source_error` | The source's answer broke the contract |
+| 503 | `source_unavailable` | The source is down or busy |
+| 409 | `not_draft`, `invalid_transition` | Edit or delete of a non-draft; an action the state does not allow |
+| 409 | `missing_audience`, `audience_snapshot_stale`, `channel_not_ready`, `schedule_in_past` | Gates 1 to 5 |
+| 409 | `count_preview_required`, `confirmation_required`, `confirmation_mismatch` | Gates 6 and 7 |
+| 429 | `test_send_limit` | 10 test sends per campaign per hour |
+
+Campaign `stateReason` values: `late` (missed), `materialize_failed`, `materialize_restart_after_sending`.
+
+### Known limits
+
+- SMS and WhatsApp campaigns can be drafted but cannot start or be scheduled (`channel_not_ready`) until the send engine adds the channel registry.
+- Nothing is sent yet: dispatch, the frequency cap, quiet hours, opt-out and suppression checks, email quota and test sends belong to the send engine. `quietHoursOverride` and `frequencyCap` are stored only.
+- Confirmation is checked when a start is queued, not again when the queued campaign starts.
+- A paused campaign keeps the project's slot, so other campaigns of the project queue (or, if scheduled, can be missed) until it is resumed and finishes, or is cancelled.
+- A source outage never pauses a campaign; it shows as `materializeError` while the campaign stays `running`.
 
 ## Deploy
 
@@ -122,6 +251,7 @@ Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --n
 - **Lease rule (config now fails at startup).** `MARKETING_LEASE_SECONDS` must exceed `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. With the default 2,000 ms window that is more than 33, so configs of 32 or 33 s that used to boot are now rejected; raise it (the default 120 is fine).
 - **Expired steps (behaviour change).** A step that is more than `MARKETING_MAX_LATENESS` (default 86,400 s) past its scheduled time is skipped as `expired` instead of sent, for the `stored` source as well. Lateness is measured from the scheduled time (migration 0010, `marketing.steps.scheduled_at`), not from the last retry, so a step an audience source kept deferring through an outage also expires. After a long outage, steps older than a day are no longer sent late.
 - Migrations 0007 (`marketing.audience_sources`), 0008 (source status columns) and 0009 (`marketing.dead_tokens`: hashes of push tokens FCM reported dead, purged after 90 days) are additive and fast. Migration 0010 adds the nullable column `marketing.steps.scheduled_at` without rewriting existing rows (fast); steps created before it fall back to `due_at` for expiry.
+- Migrations 0011 (`marketing.audiences`, `marketing.audience_ids`, `marketing.audience_snapshot_ids`) and 0012 (`marketing.campaigns` with the unique index `campaigns_one_active_per_project`, `marketing.campaign_recipients`, `marketing.materialize_exclusions`, `marketing.campaign_counters`, `marketing.campaign_test_sends`) only create new tables and indexes, so they are fast and change nothing for journeys. New optional variable: `MARKETING_CONFIRM_THRESHOLD` (default 5000). Each replica now also runs the campaign scheduler and materialiser every `MARKETING_TICK_MS`; with no campaigns they do one cheap query each. Campaign materialisation uses the audience source alongside journeys, so set `MARKETING_SOURCE_CONCURRENCY` to at least 2 (the default 4 is fine).
 - Migration 0006 builds an index on `marketing.events (event_time)` inside the startup migration. It locks writes to `marketing.events` while it builds, so on a large table expect the first start to take longer.
 
 ## End-to-end check

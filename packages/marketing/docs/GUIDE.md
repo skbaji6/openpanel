@@ -36,6 +36,8 @@ Example: an ed-tech app. Rule "added a book to the cart, did not buy": trigger `
 | Device | A person's Firebase token, synced from your backend. |
 | Grace window | `MARKETING_GRACE_SECONDS` (default 300): a goal seen this late still cancels a pending step. |
 | Caps, quiet hours | Per project: at most N journey messages per period per person, and no sends in a time window. |
+| Audience | A saved selection of people from the `http` audience source: a filter, hand-picked ids to include, ids and a filter to exclude. Dynamic (evaluated when a campaign starts) or snapshot (ids frozen on request). |
+| Campaign | A one-off message to an audience over one channel, started now or at a scheduled time. This version builds the recipient list; sending it is the send engine's job, which comes next. |
 
 Only **identified** events (events that carry a `profileId`) take part. Anonymous events are ignored.
 
@@ -232,7 +234,34 @@ Marketing, Channels tab (or `PUT /marketing/settings`):
 
 `caps` limits journey messages per person per period; `null` for none. Quiet hours hold messages until the window ends. A step that is held or capped is recorded as skipped (visible in Results).
 
-## 9. Try it end to end
+## 9. Audiences
+
+Audiences need the project's audience source set to `http` (5c); without it the audience calls that ask the source answer 409 `source_not_configured` or `source_not_http`. Routes, limits and error codes are in the README, "Audiences and campaigns".
+
+1. **Filter.** Read the dimensions from `GET /marketing/audience/schema` and the values for a dropdown from `GET /marketing/audience/dimensions/{key}/values?q=`. Combine conditions with AND/OR, up to 3 levels deep.
+2. **Include specific people.** Paste phone numbers or emails into `POST /marketing/audience/resolve` (`{ "inputs": [...] }`, up to 200 after blanks and duplicates are dropped). You get back ids, plus the positions of lines that matched nobody or more than one person; the contact values are never stored or logged. Add the ids with `POST /marketing/audiences/{id}/ids` `{ "list": "include", "add": [...], "expectedVersion": n }`. Send at most 2,000 ids per call and repeat for longer lists (a list holds up to 20,000); each call returns the audience with its new `version`, which the next call needs.
+3. **Exclude.** The same route with `"list": "exclude"`, and an `excludeFilter` on the audience. Exclusions always win: someone hand-picked and excluded is out.
+4. **Check.** `POST .../count` for the live count (an upper bound when `approximate` is true), `POST .../preview` with `{}` for a page of matching ids and masked names (fetched on demand, never stored), and `POST .../explain` with `{ "id": "..." }` for why one person is in or out.
+
+**Dynamic or snapshot.** A dynamic audience is evaluated each time a campaign using it starts. A snapshot audience is evaluated only when you call `POST .../freeze`, after your edits: the ids are frozen (up to 100,000), and every later edit makes the snapshot stale until you freeze again. Freezing needs the source to answer at that moment; if it is down, the freeze fails and the previous snapshot stays. Saving an audience never waits for the source.
+
+While a campaign that uses an audience is scheduled, running or paused, the audience is locked (`audience_in_use`): it cannot be edited, frozen or deleted. To change the selection, unschedule or cancel that campaign, or create another audience.
+
+## 10. Campaigns
+
+A campaign sends one message to an audience over one channel. In this version a campaign is drafted, checked and started, and its recipient list is built ("materialised"); the send engine that delivers it comes next, so nothing is delivered yet.
+
+1. **Draft** (`POST /marketing/campaigns`): name, channel (`push`, `email`, `webhook`; `sms` and `whatsapp` can be drafted but not started yet), template, audience, and for a scheduled send `sendAtLocal` (`2026-11-20T18:30`) with `timezone` (default `Asia/Kolkata`) and `ifLateMinutes` (default 60). Optional `campaignKey` with `skipPreviousRecipients: true` skips people who already received a campaign with the same key. Members can draft; only owners and admins can start, schedule, pause, resume, cancel or test-send.
+2. **Count preview** (`POST .../count-preview`). Mandatory, and valid for 15 minutes; editing the campaign or its audience makes it stale.
+3. **Start or schedule** (`POST .../start` or `.../schedule`). Both check, in order: the state, the audience, the send time (schedule), a frozen snapshot, the filter against the current schema, the channel, the count preview, and the confirmation. Above `MARKETING_CONFIRM_THRESHOLD` people (default 5,000) the call answers `confirmation_required` with `details: { count, channel }`; repeat it with `{ "confirm": { "count": ..., "channel": "..." } }` naming the same values.
+
+**One campaign at a time per project.** While a campaign is running or paused, a new start is queued: it becomes `scheduled` and starts by itself as soon as the slot is free. A paused campaign keeps the slot until it is resumed and finishes, or is cancelled.
+
+**When no worker runs at the scheduled time.** The campaign still starts if a worker picks it up within `ifLateMinutes` of its time, plus one minute of grace (so `0` still allows the due minute); later than that it is marked `missed` and is not sent. A scheduled campaign that is due while another one holds the slot also waits, and is missed if the wait outlasts its window. Missed is final: create a new campaign.
+
+**Materialising.** After the start, a worker pages the audience source for ids (1,000 per page) and writes the recipient list; the campaign shows `materializeState` and the `queued` counter. If a worker stops, another continues from the last page. If the source is down the campaign stays running and shows `materializeError` until the source is back; after 5 contract (or unexpected) errors it fails with `stateReason: "materialize_failed"`. Keep `MARKETING_SOURCE_CONCURRENCY` at 2 or more so journeys keep a source slot while a campaign materialises.
+
+## 11. Try it end to end
 
 With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/track`, and checks that one signed webhook arrives and that a person who reaches the goal is not messaged. Setup and variables: README, "End-to-end check". A manual check:
 
@@ -241,7 +270,7 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 3. Send `add_to_cart` with `item_id=1` for an identified profile (an SDK call, or `POST /track` with a `profileId`; see `scripts/e2e.ts` for a working payload) and watch the request arrive. Send `purchase` with the same `item_id` before the step is due to see it cancelled.
 4. Open Marketing, Results to see the counts.
 
-## 10. Operate it
+## 12. Operate it
 
 - **Logs**: `docker compose logs -f op-marketing`. `sending paused` means the consumer is behind `MARKETING_MAX_LAG`; nothing is lost, and sending resumes when it catches up.
 - **Health**: `GET /marketing/health` on the worker.
@@ -249,7 +278,7 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 - **Backups**: the `marketing` schema is in the same Postgres as OpenPanel and is covered by your existing backups.
 - **Upgrade OpenPanel**: merge upstream. Only the files in `TOUCHPOINTS.md` can conflict (README, "Upgrading from upstream"). Rebuild both images from the same release.
 
-## 11. Troubleshooting
+## 13. Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
@@ -265,16 +294,26 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 | Email fails | SMTP settings or TLS mode; check the failure reason in Results. |
 | Push has no effect | Service account JSON for another Firebase project, or the device token belongs to a different Firebase app. |
 | Webhook shows `blocked url` | Not https and the host is not in `MARKETING_WEBHOOK_ALLOW_HOSTS`, or it resolves to a private address. |
+| Audience edit answers `audience_in_use` | A scheduled, running or paused campaign uses it (see 9). |
+| Start answers `audience_snapshot_stale` | The snapshot audience was edited after its last freeze; freeze it again. |
+| Start answers `count_preview_required` | No count preview, or it is older than 15 minutes, or the campaign or audience changed since; preview again. |
+| Start answers `channel_not_ready` | SMS and WhatsApp campaigns cannot start in this version. |
+| Campaign stays `scheduled` after Start | Another campaign of the project is running or paused; it starts when that one finishes or is cancelled. |
+| Campaign shows `missed` | No worker picked it up within `ifLateMinutes` (plus one minute) of its time, or another campaign held the slot that long. |
+| Campaign shows `materializeError: source_unavailable` | The audience source is down; it retries every 30 s and continues by itself. |
 | Worker will not start | A required variable is missing (the log names it), or `MARKETING_DB_POOL` is below `MARKETING_SEND_CONCURRENCY` + 3, or `MARKETING_LEASE_SECONDS` is not greater than `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. |
 
-## 12. Limits worth knowing
+## 14. Limits worth knowing
 
 - Delivery is at least once per step; webhook receivers must de-duplicate on `idempotency-key`.
 - Projects with an active inactivity rule store every identified event (see README, "Event pre-filter trade-off"); plan capacity for that.
 - Message text is a template with variables; AI-written messages are not part of this version.
+- Campaigns build their recipient list but are not delivered yet; SMS and WhatsApp cannot start; frequency caps, quiet hours and opt-outs are not applied to campaigns yet; a test send is recorded only.
+- A queued start's confirmation is the one given when it was queued; the count is not checked again when it starts.
+- A paused campaign keeps the project's campaign slot.
 - History retention and API-key list/revoke endpoints are not built in; the README has the SQL recipes.
 - Full list: the spec's "Known limitations / follow-ups".
 
-## 13. Rules for changing the code
+## 15. Rules for changing the code
 
 This is a fork. Never edit OpenPanel's existing files for the plugin; see [`../AGENTS.md`](../AGENTS.md) and [`../TOUCHPOINTS.md`](../TOUCHPOINTS.md).
