@@ -21,7 +21,7 @@ type CampaignService = ReturnType<typeof createCampaignService>;
 
 const zConfirm = z.strictObject({
   count: z.number().int().min(0),
-  channel: z.string().min(1),
+  channel: zCampaignPatch.shape.channel.unwrap(),
 });
 const zGateBody = z.strictObject({ confirm: zConfirm.optional() });
 const zNoBody = z.strictObject({});
@@ -31,11 +31,21 @@ const zUpdate = z.strictObject({
 });
 const zTestSend = z.strictObject({ profileId: zIdentifier });
 
-// The lease token is the worker's proof of ownership; a client that read it could not use it, but must not see it.
-function toResponse(
-  row: CampaignRow
-): Omit<CampaignRow, 'materializeLeaseToken'> {
-  const { materializeLeaseToken: _leaseToken, ...visible } = row;
+type HiddenFields =
+  | 'materializeLeaseToken'
+  | 'materializeLeaseUntil'
+  | 'materializeCursor'
+  | 'materializeRetryAt';
+
+// Worker bookkeeping (lease, cursor, retry time) is internal; a client must not see or rely on it.
+function toResponse(row: CampaignRow): Omit<CampaignRow, HiddenFields> {
+  const {
+    materializeLeaseToken: _leaseToken,
+    materializeLeaseUntil: _leaseUntil,
+    materializeCursor: _cursor,
+    materializeRetryAt: _retryAt,
+    ...visible
+  } = row;
   return visible;
 }
 

@@ -94,7 +94,7 @@ function validateQuery<T>(schema: z.ZodType<T>, data: unknown): T {
   }
 }
 
-// Upstream source failures as HTTP errors; null for anything else, so the caller rethrows it.
+// Upstream source failures as HTTP errors; null for non-HTTP errors, so the caller rethrows them.
 // The API reports every protocol failure as source_error.
 export function sourceErrorToHttp(error: unknown): HttpError | null {
   const mapped = sourceHttpError(error);

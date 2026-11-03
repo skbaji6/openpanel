@@ -118,6 +118,18 @@ async function createCampaign(over: Body = {}, project = 'proj-a') {
   return (await res.json()) as Body & { id: string; version: number };
 }
 
+const HIDDEN = [
+  'materializeLeaseToken',
+  'materializeLeaseUntil',
+  'materializeCursor',
+  'materializeRetryAt',
+];
+const expectHidden = (text: string) => {
+  for (const key of HIDDEN) {
+    expect(text).not.toContain(key);
+  }
+};
+
 const preview = (id: string) =>
   call('POST', `/marketing/campaigns/${id}/count-preview`);
 
@@ -199,14 +211,15 @@ describe('campaign routes', () => {
       skipped: 0,
       uncertain: 0,
     });
-    expect(after).toHaveProperty('materializeError');
-    expect(after).toHaveProperty('stateReason');
+    expect(after.materializeError).toBeNull();
+    expect(after.stateReason).toBeNull();
   });
 
-  it('never exposes the materialise lease token', async () => {
+  it('never exposes worker internals', async () => {
     const draft = await createCampaign();
     await sql.$executeRawUnsafe(
-      'UPDATE marketing.campaigns SET materialize_lease_token = gen_random_uuid() WHERE id = $1::uuid',
+      `UPDATE marketing.campaigns SET materialize_lease_token = gen_random_uuid(), materialize_lease_until = now(),
+       materialize_cursor = 'c', materialize_retry_at = now() WHERE id = $1::uuid`,
       draft.id
     );
     const patched = await call('PATCH', `/marketing/campaigns/${draft.id}`, {
@@ -219,14 +232,14 @@ describe('campaign routes', () => {
       patched,
     ];
     for (const res of responses) {
-      expect(await res.text()).not.toContain('materializeLeaseToken');
+      expectHidden(await res.text());
     }
     await preview(draft.id);
     const started = await call(
       'POST',
       `/marketing/campaigns/${draft.id}/start`
     );
-    expect(await started.text()).not.toContain('materializeLeaseToken');
+    expectHidden(await started.text());
   });
 
   it('confirmation_required answers {count, channel}', async () => {
@@ -250,6 +263,14 @@ describe('campaign routes', () => {
       { body: { confirm: { count: PRO_COUNT, channel: 'push' } } }
     );
     expect(confirmed.status).toBe(200);
+  });
+
+  it('a confirm naming an unknown channel is 400', async () => {
+    const draft = await createCampaign();
+    const res = await call('POST', `/marketing/campaigns/${draft.id}/start`, {
+      body: { confirm: { count: 1, channel: 'carrier-pigeon' } },
+    });
+    expect(res.status).toBe(400);
   });
 
   it('an invalid transition is 409 invalid_transition', async () => {
