@@ -1,5 +1,7 @@
 import type { Redis } from '@openpanel/redis';
 import type { SourceResolver } from '../audience/resolver';
+import { createAudienceStore } from '../audience/store';
+import { createCampaignService } from '../campaign/service';
 import type { MarketingConfig } from '../config';
 import type { Sql } from '../engine/engine';
 import { redactSecrets } from '../redact';
@@ -14,6 +16,7 @@ import { HttpError, json, MAX_BODY_BYTES, type Route } from './http';
 import { createRateLimiter } from './rate-limit';
 import { audienceSourceRoutes } from './routes-audience-source';
 import { audienceRoutes } from './routes-audiences';
+import { campaignRoutes } from './routes-campaigns';
 import { dashboardRoutes } from './routes-dashboard';
 import { syncRoutes } from './routes-sync';
 import { createUnsubscribeHandlers } from './unsubscribe';
@@ -92,6 +95,9 @@ export function createServer(deps: ServerDeps) {
     }
   }
 
+  const { sources } = deps;
+  const clock = () => new Date((deps.now ?? Date.now)());
+
   const routes: Route[] = [
     {
       method: 'GET',
@@ -109,23 +115,36 @@ export function createServer(deps: ServerDeps) {
     },
     ...syncRoutes(sql),
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),
-    ...(deps.redis && deps.sources
+    ...(deps.redis && sources
       ? [
           ...audienceSourceRoutes({
             cfg,
             sql,
             redis: deps.redis,
-            resolver: deps.sources,
+            resolver: sources,
             fetch: deps.sourceFetch,
             now: deps.now,
           }),
           ...audienceRoutes({
             sql,
             redis: deps.redis,
-            resolver: deps.sources,
+            resolver: sources,
             now: deps.now,
             freezeLockTtlMs: deps.freezeLockTtlMs,
           }),
+          ...campaignRoutes(
+            createCampaignService({
+              sql,
+              cfg,
+              audiences: createAudienceStore({
+                sql,
+                source: (projectId) => sources.forProject(projectId),
+                now: clock,
+              }),
+              source: (projectId) => sources.forProject(projectId),
+              now: clock,
+            })
+          ),
         ]
       : []),
     {

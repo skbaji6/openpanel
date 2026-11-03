@@ -94,12 +94,20 @@ function validateQuery<T>(schema: z.ZodType<T>, data: unknown): T {
   }
 }
 
-// The audience API reports every upstream protocol failure as source_error.
-function apiError(error: unknown): unknown {
+// Upstream source failures as HTTP errors; null for anything else, so the caller rethrows it.
+// The API reports every protocol failure as source_error.
+export function sourceErrorToHttp(error: unknown): HttpError | null {
   const mapped = sourceHttpError(error);
-  return mapped instanceof HttpError && mapped.code === 'source_protocol_error'
+  if (!(mapped instanceof HttpError)) {
+    return null;
+  }
+  return mapped.code === 'source_protocol_error'
     ? new HttpError(502, 'source_error')
     : mapped;
+}
+
+function apiError(error: unknown): unknown {
+  return sourceErrorToHttp(error) ?? error;
 }
 
 export function audienceRoutes(deps: Deps): Route[] {
