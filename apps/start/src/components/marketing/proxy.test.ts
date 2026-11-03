@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { createMarketingProxy, type ProxyEnv } from './proxy';
 
 const DASHBOARD = 'https://dash.example.com';
@@ -344,5 +344,104 @@ describe('marketing proxy', () => {
     expect(JSON.parse(input ?? 'null')).toEqual({
       json: { organizationId: ORGANIZATION },
     });
+  });
+
+  const MEMBER_ROUTES: [string, string][] = [
+    ['GET', 'audience/schema'],
+    ['GET', 'audience/dimensions/plan/values'],
+    ['POST', 'audience/resolve'],
+    ['GET', 'audiences'],
+    ['POST', 'audiences'],
+    ['GET', 'audiences/a1'],
+    ['PUT', 'audiences/a1'],
+    ['GET', 'audiences/a1/ids'],
+    ['POST', 'audiences/a1/ids'],
+    ['POST', 'audiences/a1/count'],
+    ['POST', 'audiences/a1/preview'],
+    ['POST', 'audiences/a1/explain'],
+    ['POST', 'audiences/a1/freeze'],
+    ['GET', 'campaigns'],
+    ['POST', 'campaigns'],
+    ['GET', 'campaigns/c1'],
+    ['PATCH', 'campaigns/c1'],
+    ['POST', 'campaigns/c1/count-preview'],
+  ];
+  const ADMIN_ROUTES: [string, string][] = [
+    ['DELETE', 'audiences/a1'],
+    ['DELETE', 'campaigns/c1'],
+    ...[
+      'start',
+      'schedule',
+      'unschedule',
+      'pause',
+      'resume',
+      'cancel',
+      'test-send',
+    ].map((action): [string, string] => ['POST', `campaigns/c1/${action}`]),
+  ];
+  const send = (path: string, method: string) =>
+    request(path, { method, body: method === 'GET' ? undefined : '{}' });
+
+  test('a member may create and edit a draft and preview its count', async () => {
+    const { proxy, marketingCalls } = setup({ role: 'member' });
+    for (const [method, path] of MEMBER_ROUTES) {
+      expect((await proxy.handle(send(path, method))).status).toBe(200);
+    }
+    expect(marketingCalls()).toHaveLength(MEMBER_ROUTES.length);
+  });
+
+  test('a member gets 403 on start, schedule, pause, cancel and test-send', async () => {
+    const { proxy, marketingCalls } = setup({ role: 'member' });
+    for (const [method, path] of ADMIN_ROUTES) {
+      expect((await proxy.handle(send(path, method))).status).toBe(403);
+    }
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
+  test('an admin may start', async () => {
+    const { proxy, marketingCalls } = setup({ role: 'admin' });
+    for (const [method, path] of ADMIN_ROUTES) {
+      expect((await proxy.handle(send(path, method))).status).toBe(200);
+    }
+    expect(marketingCalls()).toHaveLength(ADMIN_ROUTES.length);
+  });
+
+  test('a no-access user is denied on every new route, as on the existing ones', async () => {
+    const { proxy, marketingCalls } = setup({ projectStatus: 404 });
+    for (const [method, path] of [...MEMBER_ROUTES, ...ADMIN_ROUTES]) {
+      expect((await proxy.handle(send(path, method))).status).toBe(403);
+    }
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
+  test('campaigns/x/unknown-action is 404', async () => {
+    const { proxy, marketingCalls } = setup();
+    const response = await proxy.handle(
+      send('campaigns/x/unknown-action', 'POST')
+    );
+    expect(response.status).toBe(404);
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
+  test('the proxy never logs a request body', async () => {
+    const canary = '+15551230000';
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(
+      (name) => vi.spyOn(console, name).mockImplementation(() => undefined)
+    );
+    const { proxy } = setup();
+    await proxy.handle(
+      request('audience/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ phone: canary }),
+      })
+    );
+    const logged = spies
+      .flatMap((spy) => spy.mock.calls)
+      .flat()
+      .map(String);
+    for (const spy of spies) {
+      spy.mockRestore();
+    }
+    expect(logged.join(' ')).not.toContain(canary);
   });
 });

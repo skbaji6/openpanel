@@ -37,6 +37,39 @@ const ALLOWED_ROUTES: {
     pattern: /^reference-sets\/[^/]+$/,
     methods: { GET: 'member', PUT: 'admin' },
   },
+  { pattern: /^audience\/schema$/, methods: { GET: 'member' } },
+  {
+    pattern: /^audience\/dimensions\/[^/]+\/values$/,
+    methods: { GET: 'member' },
+  },
+  { pattern: /^audience\/resolve$/, methods: { POST: 'member' } },
+  { pattern: /^audiences$/, methods: { GET: 'member', POST: 'member' } },
+  {
+    pattern: /^audiences\/[^/]+$/,
+    methods: { GET: 'member', PUT: 'member', DELETE: 'admin' },
+  },
+  {
+    pattern: /^audiences\/[^/]+\/ids$/,
+    methods: { GET: 'member', POST: 'member' },
+  },
+  {
+    pattern: /^audiences\/[^/]+\/(count|preview|explain|freeze)$/,
+    methods: { POST: 'member' },
+  },
+  { pattern: /^campaigns$/, methods: { GET: 'member', POST: 'member' } },
+  {
+    pattern: /^campaigns\/[^/]+$/,
+    methods: { GET: 'member', PATCH: 'member', DELETE: 'admin' },
+  },
+  {
+    pattern: /^campaigns\/[^/]+\/count-preview$/,
+    methods: { POST: 'member' },
+  },
+  {
+    pattern:
+      /^campaigns\/[^/]+\/(start|schedule|unschedule|pause|resume|cancel|test-send)$/,
+    methods: { POST: 'admin' },
+  },
 ];
 
 export interface ProxyEnv {
