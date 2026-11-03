@@ -1,0 +1,599 @@
+import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
+import { HttpError } from '../api/http';
+import type { FilterTree, Schema } from '../audience/contract';
+import { createFakeSource, type FakeMember } from '../audience/fake-source';
+import { createAudienceStore } from '../audience/store';
+import type { MarketingConfig } from '../config';
+import { sql } from '../db/client';
+import { migrate } from '../db/migrate';
+import { resetMarketingTables } from '../db/test-helpers';
+import { createCampaignService } from './service';
+
+const PROJECT = 'p1';
+const CTX = { projectId: PROJECT, userId: 'u1' };
+const START = new Date('2026-11-03T10:00:00.000Z');
+const PRO: FilterTree = { dimension: 'plan', op: 'eq', values: ['pro'] };
+const SCHEMA: Schema = {
+  dimensions: [
+    {
+      key: 'plan',
+      label: 'Plan',
+      type: 'string',
+      multiValued: false,
+      valuesListable: true,
+    },
+  ],
+};
+const THRESHOLD = 5000;
+const CFG = { confirmThreshold: THRESHOLD } as MarketingConfig;
+const MINUTE_MS = 60_000;
+const PREVIEW_TTL_MINUTES = 15;
+const TEST_SENDS_PER_HOUR = 10;
+const LOCK_POLL_MS = 20;
+const PUSH_TEMPLATE = { subject: 'Hi', body: 'Hello {{profile.name}}' };
+
+let now = START;
+let members: FakeMember[] = [];
+
+const pad = (n: number) => String(n).padStart(6, '0');
+const proMembers = (count: number) =>
+  Array.from({ length: count }, (_, i) => ({
+    id: `pro-${pad(i + 1)}`,
+    values: { plan: 'pro' },
+  }));
+
+function makeDeps(
+  channelReady?: Parameters<typeof createCampaignService>[0]['channelReady']
+) {
+  const fake = createFakeSource({ members, schema: SCHEMA });
+  const source = async (projectId: string) =>
+    projectId === PROJECT ? fake : null;
+  const audiences = createAudienceStore({ sql, source, now: () => now });
+  const campaigns = createCampaignService({
+    sql,
+    cfg: CFG,
+    audiences,
+    source,
+    now: () => now,
+    channelReady,
+  });
+  return { audiences, campaigns };
+}
+
+async function caught(promise: Promise<unknown>): Promise<HttpError> {
+  const error = await promise.then(
+    () => null,
+    (e: unknown) => e
+  );
+  if (!(error instanceof HttpError)) {
+    throw new Error(`expected an HttpError, got ${String(error)}`);
+  }
+  return error;
+}
+
+const codeOf = async (promise: Promise<unknown>) => {
+  const error = await caught(promise);
+  return [error.status, error.code];
+};
+
+async function dynamicAudience(audiences = makeDeps().audiences) {
+  return await audiences.create(CTX, {
+    name: 'Pro',
+    mode: 'dynamic',
+    filter: PRO,
+    excludeFilter: null,
+  });
+}
+
+async function pushDraft(audienceId: string | null, name = 'Launch') {
+  return await makeDeps().campaigns.create(CTX, {
+    name,
+    channel: 'push',
+    template: PUSH_TEMPLATE,
+    audienceId,
+  });
+}
+
+async function previewedDraft(name = 'Launch') {
+  const { campaigns, audiences } = makeDeps();
+  const audience = await dynamicAudience(audiences);
+  const draft = await pushDraft(audience.id, name);
+  await campaigns.countPreview(CTX, draft.id);
+  return { campaigns, audiences, audience, draft };
+}
+
+async function insertRecipients(campaignId: string, statuses: string[]) {
+  for (const [i, status] of statuses.entries()) {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, status)
+       VALUES ($1::uuid, $2, $3, $4)`,
+      campaignId,
+      `r${i}`,
+      PROJECT,
+      status
+    );
+  }
+}
+
+async function recipients(campaignId: string) {
+  return await sql.$queryRawUnsafe<
+    { profile_id: string; status: string; reason: string | null }[]
+  >(
+    `SELECT profile_id, status, reason FROM marketing.campaign_recipients
+     WHERE campaign_id = $1::uuid ORDER BY profile_id`,
+    campaignId
+  );
+}
+
+async function setState(campaignId: string, state: string, extra = '') {
+  await sql.$executeRawUnsafe(
+    `UPDATE marketing.campaigns SET state = $2 ${extra} WHERE id = $1::uuid`,
+    campaignId,
+    state
+  );
+}
+
+async function waitingOnLock(): Promise<boolean> {
+  const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+    `SELECT count(*)::int AS n FROM pg_stat_activity
+     WHERE datname = current_database() AND wait_event_type = 'Lock'`
+  );
+  return (row?.n ?? 0) > 0;
+}
+
+beforeAll(async () => {
+  await migrate();
+});
+
+beforeEach(async () => {
+  await resetMarketingTables();
+  now = START;
+  members = proMembers(30);
+});
+
+describe('campaign service', () => {
+  it('create ignores a client-sent confirm_threshold', async () => {
+    const { campaigns } = makeDeps();
+    const row = await campaigns.create(CTX, {
+      name: 'Launch',
+      channel: 'push',
+      template: PUSH_TEMPLATE,
+      confirmThreshold: 1,
+      confirm_threshold: 1,
+    } as never);
+    expect(row).toMatchObject({
+      state: 'draft',
+      confirmThreshold: THRESHOLD,
+      timezone: 'Asia/Kolkata',
+      ifLateMinutes: 60,
+      version: 1,
+      counters: { queued: 0, sent: 0, failed: 0, skipped: 0, uncertain: 0 },
+    });
+  });
+
+  it('create checks the template against the channel', async () => {
+    const { campaigns } = makeDeps();
+    expect(
+      await codeOf(
+        campaigns.create(CTX, {
+          name: 'Text',
+          channel: 'sms',
+          template: PUSH_TEMPLATE,
+        } as never)
+      )
+    ).toEqual([400, 'invalid_campaign']);
+    const sms = await campaigns.create(CTX, {
+      name: 'Text',
+      channel: 'sms',
+      template: { templateId: 'otp' },
+    });
+    expect(sms.template).toEqual({ templateId: 'otp' });
+  });
+
+  it('update edits a draft, bumps its version and checks expectedVersion', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    const updated = await campaigns.update(
+      CTX,
+      draft.id,
+      { name: 'Renamed', ifLateMinutes: 30 },
+      1
+    );
+    expect([updated.name, updated.ifLateMinutes, updated.version]).toEqual([
+      'Renamed',
+      30,
+      2,
+    ]);
+    expect(
+      await codeOf(campaigns.update(CTX, draft.id, { name: 'Again' }, 1))
+    ).toEqual([409, 'version_conflict']);
+    expect(
+      await codeOf(campaigns.update(CTX, draft.id, { channel: 'sms' }, 2))
+    ).toEqual([400, 'invalid_campaign']);
+  });
+
+  it('updating a scheduled campaign is not_draft', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    await setState(draft.id, 'scheduled');
+    expect(
+      await codeOf(campaigns.update(CTX, draft.id, { name: 'x' }, 1))
+    ).toEqual([409, 'not_draft']);
+    expect(await codeOf(campaigns.remove(CTX, draft.id))).toEqual([
+      409,
+      'not_draft',
+    ]);
+  });
+
+  it('remove deletes a draft; another project cannot see it', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    const other = { projectId: 'p2', userId: 'u2' };
+    expect(await codeOf(campaigns.get(other, draft.id))).toEqual([
+      404,
+      'not_found',
+    ]);
+    expect(await campaigns.list(other)).toEqual([]);
+    expect((await campaigns.list(CTX)).map((row) => row.id)).toEqual([
+      draft.id,
+    ]);
+    await campaigns.remove(CTX, draft.id);
+    expect(await codeOf(campaigns.get(CTX, draft.id))).toEqual([
+      404,
+      'not_found',
+    ]);
+  });
+
+  it('start without an audience is missing_audience', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'missing_audience',
+    ]);
+  });
+
+  it('start without a preview is count_preview_required', async () => {
+    const { campaigns } = makeDeps();
+    const audience = await dynamicAudience();
+    const draft = await pushDraft(audience.id);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'count_preview_required',
+    ]);
+  });
+
+  it('start after editing the campaign or the audience since the preview is count_preview_required', async () => {
+    const { campaigns, audiences, audience, draft } = await previewedDraft();
+    await campaigns.update(CTX, draft.id, { name: 'Edited' }, 1);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'count_preview_required',
+    ]);
+
+    await campaigns.countPreview(CTX, draft.id);
+    await audiences.update(
+      CTX,
+      audience.id,
+      { name: 'Pro 2', mode: 'dynamic', filter: PRO, excludeFilter: null },
+      1
+    );
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'count_preview_required',
+    ]);
+
+    await campaigns.countPreview(CTX, draft.id);
+    now = new Date(START.getTime() + (PREVIEW_TTL_MINUTES + 1) * MINUTE_MS);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'count_preview_required',
+    ]);
+  });
+
+  it('a preview of 5,000 starts without confirm', async () => {
+    members = proMembers(THRESHOLD);
+    const { campaigns, audience, draft } = await previewedDraft();
+    expect((await campaigns.get(CTX, draft.id)).countPreview).toMatchObject({
+      count: THRESHOLD,
+      campaignVersion: 1,
+      audienceVersion: 1,
+    });
+    const started = await campaigns.start(CTX, draft.id, {});
+    expect(started).toMatchObject({
+      state: 'running',
+      sendKind: 'now',
+      startedAt: START.toISOString(),
+      audienceVersion: audience.version,
+      materializeState: 'not_started',
+    });
+    const [counters] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      'SELECT count(*)::int AS n FROM marketing.campaign_counters WHERE campaign_id = $1::uuid',
+      draft.id
+    );
+    expect(counters?.n).toBe(1);
+  });
+
+  it('a preview of 5,001 needs confirm {5001, push}; a wrong count or channel is confirmation_mismatch', async () => {
+    members = proMembers(THRESHOLD + 1);
+    const { campaigns, draft } = await previewedDraft();
+    const required = await caught(campaigns.start(CTX, draft.id, {}));
+    expect([required.status, required.code, required.details]).toEqual([
+      409,
+      'confirmation_required',
+      { count: THRESHOLD + 1, channel: 'push' },
+    ]);
+    expect(
+      await codeOf(
+        campaigns.start(CTX, draft.id, {
+          confirm: { count: THRESHOLD, channel: 'push' },
+        })
+      )
+    ).toEqual([409, 'confirmation_mismatch']);
+    expect(
+      await codeOf(
+        campaigns.start(CTX, draft.id, {
+          confirm: { count: THRESHOLD + 1, channel: 'email' },
+        })
+      )
+    ).toEqual([409, 'confirmation_mismatch']);
+    const started = await campaigns.start(CTX, draft.id, {
+      confirm: { count: THRESHOLD + 1, channel: 'push' },
+    });
+    expect(started.state).toBe('running');
+  });
+
+  it('sms start is channel_not_ready by default', async () => {
+    const { campaigns } = makeDeps();
+    const audience = await dynamicAudience();
+    const sms = await campaigns.create(CTX, {
+      name: 'Text',
+      channel: 'sms',
+      template: { templateId: 'otp' },
+      audienceId: audience.id,
+    });
+    expect(await codeOf(campaigns.start(CTX, sms.id, {}))).toEqual([
+      409,
+      'channel_not_ready',
+    ]);
+    const hooked = makeDeps(async () => 'template_not_approved').campaigns;
+    expect(await codeOf(hooked.start(CTX, sms.id, {}))).toEqual([
+      409,
+      'template_not_approved',
+    ]);
+  });
+
+  it('a snapshot audience edited after freeze is audience_snapshot_stale', async () => {
+    const { audiences, campaigns } = makeDeps();
+    const snapshotInput = {
+      name: 'Frozen',
+      mode: 'snapshot' as const,
+      filter: PRO,
+      excludeFilter: null,
+    };
+    const audience = await audiences.create(CTX, snapshotInput);
+    const draft = await pushDraft(audience.id);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'audience_snapshot_stale',
+    ]);
+    await audiences.freeze(CTX, audience.id);
+    expect(await campaigns.countPreview(CTX, draft.id)).toMatchObject({
+      count: 30,
+      approximate: false,
+    });
+    await audiences.update(CTX, audience.id, snapshotInput, 1);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'audience_snapshot_stale',
+    ]);
+  });
+
+  it('an audience whose filter no longer fits the live schema is invalid_filter', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    const audience = (await campaigns.get(CTX, draft.id)).audienceId;
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.audiences SET filter = '{"dimension":"gone","op":"eq","values":["x"]}'::jsonb WHERE id = $1::uuid`,
+      audience
+    );
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'invalid_filter',
+    ]);
+  });
+
+  it('start while another campaign of the project runs queues it as scheduled with send_kind now', async () => {
+    const first = await previewedDraft('First');
+    await first.campaigns.start(CTX, first.draft.id, {});
+    const second = await pushDraft(first.audience.id, 'Second');
+    await first.campaigns.countPreview(CTX, second.id);
+    now = new Date(START.getTime() + MINUTE_MS);
+    const queued = await first.campaigns.start(CTX, second.id, {});
+    expect(queued).toMatchObject({
+      state: 'scheduled',
+      sendKind: 'now',
+      sendAt: now.toISOString(),
+      startedAt: null,
+    });
+  });
+
+  it('pause then resume returns to running; a paused campaign keeps the project slot', async () => {
+    const { campaigns, audience, draft } = await previewedDraft();
+    await campaigns.start(CTX, draft.id, {});
+    expect((await campaigns.pause(CTX, draft.id)).state).toBe('paused');
+    const other = await pushDraft(audience.id, 'Other');
+    await campaigns.countPreview(CTX, other.id);
+    expect((await campaigns.start(CTX, other.id, {})).state).toBe('scheduled');
+    expect((await campaigns.resume(CTX, draft.id)).state).toBe('running');
+    expect(await codeOf(campaigns.resume(CTX, draft.id))).toEqual([
+      409,
+      'invalid_transition',
+    ]);
+  });
+
+  it('unschedule returns a queued campaign to draft', async () => {
+    const first = await previewedDraft('First');
+    await first.campaigns.start(CTX, first.draft.id, {});
+    const second = await pushDraft(first.audience.id, 'Second');
+    await first.campaigns.countPreview(CTX, second.id);
+    await first.campaigns.start(CTX, second.id, {});
+    expect(await first.campaigns.unschedule(CTX, second.id)).toMatchObject({
+      state: 'draft',
+      sendKind: null,
+      sendAt: null,
+    });
+  });
+
+  it('cancel marks pending and leased recipients skipped with reason cancelled and leaves sending rows', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await campaigns.start(CTX, draft.id, {});
+    await insertRecipients(draft.id, ['pending', 'leased', 'sending', 'sent']);
+    const cancelled = await campaigns.cancel(CTX, draft.id);
+    expect(cancelled.state).toBe('cancelled');
+    expect(cancelled.finishedAt).toBe(START.toISOString());
+    expect(cancelled.counters.skipped).toBe(2);
+    expect(await recipients(draft.id)).toEqual([
+      { profile_id: 'r0', status: 'skipped', reason: 'cancelled' },
+      { profile_id: 'r1', status: 'skipped', reason: 'cancelled' },
+      { profile_id: 'r2', status: 'sending', reason: null },
+      { profile_id: 'r3', status: 'sent', reason: null },
+    ]);
+  });
+
+  it('cancel on completed is invalid_transition', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    await setState(draft.id, 'completed');
+    expect(await codeOf(campaigns.cancel(CTX, draft.id))).toEqual([
+      409,
+      'invalid_transition',
+    ]);
+    expect(await codeOf(campaigns.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'invalid_transition',
+    ]);
+  });
+
+  it('schedule 2026-11-10T09:00 Asia/Kolkata stores send_at 03:30Z', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    const updated = await campaigns.update(
+      CTX,
+      draft.id,
+      { sendAtLocal: '2026-11-10T09:00' },
+      1
+    );
+    await campaigns.countPreview(CTX, updated.id);
+    expect(await campaigns.schedule(CTX, draft.id, {})).toMatchObject({
+      state: 'scheduled',
+      sendKind: 'scheduled',
+      sendAt: '2026-11-10T03:30:00.000Z',
+      sendAtLocal: '2026-11-10T09:00',
+    });
+  });
+
+  it('schedule without a send time is invalid_send_time', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    expect(await codeOf(campaigns.schedule(CTX, draft.id, {}))).toEqual([
+      400,
+      'invalid_send_time',
+    ]);
+  });
+
+  it('schedule in the past is schedule_in_past', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await campaigns.update(
+      CTX,
+      draft.id,
+      { sendAtLocal: '2026-11-03T15:29' },
+      1
+    );
+    await campaigns.countPreview(CTX, draft.id);
+    expect(await codeOf(campaigns.schedule(CTX, draft.id, {}))).toEqual([
+      409,
+      'schedule_in_past',
+    ]);
+  });
+
+  it('the 11th test send in an hour is test_send_limit', async () => {
+    const { campaigns } = makeDeps();
+    const draft = await pushDraft(null);
+    expect(await codeOf(campaigns.requestTestSend(CTX, draft.id, ''))).toEqual([
+      400,
+      'invalid_profile_id',
+    ]);
+    for (let i = 0; i < TEST_SENDS_PER_HOUR; i++) {
+      const { id } = await campaigns.requestTestSend(CTX, draft.id, 'me');
+      expect(id).toBeString();
+    }
+    expect(
+      await codeOf(campaigns.requestTestSend(CTX, draft.id, 'me'))
+    ).toEqual([429, 'test_send_limit']);
+    now = new Date(START.getTime() + 61 * MINUTE_MS);
+    await campaigns.requestTestSend(CTX, draft.id, 'me');
+    const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM marketing.campaign_test_sends
+       WHERE campaign_id = $1::uuid AND status = 'pending' AND project_id = $2 AND requested_by = 'u1'`,
+      draft.id,
+      PROJECT
+    );
+    expect(row?.n).toBe(TEST_SENDS_PER_HOUR + 1);
+  });
+
+  it('completeIfDone completes only when nothing is pending, leased or sending', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await campaigns.start(CTX, draft.id, {});
+    await insertRecipients(draft.id, ['sent', 'failed']);
+    expect(await campaigns.completeIfDone(draft.id)).toBe(false);
+    await setState(draft.id, 'running', ", materialize_state = 'done'");
+    for (const status of ['pending', 'leased', 'sending']) {
+      await sql.$executeRawUnsafe(
+        `UPDATE marketing.campaign_recipients SET status = $2 WHERE campaign_id = $1::uuid AND profile_id = 'r1'`,
+        draft.id,
+        status
+      );
+      expect(await campaigns.completeIfDone(draft.id)).toBe(false);
+    }
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaign_recipients SET status = 'failed' WHERE campaign_id = $1::uuid`,
+      draft.id
+    );
+    expect(await campaigns.completeIfDone(draft.id)).toBe(true);
+    expect(await campaigns.get(CTX, draft.id)).toMatchObject({
+      state: 'completed',
+      finishedAt: START.toISOString(),
+    });
+    expect(await campaigns.completeIfDone(draft.id)).toBe(false);
+  });
+
+  it('failCampaign fails a running campaign with its reason', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await campaigns.start(CTX, draft.id, {});
+    await campaigns.failCampaign(draft.id, 'materialize_failed');
+    expect(await campaigns.get(CTX, draft.id)).toMatchObject({
+      state: 'failed',
+      stateReason: 'materialize_failed',
+    });
+  });
+
+  it('an audience edit committed while start waits for the audience lock makes start count_preview_required', async () => {
+    const { campaigns, audience, draft } = await previewedDraft();
+    let start: Promise<HttpError> | undefined;
+    await sql.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid FOR UPDATE',
+        audience.id
+      );
+      await tx.$executeRawUnsafe(
+        'UPDATE marketing.audiences SET version = version + 1 WHERE id = $1::uuid',
+        audience.id
+      );
+      start = caught(campaigns.start(CTX, draft.id, {}));
+      while (!(await waitingOnLock())) {
+        await Bun.sleep(LOCK_POLL_MS);
+      }
+    });
+    const error = await (start as Promise<HttpError>);
+    expect([error.status, error.code]).toEqual([409, 'count_preview_required']);
+    expect((await campaigns.get(CTX, draft.id)).state).toBe('draft');
+  });
+});

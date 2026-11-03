@@ -70,6 +70,7 @@ const CFG: MarketingConfig = {
   sourceConcurrency: 4,
   lookupWindowMs: 0,
   maxLatenessSeconds: 86_400,
+  confirmThreshold: 5000,
   webhookAllowHosts: [],
   kafka: { brokers: [], clientId: '', topic: '', groupId: '', ssl: false },
 };

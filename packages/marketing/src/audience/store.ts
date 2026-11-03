@@ -147,7 +147,7 @@ const isSourceError = (error: unknown) =>
   error instanceof SourceAuthError ||
   error instanceof SourceProtocolError;
 
-function freezeError(error: unknown): unknown {
+export function sourceHttpError(error: unknown): unknown {
   if (
     error instanceof SourceUnavailableError ||
     error instanceof SourceBusyError
@@ -500,7 +500,7 @@ export function createAudienceStore(deps: StoreDeps) {
       } catch (error) {
         await sql.$executeRawUnsafe(WIPE_STAGING, jobId);
         await sql.$executeRawUnsafe(DISCARD_UNFROZEN, id, locked.version);
-        throw freezeError(error);
+        throw sourceHttpError(error);
       }
     },
 

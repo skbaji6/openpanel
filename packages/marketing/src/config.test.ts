@@ -33,6 +33,17 @@ describe('loadConfig', () => {
     ).toThrow(/MARKETING_SOURCE_CONCURRENCY/);
   });
 
+  it('MARKETING_CONFIRM_THRESHOLD defaults to 5000 and rejects 0', () => {
+    expect(loadConfig(required).confirmThreshold).toBe(5000);
+    expect(
+      loadConfig({ ...required, MARKETING_CONFIRM_THRESHOLD: '200' })
+        .confirmThreshold
+    ).toBe(200);
+    expect(() =>
+      loadConfig({ ...required, MARKETING_CONFIRM_THRESHOLD: '0' })
+    ).toThrow(/MARKETING_CONFIRM_THRESHOLD/);
+  });
+
   it('uses MARKETING_DATABASE_URL when set', () => {
     const config = loadConfig({
       ...required,

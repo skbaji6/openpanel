@@ -77,6 +77,7 @@ const rawSchema = z
     MARKETING_SOURCE_CONCURRENCY: positiveInt(4),
     MARKETING_LOOKUP_WINDOW_MS: positiveInt(2000),
     MARKETING_MAX_LATENESS: positiveInt(86_400),
+    MARKETING_CONFIRM_THRESHOLD: positiveInt(5000),
     // Hostnames only, any port; IPv6 literals are unsupported because they contain ':'.
     MARKETING_WEBHOOK_ALLOW_HOSTS: list.refine(
       (hosts) => hosts.every((host) => !/[:/]/.test(host)),
@@ -186,6 +187,7 @@ export interface MarketingConfig {
   sourceConcurrency: number;
   lookupWindowMs: number;
   maxLatenessSeconds: number;
+  confirmThreshold: number;
   webhookAllowHosts: string[];
   kafka: KafkaConfig;
 }
@@ -243,6 +245,7 @@ export function loadConfig(
     sourceConcurrency: raw.MARKETING_SOURCE_CONCURRENCY,
     lookupWindowMs: raw.MARKETING_LOOKUP_WINDOW_MS,
     maxLatenessSeconds: raw.MARKETING_MAX_LATENESS,
+    confirmThreshold: raw.MARKETING_CONFIRM_THRESHOLD,
     webhookAllowHosts: raw.MARKETING_WEBHOOK_ALLOW_HOSTS,
     kafka: {
       brokers: raw.KAFKA_BROKERS,
