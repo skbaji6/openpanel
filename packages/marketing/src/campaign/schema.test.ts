@@ -4,6 +4,8 @@ import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 
 const UNIQUE_VIOLATION = '23505';
+const CHECK_VIOLATION = '23514';
+const FOREIGN_KEY_VIOLATION = '23503';
 const SEEDED_RECIPIENTS = 10_000;
 
 async function insertCampaign(projectId: string, state: string) {
@@ -36,8 +38,12 @@ async function errorCode(run: Promise<unknown>): Promise<string | undefined> {
   try {
     await run;
   } catch (error) {
-    const { meta, code } = error as { meta?: { code?: string }; code?: string };
-    return meta?.code ?? code ?? 'unknown';
+    const { meta, message } = error as {
+      meta?: { code?: string };
+      message: string;
+    };
+    // A failure without a SQLSTATE surfaces its message, which no expected code matches.
+    return meta?.code ?? message;
   }
   return;
 }
@@ -68,7 +74,27 @@ describe('campaign schema', () => {
   });
 
   it('an unknown campaign state is rejected by the check', async () => {
-    expect(await errorCode(insertCampaign('p1', 'bogus'))).toBeDefined();
+    expect(await errorCode(insertCampaign('p1', 'bogus'))).toBe(
+      CHECK_VIOLATION
+    );
+  });
+
+  it('an unknown recipient status is rejected by the check', async () => {
+    const campaignId = await insertCampaign('p1', 'draft');
+    const insertion = sql.$executeRawUnsafe(
+      `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, status) VALUES ($1::uuid, 'u9', 'p1', 'bogus')`,
+      campaignId
+    );
+    expect(await errorCode(insertion)).toBe(CHECK_VIOLATION);
+  });
+
+  it('campaign_recipients_lease_idx covers leased and sending rows only', async () => {
+    const [row] = await sql.$queryRawUnsafe<{ indexdef: string }[]>(
+      `SELECT indexdef FROM pg_indexes WHERE schemaname = 'marketing' AND indexname = 'campaign_recipients_lease_idx'`
+    );
+    expect(row?.indexdef).toContain('lease_until');
+    expect(row?.indexdef).toContain("'leased'");
+    expect(row?.indexdef).toContain("'sending'");
   });
 
   it("a recipient row has idempotency_key '<campaign_id>:<profile_id>'", async () => {
@@ -90,7 +116,7 @@ describe('campaign schema', () => {
     expect(row?.n).toBe(1);
   });
 
-  it('the claim query uses campaign_recipients_claim_idx', async () => {
+  it('EXPLAIN of SELECT ... FOR UPDATE SKIP LOCKED uses campaign_recipients_claim_idx', async () => {
     const campaignId = await insertCampaign('p1', 'running');
     await sql.$executeRawUnsafe(
       `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, due_at)
@@ -118,6 +144,6 @@ describe('campaign schema', () => {
       'DELETE FROM marketing.audiences WHERE id = $1::uuid',
       audienceId
     );
-    expect(await errorCode(deletion)).toBeDefined();
+    expect(await errorCode(deletion)).toBe(FOREIGN_KEY_VIOLATION);
   });
 });
