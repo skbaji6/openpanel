@@ -55,20 +55,21 @@ function checkIdCondition({ op, values }: Condition): string[] {
     : ['id values must be strings'];
 }
 
-function checkCondition(condition: Condition, schema: Schema): string[] {
+function checkCondition(condition: Condition, schema: Schema | null): string[] {
   const { dimension, op, values } = condition;
 
   if (dimension === RESERVED_ID_DIMENSION) {
     return checkIdCondition(condition);
   }
 
-  const declared = schema.dimensions.find((d) => d.key === dimension);
-  if (!declared) {
+  const declared = schema?.dimensions.find((d) => d.key === dimension);
+  if (schema && !declared) {
     return ['unknown dimension'];
   }
-  const label = `dimension ${declared.key}`;
+  const label = declared ? `dimension ${declared.key}` : 'a dimension';
 
-  const isOrdered = declared.type === 'number' || declared.type === 'date';
+  const isOrdered =
+    !declared || declared.type === 'number' || declared.type === 'date';
   if ((op === 'gt' || op === 'lt' || op === 'between') && !isOrdered) {
     return [`${op} is not allowed on ${label}`];
   }
@@ -83,6 +84,9 @@ function checkCondition(condition: Condition, schema: Schema): string[] {
     ];
   }
 
+  if (!declared) {
+    return [];
+  }
   return values.every(valueChecks[declared.type])
     ? []
     : [`values for ${label} must be of type ${declared.type}`];
@@ -91,7 +95,7 @@ function checkCondition(condition: Condition, schema: Schema): string[] {
 // depth counts groups: a lone condition is 1, a group of conditions is 2.
 function walk(
   node: FilterTree,
-  schema: Schema,
+  schema: Schema | null,
   depth: number,
   errors: string[]
 ): void {
@@ -109,12 +113,33 @@ function walk(
   errors.push(...checkCondition(node, schema));
 }
 
-export function validateFilter(
+const MAX_FILTER_STRING_LENGTH = 512;
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const NUL = '\u0000';
+
+// Runs before zod so hostile input cannot recurse the parser's stack.
+function isHostile(node: unknown, depth: number): boolean {
+  if (depth > MAX_FILTER_DEPTH * 2 + 2) {
+    return true;
+  }
+  if (typeof node === 'string') {
+    return node.length > MAX_FILTER_STRING_LENGTH || node.includes(NUL);
+  }
+  if (typeof node !== 'object' || node === null) {
+    return false;
+  }
+  if (Object.keys(node).some((key) => FORBIDDEN_KEYS.has(key))) {
+    return true;
+  }
+  return Object.values(node).some((child) => isHostile(child, depth + 1));
+}
+
+function check(
   filter: unknown,
-  schema: Schema
+  schema: Schema | null
 ): { ok: true; filter: FilterTree } | { ok: false; errors: string[] } {
-  const parsed = zFilterTree.safeParse(filter);
-  if (!parsed.success) {
+  const parsed = isHostile(filter, 0) ? null : zFilterTree.safeParse(filter);
+  if (!parsed?.success) {
     return { ok: false, errors: ['filter is not a valid filter tree'] };
   }
   const errors: string[] = [];
@@ -123,6 +148,19 @@ export function validateFilter(
   return unique.length > 0
     ? { ok: false, errors: unique }
     : { ok: true, filter: parsed.data };
+}
+
+export function validateFilter(
+  filter: unknown,
+  schema: Schema
+): { ok: true; filter: FilterTree } | { ok: false; errors: string[] } {
+  return check(filter, schema);
+}
+
+export function validateFilterStructure(
+  filter: unknown
+): { ok: true; filter: FilterTree } | { ok: false; errors: string[] } {
+  return check(filter, null);
 }
 
 export function normalizeResolveInputs(raw: string[]): {
