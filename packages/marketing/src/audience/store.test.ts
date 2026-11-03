@@ -3,6 +3,7 @@ import { HttpError } from '../api/http';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
+import type { Queryable } from '../engine/engine';
 import type { FilterTree, Schema } from './contract';
 import { MAX_IDS_PER_CHANGE, MAX_LIST_IDS } from './definition';
 import { createFakeSource, type FakeMember } from './fake-source';
@@ -27,6 +28,10 @@ const SCHEMA: Schema = {
 };
 const PRO_COUNT = 30;
 const CHUNKS = MAX_LIST_IDS / MAX_IDS_PER_CHANGE;
+// Two members pages at the materialiser's default page size of 1,000.
+const TWO_PAGES = 1500;
+const ACTIVE_STATES = ['scheduled', 'running', 'paused'];
+const LOCK_POLL_MS = 20;
 
 const pad = (n: number) => String(n).padStart(6, '0');
 const ids = (prefix: string, count: number, from = 1) =>
@@ -36,12 +41,19 @@ let down = false;
 let members: FakeMember[] = [];
 let hasSource = true;
 
-function makeStore() {
-  const source: AudienceSource = createFakeSource({
+interface StoreOptions {
+  failAfterPages?: number;
+  wrap?: (source: AudienceSource) => AudienceSource;
+}
+
+function makeStore(options: StoreOptions = {}) {
+  const fake: AudienceSource = createFakeSource({
     members,
     schema: SCHEMA,
     down: () => down,
+    failAfterPages: options.failAfterPages,
   });
+  const source = options.wrap ? options.wrap(fake) : fake;
   return createAudienceStore({
     sql,
     source: async (projectId) =>
@@ -78,8 +90,20 @@ async function stagedRows(): Promise<number> {
   return row?.n ?? 0;
 }
 
-async function insertCampaign(audienceId: string, state: string) {
-  await sql.$executeRawUnsafe(
+async function editIsWaitingOnLock(): Promise<boolean> {
+  const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+    `SELECT count(*)::int AS n FROM pg_stat_activity
+     WHERE datname = current_database() AND wait_event_type = 'Lock'`
+  );
+  return (row?.n ?? 0) > 0;
+}
+
+async function insertCampaign(
+  audienceId: string,
+  state: string,
+  db: Queryable = sql
+) {
+  await db.$executeRawUnsafe(
     `INSERT INTO marketing.campaigns (id, project_id, name, state, channel, template, audience_id, confirm_threshold, created_by)
      VALUES (gen_random_uuid(), $1, 'c', $2, 'push', '{}'::jsonb, $3::uuid, 5000, 'u1')`,
     PROJECT,
@@ -199,6 +223,10 @@ describe('audience store', () => {
       ids: ['c'],
       nextCursor: null,
     });
+    expect(await store.listIds(CTX, row.id, 'exclude', null, 0)).toEqual({
+      ids: ['a'],
+      nextCursor: 'a',
+    });
     row = await store.changeIds(
       CTX,
       row.id,
@@ -299,24 +327,135 @@ describe('audience store', () => {
     );
   });
 
-  it('update, changeIds, freeze and remove on an audience used by a scheduled campaign are audience_in_use', async () => {
+  it('update, changeIds, freeze and remove on an audience used by a scheduled, running or paused campaign are audience_in_use', async () => {
+    const store = makeStore();
+    for (const state of ACTIVE_STATES) {
+      const row = await store.create(CTX, snapshotInput);
+      await insertCampaign(row.id, state);
+      expect((await store.get(CTX, row.id)).inUse).toBe(true);
+      for (const attempt of [
+        () => store.update(CTX, row.id, snapshotInput, 1),
+        () => store.changeIds(CTX, row.id, { list: 'include', add: ['x'] }, 1),
+        () => store.freeze(CTX, row.id),
+        () => store.remove(CTX, row.id),
+      ]) {
+        const error = await caught(attempt());
+        expect([state, error.status, error.code]).toEqual([
+          state,
+          409,
+          'audience_in_use',
+        ]);
+      }
+      expect(await store.get(CTX, row.id)).toMatchObject({
+        version: 1,
+        snapshotVersion: null,
+      });
+      // A project holds one running or paused campaign at a time.
+      await sql.$executeRawUnsafe('DELETE FROM marketing.campaigns');
+    }
+  });
+
+  it('a campaign scheduled while an edit waits for the row lock makes the edit audience_in_use', async () => {
+    const store = makeStore();
+    const row = await store.create(CTX, dynamicInput);
+    let edit: Promise<HttpError> | undefined;
+    await sql.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid FOR UPDATE',
+        row.id
+      );
+      await insertCampaign(row.id, 'scheduled', tx);
+      edit = caught(store.update(CTX, row.id, dynamicInput, 1));
+      while (!(await editIsWaitingOnLock())) {
+        await Bun.sleep(LOCK_POLL_MS);
+      }
+    });
+    const error = await (edit as Promise<HttpError>);
+    expect([error.status, error.code]).toEqual([409, 'audience_in_use']);
+    expect((await store.get(CTX, row.id)).version).toBe(1);
+  });
+
+  it('an edit during freeze is version_conflict and leaves no rows at the attempted version', async () => {
+    members = ids('pro', TWO_PAGES).map((id) => ({
+      id,
+      values: { plan: 'pro' },
+    }));
+    let audienceId = '';
+    let pages = 0;
+    const store = makeStore({
+      wrap: (source) => ({
+        ...source,
+        members: async (req) => {
+          pages += 1;
+          if (pages === 2) {
+            await makeStore().update(CTX, audienceId, snapshotInput, 1);
+          }
+          return await source.members(req);
+        },
+      }),
+    });
+    audienceId = (await store.create(CTX, snapshotInput)).id;
+    const error = await caught(store.freeze(CTX, audienceId));
+    expect([error.status, error.code]).toEqual([409, 'version_conflict']);
+    expect(pages).toBe(2);
+    expect(await snapshotRows(audienceId)).toEqual([]);
+    expect(await stagedRows()).toBe(0);
+  });
+
+  it('a campaign scheduled during freeze is audience_in_use and leaves no rows at the attempted version', async () => {
+    let audienceId = '';
+    const store = makeStore({
+      wrap: (source) => ({
+        ...source,
+        members: async (req) => {
+          await insertCampaign(audienceId, 'scheduled');
+          return await source.members(req);
+        },
+      }),
+    });
+    audienceId = (await store.create(CTX, snapshotInput)).id;
+    const error = await caught(store.freeze(CTX, audienceId));
+    expect([error.status, error.code]).toEqual([409, 'audience_in_use']);
+    expect(await snapshotRows(audienceId)).toEqual([]);
+    expect((await store.get(CTX, audienceId)).snapshotVersion).toBeNull();
+  });
+
+  it('a freeze after an edit that fails on page 2 keeps only the previous version rows', async () => {
+    members = ids('pro', TWO_PAGES).map((id) => ({
+      id,
+      values: { plan: 'pro' },
+    }));
     const store = makeStore();
     const row = await store.create(CTX, snapshotInput);
-    await insertCampaign(row.id, 'scheduled');
-    expect((await store.get(CTX, row.id)).inUse).toBe(true);
-    for (const attempt of [
-      () => store.update(CTX, row.id, snapshotInput, 1),
-      () => store.changeIds(CTX, row.id, { list: 'include', add: ['x'] }, 1),
-      () => store.freeze(CTX, row.id),
-      () => store.remove(CTX, row.id),
-    ]) {
-      const error = await caught(attempt());
-      expect([error.status, error.code]).toEqual([409, 'audience_in_use']);
-    }
-    expect(await store.get(CTX, row.id)).toMatchObject({
-      version: 1,
-      snapshotVersion: null,
+    await store.freeze(CTX, row.id);
+    const before = await snapshotRows(row.id);
+    await store.changeIds(
+      CTX,
+      row.id,
+      { list: 'exclude', add: ['pro-000002'] },
+      1
+    );
+    const failing = makeStore({ failAfterPages: 1 });
+    const error = await caught(failing.freeze(CTX, row.id));
+    expect([error.status, error.code]).toEqual([503, 'source_unavailable']);
+    expect(before.length).toBe(TWO_PAGES);
+    expect(await snapshotRows(row.id)).toEqual(before);
+    expect(await stagedRows()).toBe(0);
+    expect((await store.get(CTX, row.id)).snapshotVersion).toBe(1);
+  });
+
+  it('a schema() that never answers falls back to the structural check', async () => {
+    const store = makeStore({
+      wrap: (source) => ({
+        ...source,
+        schema: () => new Promise<never>(() => undefined),
+      }),
     });
+    const row = await store.create(CTX, {
+      ...dynamicInput,
+      filter: { dimension: 'country', op: 'eq', values: ['IN'] },
+    });
+    expect(row.schemaCheckedAt).toBeNull();
   });
 
   it('the same audience used only by a completed campaign can be edited', async () => {

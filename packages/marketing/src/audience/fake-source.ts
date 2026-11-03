@@ -45,6 +45,8 @@ interface FakeSourceOptions {
   schema?: Schema;
   pageDelayMs?: number;
   down?: () => boolean;
+  // Serves this many members pages, then fails every later one as unavailable.
+  failAfterPages?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -209,6 +211,7 @@ export function createFakeSource(opts: FakeSourceOptions) {
   const calls: FakeCall[] = [];
   const now = opts.now ?? (() => performance.now());
   let timeMs = 0;
+  let pagesServed = 0;
 
   async function run<T>(
     call: FakeCall,
@@ -286,6 +289,13 @@ export function createFakeSource(opts: FakeSourceOptions) {
         async () => {
           checkFilter(req.filter);
           checkLimit('limit', req.limit, MAX_PAGE_SIZE);
+          if (
+            opts.failAfterPages !== undefined &&
+            pagesServed >= opts.failAfterPages
+          ) {
+            throw new SourceUnavailableError('fake_failed_after_pages');
+          }
+          pagesServed += 1;
           await waitForPage();
           const after = req.cursor;
           const rest = matching(req.filter).filter(

@@ -84,10 +84,11 @@ interface LockedRow {
   exclude_filter: FilterTree | null;
   version: number;
   snapshot_version: number | null;
-  in_use: boolean;
 }
 
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
+const SCHEMA_CHECK_TIMEOUT_MS = 2000;
+const MAX_ID_PAGE = 1000;
 const zAudienceId = z.uuid();
 
 const IN_USE = `EXISTS (SELECT 1 FROM marketing.campaigns c
@@ -101,8 +102,10 @@ const SELECT_ROWS = `SELECT a.id::text, a.project_id, a.name, a.mode, a.filter, 
   a.version, a.snapshot_version, a.snapshot_count, a.snapshot_at, a.schema_checked_at,
   ${IN_USE} AS in_use, a.created_by, a.created_at, a.updated_at
   FROM marketing.audiences a WHERE a.project_id = $1`;
-const LOCK_ROW = `SELECT a.mode, a.filter, a.exclude_filter, a.version, a.snapshot_version, ${IN_USE} AS in_use
+const LOCK_ROW = `SELECT a.mode, a.filter, a.exclude_filter, a.version, a.snapshot_version
   FROM marketing.audiences a WHERE a.id = $1::uuid AND a.project_id = $2 FOR UPDATE`;
+// A separate statement after the lock: under READ COMMITTED it sees campaigns committed while the lock was awaited.
+const IN_USE_AFTER_LOCK = `SELECT ${IN_USE} AS in_use FROM marketing.audiences a WHERE a.id = $1::uuid`;
 // A freeze page commits only while the definition it materialises is still the saved one.
 const DEFINITION_UNCHANGED =
   'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid AND version = $2 FOR SHARE';
@@ -200,7 +203,11 @@ export function createAudienceStore(deps: StoreDeps) {
     if (!row) {
       throw new HttpError(404, 'not_found');
     }
-    if (row.in_use) {
+    const [usage] = await tx.$queryRawUnsafe<{ in_use: boolean }[]>(
+      IN_USE_AFTER_LOCK,
+      id
+    );
+    if (usage?.in_use) {
       throw new HttpError(409, 'audience_in_use');
     }
     if (expectedVersion !== null && row.version !== expectedVersion) {
@@ -223,13 +230,19 @@ export function createAudienceStore(deps: StoreDeps) {
     if (!source) {
       return null;
     }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), SCHEMA_CHECK_TIMEOUT_MS);
+    });
     try {
-      return await source.schema();
+      return await Promise.race([source.schema(), timedOut]);
     } catch (error) {
       if (isSourceError(error)) {
         return null;
       }
       throw error;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -282,43 +295,37 @@ export function createAudienceStore(deps: StoreDeps) {
     source: AudienceSource,
     ctx: StoreContext,
     id: string,
-    locked: LockedRow
+    locked: LockedRow,
+    jobId: string
   ): Promise<number> {
-    const jobId = randomUUID();
-    try {
-      const result = await runMaterialization(
-        { sql, source },
-        {
-          jobId,
-          projectId: ctx.projectId,
+    const result = await runMaterialization(
+      { sql, source },
+      {
+        jobId,
+        projectId: ctx.projectId,
+        audienceId: id,
+        filter: locked.filter,
+        excludeFilter: locked.exclude_filter,
+        target: {
+          kind: 'snapshot',
           audienceId: id,
-          filter: locked.filter,
-          excludeFilter: locked.exclude_filter,
-          target: {
-            kind: 'snapshot',
-            audienceId: id,
-            snapshotVersion: locked.version,
-          },
-          progress: null,
-          saveProgress: async (tx) =>
-            (
-              await tx.$queryRawUnsafe<unknown[]>(
-                DEFINITION_UNCHANGED,
-                id,
-                locked.version
-              )
-            ).length === 1,
-        }
-      );
-      if (result.status !== 'done') {
-        throw new HttpError(409, 'version_conflict');
+          snapshotVersion: locked.version,
+        },
+        progress: null,
+        saveProgress: async (tx) =>
+          (
+            await tx.$queryRawUnsafe<unknown[]>(
+              DEFINITION_UNCHANGED,
+              id,
+              locked.version
+            )
+          ).length === 1,
       }
-      return result.total;
-    } catch (error) {
-      await sql.$executeRawUnsafe(WIPE_STAGING, jobId);
-      await sql.$executeRawUnsafe(DISCARD_UNFROZEN, id, locked.version);
-      throw freezeError(error);
+    );
+    if (result.status !== 'done') {
+      throw new HttpError(409, 'version_conflict');
     }
+    return result.total;
   }
 
   return {
@@ -422,6 +429,10 @@ export function createAudienceStore(deps: StoreDeps) {
       limit: number
     ): Promise<{ ids: string[]; nextCursor: string | null }> {
       await fetchRow(sql, ctx, id);
+      const pageSize = Math.min(
+        MAX_ID_PAGE,
+        Math.max(1, Math.trunc(limit) || 1)
+      );
       const rows = await sql.$queryRawUnsafe<{ profile_id: string }[]>(
         `SELECT profile_id FROM marketing.audience_ids
          WHERE audience_id = $1::uuid AND list = $2 AND ($3::text IS NULL OR profile_id > $3)
@@ -429,12 +440,12 @@ export function createAudienceStore(deps: StoreDeps) {
         id,
         list,
         cursor,
-        limit + 1
+        pageSize + 1
       );
-      const ids = rows.slice(0, limit).map((row) => row.profile_id);
+      const ids = rows.slice(0, pageSize).map((row) => row.profile_id);
       return {
         ids,
-        nextCursor: rows.length > limit ? (ids.at(-1) ?? null) : null,
+        nextCursor: rows.length > pageSize ? (ids.at(-1) ?? null) : null,
       };
     },
 
@@ -482,8 +493,15 @@ export function createAudienceStore(deps: StoreDeps) {
       if (!source) {
         throw new HttpError(409, 'source_not_http');
       }
-      const total = await materializeSnapshot(source, ctx, id, locked);
-      return await switchSnapshot(ctx, id, locked.version, total);
+      const jobId = randomUUID();
+      try {
+        const total = await materializeSnapshot(source, ctx, id, locked, jobId);
+        return await switchSnapshot(ctx, id, locked.version, total);
+      } catch (error) {
+        await sql.$executeRawUnsafe(WIPE_STAGING, jobId);
+        await sql.$executeRawUnsafe(DISCARD_UNFROZEN, id, locked.version);
+        throw freezeError(error);
+      }
     },
 
     async definition(
