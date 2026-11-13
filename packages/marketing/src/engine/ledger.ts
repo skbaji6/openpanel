@@ -50,6 +50,8 @@ const COUNT_CHANNEL_SQL = `
   WHERE project_id = $1 AND channel = $2 AND sent_at >= $3::timestamptz`;
 
 const CAP_LOCK_SQL = 'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))';
+const CAP_LOCKS_SQL =
+  'SELECT pg_advisory_xact_lock(hashtextextended(key, 0)) FROM unnest($1::text[]) AS key';
 
 const PURGE_LEDGER_CHUNK_SQL = `
   DELETE FROM marketing.send_ledger WHERE ctid IN (
@@ -107,6 +109,18 @@ export function capLockKey(args: CapLockArgs): string {
 // Taken after the engine's profile lock when both are needed, never before it, so the two cannot deadlock.
 export async function lockCap(tx: Queryable, args: CapLockArgs): Promise<void> {
   await tx.$executeRawUnsafe(CAP_LOCK_SQL, capLockKey(args));
+}
+
+// A batch sender's locks in one statement, in sorted key order so two batches sharing people cannot deadlock.
+export async function lockCaps(
+  tx: Queryable,
+  args: CapLockArgs[]
+): Promise<void> {
+  const keys = [...new Set(args.map(capLockKey))].sort();
+  if (keys.length === 0) {
+    return;
+  }
+  await tx.$executeRawUnsafe(CAP_LOCKS_SQL, keys);
 }
 
 export async function recordLedger(
