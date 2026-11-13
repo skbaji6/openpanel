@@ -19,12 +19,12 @@ CREATE INDEX IF NOT EXISTS send_ledger_person_idx ON marketing.send_ledger (proj
 CREATE INDEX IF NOT EXISTS send_ledger_channel_day_idx ON marketing.send_ledger (project_id, channel, sent_at);
 CREATE INDEX IF NOT EXISTS send_ledger_sent_at_idx ON marketing.send_ledger (sent_at);
 
--- Journey sends made before the ledger existed still count toward frequency caps.
+-- Journey sends of the last 400 days (the ledger's retention) made before the ledger existed still count toward frequency caps.
 INSERT INTO marketing.send_ledger (source_ref, project_id, profile_id, channel, sent_at)
 SELECT 'step:' || s.enrollment_id || ':' || s.step_index, e.project_id, e.profile_id, e.rule_snapshot->'steps'->s.step_index->>'channel', s.sent_at
 FROM marketing.steps s
 JOIN marketing.enrollments e ON e.id = s.enrollment_id
-WHERE s.status IN ('sent', 'sending') AND s.sent_at IS NOT NULL AND e.rule_snapshot->'steps'->s.step_index->>'channel' IS NOT NULL
+WHERE s.status IN ('sent', 'sending') AND s.sent_at > now() - interval '400 days' AND e.rule_snapshot->'steps'->s.step_index->>'channel' IS NOT NULL
 ON CONFLICT DO NOTHING;
 
 ALTER TABLE marketing.campaign_recipients ADD COLUMN IF NOT EXISTS lease_token uuid NULL;

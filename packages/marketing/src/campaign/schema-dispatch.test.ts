@@ -14,6 +14,7 @@ const LEDGER_SPAN_SECONDS = 7_776_000;
 const LEDGER_PROJECTS = 5;
 const TEMPLATE_ID = '00000000-0000-0000-0000-000000000001';
 const ENROLLMENT_ID = '00000000-0000-0000-0000-0000000000e1';
+const OLD_ENROLLMENT_ID = '00000000-0000-0000-0000-0000000000e2';
 const LEDGER_MIGRATION = join(
   import.meta.dir,
   '..',
@@ -118,27 +119,19 @@ describe('dispatch schema', () => {
   });
 
   it(
-    'EXPLAIN of the cap count over 200,000 ledger rows uses send_ledger_person_idx',
+    'over 200,000 ledger rows the cap count uses send_ledger_person_idx and the day count uses send_ledger_channel_day_idx',
     async () => {
       await seedLedger();
-      const text = await plan(
+      const capPlan = await plan(
         `SELECT count(*) FROM marketing.send_ledger
        WHERE project_id = 'p1' AND profile_id = ANY(ARRAY['u1','u2','u3']) AND sent_at > now() - interval '1 day'`
       );
-      expect(text).toContain('send_ledger_person_idx');
-    },
-    SEED_TEST_TIMEOUT_MS
-  );
-
-  it(
-    'EXPLAIN of the day count uses send_ledger_channel_day_idx',
-    async () => {
-      await seedLedger();
-      const text = await plan(
+      expect(capPlan).toContain('send_ledger_person_idx');
+      const dayPlan = await plan(
         `SELECT count(*) FROM marketing.send_ledger
        WHERE project_id = 'p1' AND channel = 'sms' AND sent_at >= now() - interval '30 days' AND sent_at < now()`
       );
-      expect(text).toContain('send_ledger_channel_day_idx');
+      expect(dayPlan).toContain('send_ledger_channel_day_idx');
     },
     SEED_TEST_TIMEOUT_MS
   );
@@ -185,25 +178,68 @@ describe('dispatch schema', () => {
     ]);
   });
 
-  it('running migrate() twice is a no-op', async () => {
-    expect(await migrate()).toEqual([]);
-  });
-
-  it('the ledger backfill copies sent journey steps once and is idempotent', async () => {
+  async function seedJourneySteps() {
     const snapshot = JSON.stringify({
       steps: [{ channel: 'email' }, { channel: 'push' }, { channel: 'email' }],
     });
-    await sql.$executeRawUnsafe(
-      `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
-       VALUES ('${ENROLLMENT_ID}', 'p1', gen_random_uuid(), $1::jsonb, 'u1', 'active', now())`,
-      snapshot
-    );
+    for (const id of [ENROLLMENT_ID, OLD_ENROLLMENT_ID]) {
+      await sql.$executeRawUnsafe(
+        `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+         VALUES ('${id}', 'p1', gen_random_uuid(), $1::jsonb, 'u1', 'active', now())`,
+        snapshot
+      );
+    }
     await sql.$executeRawUnsafe(
       `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status, sent_at) VALUES
         ('${ENROLLMENT_ID}', 0, now(), 'sent', now()),
-        ('${ENROLLMENT_ID}', 1, now(), 'pending', NULL),
-        ('${ENROLLMENT_ID}', 2, now(), 'failed', now())`
+        ('${ENROLLMENT_ID}', 1, now(), 'sending', now()),
+        ('${ENROLLMENT_ID}', 2, now(), 'failed', now()),
+        ('${ENROLLMENT_ID}', 3, now(), 'sent', now()),
+        ('${OLD_ENROLLMENT_ID}', 0, now(), 'sent', now() - interval '401 days')`
     );
+  }
+
+  const COPIED_STEPS = [
+    {
+      source_ref: `step:${ENROLLMENT_ID}:0`,
+      project_id: 'p1',
+      profile_id: 'u1',
+      channel: 'email',
+    },
+    {
+      source_ref: `step:${ENROLLMENT_ID}:1`,
+      project_id: 'p1',
+      profile_id: 'u1',
+      channel: 'push',
+    },
+  ];
+
+  async function ledgerRows() {
+    return await sql.$queryRawUnsafe<Record<string, string>[]>(
+      'SELECT source_ref, project_id, profile_id, channel FROM marketing.send_ledger ORDER BY source_ref'
+    );
+  }
+
+  it('re-running migrations 0014 and 0015 succeeds and leaves no duplicate ledger rows', async () => {
+    await seedJourneySteps();
+    await sql.$executeRawUnsafe(
+      `DELETE FROM marketing.schema_migrations WHERE name LIKE '0014\\_%' OR name LIKE '0015\\_%'`
+    );
+    expect(await migrate()).toEqual([
+      '0014_channel_settings_templates.sql',
+      '0015_send_ledger_dispatch.sql',
+    ]);
+    expect(await ledgerRows()).toEqual(COPIED_STEPS);
+    await sql.$executeRawUnsafe(
+      `DELETE FROM marketing.schema_migrations WHERE name LIKE '0015\\_%'`
+    );
+    await migrate();
+    expect(await ledgerRows()).toEqual(COPIED_STEPS);
+    expect(await migrate()).toEqual([]);
+  });
+
+  it('the ledger backfill copies sent and sending steps of the last 400 days with a channel, once', async () => {
+    await seedJourneySteps();
     const backfill = (await readFile(LEDGER_MIGRATION, 'utf8'))
       .split(';')
       .find((statement) =>
@@ -212,16 +248,6 @@ describe('dispatch schema', () => {
     expect(backfill).toBeDefined();
     await sql.$executeRawUnsafe(backfill as string);
     await sql.$executeRawUnsafe(backfill as string);
-    const rows = await sql.$queryRawUnsafe<Record<string, string>[]>(
-      'SELECT source_ref, project_id, profile_id, channel FROM marketing.send_ledger'
-    );
-    expect(rows).toEqual([
-      {
-        source_ref: `step:${ENROLLMENT_ID}:0`,
-        project_id: 'p1',
-        profile_id: 'u1',
-        channel: 'email',
-      },
-    ]);
+    expect(await ledgerRows()).toEqual(COPIED_STEPS);
   });
 });
