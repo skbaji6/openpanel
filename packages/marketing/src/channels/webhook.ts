@@ -113,9 +113,13 @@ export function createWebhookAdapter(
         subject: msg.subject,
         title: msg.title,
         body: msg.body,
-        ruleId: msg.meta.ruleId,
-        enrollmentId: msg.meta.enrollmentId,
-        stepIndex: msg.meta.stepIndex,
+        ...('campaignId' in msg.meta
+          ? { campaignId: msg.meta.campaignId }
+          : {
+              ruleId: msg.meta.ruleId,
+              enrollmentId: msg.meta.enrollmentId,
+              stepIndex: msg.meta.stepIndex,
+            }),
       });
       const timestamp = String(Math.floor(Date.now() / 1000));
       const headers = {

@@ -1,9 +1,14 @@
+import type { z } from 'zod';
+import { type BatchChannelAdapter, perRecipientBatch } from './batch';
 import { createEmailAdapter } from './email';
 import { createPushAdapter } from './push';
+import type { CampaignChannel } from './settings';
 import type { ChannelAdapter } from './types';
 import { createWebhookAdapter } from './webhook';
 
 const adapters = new Map<string, ChannelAdapter<unknown>>();
+const batchAdapters = new Map<string, BatchChannelAdapter<unknown>>();
+const PER_RECIPIENT_CHANNELS = new Set<string>(['push', 'email', 'webhook']);
 
 // Registering an id again replaces the earlier adapter.
 export function registerAdapter<C>(adapter: ChannelAdapter<C>): void {
@@ -27,4 +32,29 @@ export function registerDefaultAdapters(options: {
   );
   registerAdapter(createEmailAdapter());
   registerAdapter(createPushAdapter());
+}
+
+export function registerBatchAdapter<C>(adapter: BatchChannelAdapter<C>): void {
+  batchAdapters.set(
+    adapter.id,
+    adapter as unknown as BatchChannelAdapter<unknown>
+  );
+}
+
+// push, email and webhook default to their per-recipient adapter; other channels must register one.
+export function getBatchAdapter(
+  channel: CampaignChannel
+): BatchChannelAdapter<unknown> {
+  const registered = batchAdapters.get(channel);
+  if (registered) {
+    return registered;
+  }
+  if (PER_RECIPIENT_CHANNELS.has(channel)) {
+    return perRecipientBatch(getAdapter(channel));
+  }
+  throw new Error(`no batch adapter registered for channel ${channel}`);
+}
+
+export function configSchemaFor(channel: string): z.ZodType<unknown> {
+  return getBatchAdapter(channel as CampaignChannel).configSchema;
 }

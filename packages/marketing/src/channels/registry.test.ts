@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { getAdapter, registerDefaultAdapters } from './registry';
+import { z } from 'zod';
+import {
+  configSchemaFor,
+  getAdapter,
+  getBatchAdapter,
+  registerBatchAdapter,
+  registerDefaultAdapters,
+} from './registry';
 
 describe('registerDefaultAdapters', () => {
   it('registers webhook, email and push, passing the webhook allowlist through', () => {
@@ -21,5 +28,21 @@ describe('registerDefaultAdapters', () => {
         secrets,
       }).success
     ).toBe(false);
+  });
+
+  it("getBatchAdapter('sms') throws until registered", () => {
+    expect(() => getBatchAdapter('sms')).toThrow();
+    registerBatchAdapter({
+      id: 'sms',
+      configSchema: z.object({}),
+      maxBatch: 1,
+      sendBatch: () => Promise.resolve([]),
+    });
+    expect(getBatchAdapter('sms').id).toBe('sms');
+  });
+
+  it("configSchemaFor('push') is the push config schema", () => {
+    registerDefaultAdapters({ webhookAllowHosts: [] });
+    expect(configSchemaFor('push')).toBe(getAdapter('push').configSchema);
   });
 });

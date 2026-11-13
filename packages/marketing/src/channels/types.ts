@@ -5,20 +5,28 @@ export type ChannelId = 'email' | 'webhook' | 'push';
 export interface Recipient {
   profileId: string;
   email?: string;
+  phone?: string;
   deviceTokens: string[];
   attributes: Record<string, unknown>;
+}
+
+export interface JourneyMeta {
+  projectId: string;
+  enrollmentId: string;
+  ruleId: string;
+  stepIndex: number;
+}
+
+export interface CampaignMeta {
+  projectId: string;
+  campaignId: string;
 }
 
 export interface RenderedMessage {
   subject?: string;
   title?: string;
   body: string;
-  meta: {
-    projectId: string;
-    enrollmentId: string;
-    ruleId: string;
-    stepIndex: number;
-  };
+  meta: JourneyMeta | CampaignMeta;
 }
 
 export type SendResult =

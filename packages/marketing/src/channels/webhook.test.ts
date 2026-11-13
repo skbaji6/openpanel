@@ -97,6 +97,20 @@ describe('webhook adapter', () => {
     });
   });
 
+  it('a campaign webhook payload carries campaignId and no ruleId', async () => {
+    await allowlisted.send(
+      { body: 'Sale', meta: { projectId: 'p1', campaignId: 'c1' } },
+      recipient,
+      { url: LOCAL_URL, secrets: [SECRET] },
+      opts
+    );
+    const payload = JSON.parse(received[0]?.body ?? '');
+    expect(payload.campaignId).toBe('c1');
+    expect(payload).not.toHaveProperty('ruleId');
+    expect(payload).not.toHaveProperty('enrollmentId');
+    expect(payload).not.toHaveProperty('stepIndex');
+  });
+
   it('sends idempotency-key header', async () => {
     await sendLocal();
     expect(received[0]?.headers.get('idempotency-key')).toBe('e1:2');
