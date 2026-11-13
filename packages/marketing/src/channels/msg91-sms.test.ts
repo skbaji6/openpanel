@@ -353,7 +353,45 @@ describe('msg91 sms adapter', () => {
     expect(results.every((r) => r.reason === 'msg91 TEMPLATE_NOT_FOUND')).toBe(
       true
     );
-    expect(fake.requests.length).toBeLessThanOrEqual(15);
+    // Bisection to the third single rejection, one probe per pending half, then a chunk-level 400 and a probe per later chunk.
+    expect(fake.requests.length).toBeLessThanOrEqual(25);
+  });
+
+  it('three bad phones at the start of the first chunk do not fail the good recipients', async () => {
+    const bad = [1, 2, 3].map((n) => phoneOf(n));
+    fake.script(SMS_PATH, (body) =>
+      bad.some((phone) => extractPhones(body).includes(phone))
+        ? { status: 400, body: { type: 'error' } }
+        : { status: 200, body: { type: 'success', message: 'req-0123456789' } }
+    );
+    const results = await run(items(250), {}, { concurrency: 1 });
+    expect(
+      results
+        .filter((r) => r.outcome === 'failed')
+        .map((r) => r.profileId)
+        .sort()
+    ).toEqual(['p1', 'p2', 'p3']);
+    expect(count(results, 'sent')).toBe(247);
+    expect(fake.delivered.size).toBe(247);
+    expect([...fake.delivered.values()].every((n) => n === 1)).toBe(true);
+  });
+
+  it('a probe that returns 429 leaves the rest rate_limited and unsent', async () => {
+    const bad = [1, 2, 3].map((n) => phoneOf(n));
+    fake.script(SMS_PATH, (body, index) =>
+      bad.some((phone) => extractPhones(body).includes(phone))
+        ? { status: 400, body: { type: 'error' } }
+        : responses.rateLimited(RETRY_AFTER_SECONDS)(body, index)
+    );
+    const results = await run(items(250), {}, { concurrency: 1 });
+    expect(
+      results
+        .filter((r) => r.outcome === 'failed')
+        .map((r) => r.profileId)
+        .sort()
+    ).toEqual(['p1', 'p2', 'p3']);
+    expect(count(results, 'rate_limited')).toBe(247);
+    expect(fake.delivered.size).toBe(0);
   });
 
   it('a success in the group disarms the breaker so bad phones are still found one by one', async () => {

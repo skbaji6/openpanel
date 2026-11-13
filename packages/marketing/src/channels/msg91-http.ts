@@ -172,8 +172,10 @@ function failureReason(
 interface GroupState {
   singleRejections: number;
   succeeded: boolean;
-  lastRejection: string;
 }
+
+const breakerTripped = (state: GroupState) =>
+  state.singleRejections >= BREAKER_SINGLE_REJECTIONS && !state.succeeded;
 
 const isStoppingOutcome = (outcome: DeliveryOutcome) =>
   outcome.outcome === 'rate_limited' || outcome.outcome === 'channel_error';
@@ -191,20 +193,59 @@ export async function sendMsg91Groups(
   const now = spec.now ?? Date.now;
   const timeoutMs = spec.timeoutMs ?? SEND_TIMEOUT_MS;
 
+  // Suspicion alone never fails unsent items: one probe from the end of the chunk (bad numbers cluster at the front) decides.
+  async function probeThenSettle(
+    items: BatchItem[],
+    group: Msg91Group,
+    state: GroupState,
+    chunkEnd: number
+  ): Promise<DeliveryOutcome[]> {
+    const probeItem = items.at(-1);
+    if (!probeItem) {
+      return [];
+    }
+    const rest = items.slice(0, -1);
+    const probe = await sendChunk(
+      [probeItem],
+      group,
+      state,
+      chunkEnd,
+      true,
+      true
+    );
+    if (rest.length === 0) {
+      return probe;
+    }
+    if (state.succeeded) {
+      return [
+        ...probe,
+        ...(await sendChunk(rest, group, state, chunkEnd, false)),
+      ];
+    }
+    const [first] = probe;
+    if (first && (first.outcome === 'failed' || isStoppingOutcome(first))) {
+      const { profileId: _profileId, ...verdict } = first;
+      return [...probe, ...outcomes(rest, verdict)];
+    }
+    return [
+      ...probe,
+      ...outcomes(rest, {
+        outcome: 'retry',
+        reason: first?.reason === 'deadline' ? 'deadline' : 'breaker',
+      }),
+    ];
+  }
+
   async function sendChunk(
     items: BatchItem[],
     group: Msg91Group,
     state: GroupState,
     chunkEnd: number,
-    isHalf: boolean
+    isHalf: boolean,
+    isProbe = false
   ): Promise<DeliveryOutcome[]> {
-    const breakerTripped =
-      state.singleRejections >= BREAKER_SINGLE_REJECTIONS && !state.succeeded;
-    if (breakerTripped && isHalf) {
-      return outcomes(items, {
-        outcome: 'failed',
-        reason: state.lastRejection,
-      });
+    if (!isProbe && isHalf && breakerTripped(state)) {
+      return probeThenSettle(items, group, state, chunkEnd);
     }
     if (spec.signal?.aborted === true || now() >= chunkEnd) {
       return outcomes(items, { outcome: 'retry', reason: 'deadline' });
@@ -263,7 +304,11 @@ export async function sendMsg91Groups(
       }
       const rejected =
         status === HTTP_BAD_REQUEST || status === HTTP_UNPROCESSABLE;
-      if (rejected && items.length > 1 && !breakerTripped) {
+      if (rejected && items.length > 1) {
+        // Read after the await: a success may have landed while this request was in flight.
+        if (breakerTripped(state)) {
+          return probeThenSettle(items, group, state, chunkEnd);
+        }
         const middle = Math.ceil(items.length / 2);
         const first = await sendChunk(
           items.slice(0, middle),
@@ -295,11 +340,8 @@ export async function sendMsg91Groups(
         ...items.map((item) => item.to.phone ?? ''),
       ].filter(Boolean);
       const reason = failureReason(status, json, secrets);
-      if (rejected) {
-        if (items.length === 1) {
-          state.singleRejections += 1;
-        }
-        state.lastRejection = reason;
+      if (rejected && items.length === 1) {
+        state.singleRejections += 1;
       }
       return outcomes(items, { outcome: 'failed', reason });
     } catch {
@@ -316,7 +358,6 @@ export async function sendMsg91Groups(
     const state: GroupState = {
       singleRejections: 0,
       succeeded: false,
-      lastRejection: '',
     };
     for (let at = 0; at < group.items.length; at += spec.maxBatch) {
       chunks.push({
