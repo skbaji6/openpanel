@@ -173,6 +173,28 @@ describe('campaign routes', () => {
     }
   });
 
+  it('skipPreviousRecipients without campaignKey is 400 invalid_campaign on create and PATCH', async () => {
+    const errorOf = async (res: Response) => [
+      res.status,
+      ((await res.json()) as { error: string }).error,
+    ];
+    const created = await call('POST', '/marketing/campaigns', {
+      body: {
+        name: 'Launch',
+        channel: 'push',
+        template: PUSH_TEMPLATE,
+        skipPreviousRecipients: true,
+      },
+    });
+    expect(await errorOf(created)).toEqual([400, 'invalid_campaign']);
+
+    const draft = await createCampaign();
+    const patched = await call('PATCH', `/marketing/campaigns/${draft.id}`, {
+      body: { skipPreviousRecipients: true, expectedVersion: draft.version },
+    });
+    expect(await errorOf(patched)).toEqual([400, 'invalid_campaign']);
+  });
+
   it('draft, preview, start round-trip with counters after one materialise tick', async () => {
     const draft = await createCampaign();
     expect(draft.state).toBe('draft');

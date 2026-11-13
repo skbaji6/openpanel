@@ -4,7 +4,11 @@ import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import type { Queryable } from '../engine/engine';
-import type { FilterTree, Schema } from './contract';
+import {
+  type FilterTree,
+  MAX_ID_CONDITION_VALUES,
+  type Schema,
+} from './contract';
 import { MAX_IDS_PER_CHANGE, MAX_LIST_IDS } from './definition';
 import { createFakeSource, type FakeMember } from './fake-source';
 import type { AudienceSource } from './source';
@@ -32,6 +36,9 @@ const CHUNKS = MAX_LIST_IDS / MAX_IDS_PER_CHANGE;
 const TWO_PAGES = 1500;
 const ACTIVE_STATES = ['scheduled', 'running', 'paused'];
 const LOCK_POLL_MS = 20;
+const UNPUSHABLE_EXCLUDES = MAX_ID_CONDITION_VALUES + 1;
+// Ten 2,000-id writes run near Bun's 5 s default under load.
+const IDS_LIMIT_TIMEOUT_MS = 30_000;
 
 const pad = (n: number) => String(n).padStart(6, '0');
 const ids = (prefix: string, count: number, from = 1) =>
@@ -73,6 +80,14 @@ async function caught(promise: Promise<unknown>): Promise<HttpError> {
     throw new Error(`expected an HttpError, got ${String(error)}`);
   }
   return error;
+}
+
+function gate() {
+  let open: () => void = () => undefined;
+  const opened = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { open, opened };
 }
 
 async function snapshotRows(audienceId: string) {
@@ -170,35 +185,39 @@ describe('audience store', () => {
     expect(error.issues?.length).toBeGreaterThan(0);
   });
 
-  it('adding 20,000 includes in ten chunks of 2,000 succeeds and one more id fails with ids_limit, leaving 20,000', async () => {
-    const store = makeStore();
-    let row = await store.create(CTX, dynamicInput);
-    for (let chunk = 0; chunk < CHUNKS; chunk++) {
-      row = await store.changeIds(
-        CTX,
-        row.id,
-        {
-          list: 'include',
-          add: ids('inc', MAX_IDS_PER_CHANGE, chunk * MAX_IDS_PER_CHANGE + 1),
-        },
-        row.version
+  it(
+    'adding 20,000 includes in ten chunks of 2,000 succeeds and one more id fails with ids_limit, leaving 20,000',
+    async () => {
+      const store = makeStore();
+      let row = await store.create(CTX, dynamicInput);
+      for (let chunk = 0; chunk < CHUNKS; chunk++) {
+        row = await store.changeIds(
+          CTX,
+          row.id,
+          {
+            list: 'include',
+            add: ids('inc', MAX_IDS_PER_CHANGE, chunk * MAX_IDS_PER_CHANGE + 1),
+          },
+          row.version
+        );
+      }
+      expect(row.includeCount).toBe(MAX_LIST_IDS);
+      const error = await caught(
+        store.changeIds(
+          CTX,
+          row.id,
+          { list: 'include', add: ['one-more'] },
+          row.version
+        )
       );
-    }
-    expect(row.includeCount).toBe(MAX_LIST_IDS);
-    const error = await caught(
-      store.changeIds(
-        CTX,
-        row.id,
-        { list: 'include', add: ['one-more'] },
-        row.version
-      )
-    );
-    expect(error.status).toBe(400);
-    expect(error.code).toBe('ids_limit');
-    const after = await store.get(CTX, row.id);
-    expect(after.includeCount).toBe(MAX_LIST_IDS);
-    expect(after.version).toBe(row.version);
-  });
+      expect(error.status).toBe(400);
+      expect(error.code).toBe('ids_limit');
+      const after = await store.get(CTX, row.id);
+      expect(after.includeCount).toBe(MAX_LIST_IDS);
+      expect(after.version).toBe(row.version);
+    },
+    IDS_LIMIT_TIMEOUT_MS
+  );
 
   it('remove and clear change the count and bump the version', async () => {
     const store = makeStore();
@@ -404,6 +423,112 @@ describe('audience store', () => {
     const error = await (edit as Promise<HttpError>);
     expect([error.status, error.code]).toEqual([409, 'audience_in_use']);
     expect((await store.get(CTX, row.id)).version).toBe(1);
+  });
+
+  it('a freeze that lost its lock just before the switch never makes its snapshot live', async () => {
+    const store = makeStore();
+    const created = await store.create(CTX, snapshotInput);
+    // The include lands in the last page, so a full row count means only the switch is left.
+    const row = await store.changeIds(
+      CTX,
+      created.id,
+      { list: 'include', add: ['hand-picked'] },
+      created.version
+    );
+    const error = await caught(
+      store.freeze(CTX, row.id, async () => {
+        if ((await snapshotRows(row.id)).length === PRO_COUNT + 1) {
+          throw new HttpError(409, 'freeze_lock_lost');
+        }
+      })
+    );
+    expect([error.status, error.code]).toEqual([409, 'freeze_lock_lost']);
+    expect(await store.get(CTX, row.id)).toMatchObject({
+      snapshotVersion: null,
+      snapshotCount: null,
+    });
+  });
+
+  it('a freeze that lost its lock commits no page and leaves the newer freeze its staging rows', async () => {
+    members = ids('pro', TWO_PAGES).map((id) => ({
+      id,
+      values: { plan: 'pro' },
+    }));
+    // Over the pushable limit, so exclusions are subtracted from staging rather than sent to the source.
+    const excluded = ids('pro', UNPUSHABLE_EXCLUDES);
+    const pausedAt = (gateIn: Promise<void>, reached: () => void) => {
+      let calls = 0;
+      return (source: AudienceSource): AudienceSource => ({
+        ...source,
+        members: async (req) => {
+          calls += 1;
+          if (calls === 1) {
+            reached();
+            await gateIn;
+          }
+          return await source.members(req);
+        },
+      });
+    };
+    const aReached = gate();
+    const aGo = gate();
+    const bReached = gate();
+    const bGo = gate();
+    const store = makeStore();
+    let row = await store.create(CTX, snapshotInput);
+    for (let from = 0; from < excluded.length; from += MAX_IDS_PER_CHANGE) {
+      row = await store.changeIds(
+        CTX,
+        row.id,
+        {
+          list: 'exclude',
+          add: excluded.slice(from, from + MAX_IDS_PER_CHANGE),
+        },
+        row.version
+      );
+    }
+    let aHeld = true;
+    let aCalls = 0;
+    const storeA = makeStore({
+      wrap: (source) => {
+        const paused = pausedAt(aGo.opened, aReached.open)(source);
+        return {
+          ...paused,
+          members: (req) => {
+            aCalls += 1;
+            return paused.members(req);
+          },
+        };
+      },
+    });
+    const freezeA = caught(
+      storeA.freeze(CTX, row.id, async () => {
+        if (!aHeld) {
+          throw new HttpError(409, 'freeze_lock_lost');
+        }
+      })
+    );
+    await aReached.opened;
+    aHeld = false;
+    const storeB = makeStore({ wrap: pausedAt(bGo.opened, bReached.open) });
+    const freezeB = storeB.freeze(CTX, row.id, async () => undefined);
+    await bReached.opened;
+    aGo.open();
+    const errorA = await freezeA;
+    expect([errorA.status, errorA.code]).toEqual([409, 'freeze_lock_lost']);
+    expect(aCalls).toBe(1);
+    bGo.open();
+    const frozen = await freezeB;
+    const expected = ids(
+      'pro',
+      TWO_PAGES - UNPUSHABLE_EXCLUDES,
+      UNPUSHABLE_EXCLUDES + 1
+    );
+    expect(frozen.snapshotCount).toBe(expected.length);
+    expect((await snapshotRows(row.id)).map((r) => r.profile_id)).toEqual(
+      expected
+    );
+    expect(await stagedRows()).toBe(0);
   });
 
   it('an edit during freeze is version_conflict and leaves no rows at the attempted version', async () => {

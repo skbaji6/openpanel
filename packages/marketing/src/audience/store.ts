@@ -109,6 +109,8 @@ const LOCK_ROW = `SELECT a.mode, a.filter, a.exclude_filter, a.version, a.snapsh
 // A separate statement after the lock: under READ COMMITTED it sees campaigns committed while the lock was awaited.
 const IN_USE_AFTER_LOCK = `SELECT ${IN_USE} AS in_use FROM marketing.audiences a WHERE a.id = $1::uuid`;
 // A freeze page commits only while the definition it materialises is still the saved one.
+// Serialises the page transactions of every freeze of one audience: they share the audience's staging rows.
+const FREEZE_PAGE_LOCK = `SELECT pg_advisory_xact_lock(hashtext('marketing:audience-freeze:' || $1))::text AS locked`;
 const DEFINITION_UNCHANGED =
   'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid AND version = $2 FOR SHARE';
 const ANY_CAMPAIGN =
@@ -272,9 +274,11 @@ export function createAudienceStore(deps: StoreDeps) {
     ctx: StoreContext,
     id: string,
     version: number,
-    total: number
+    total: number,
+    beginPage: (tx: Queryable) => Promise<void>
   ) {
     return await sql.$transaction(async (tx) => {
+      await beginPage(tx);
       await lockEditable(tx, ctx, id, version);
       await tx.$executeRawUnsafe(
         `UPDATE marketing.audiences SET snapshot_version = $2, snapshot_count = $3, snapshot_at = $4, updated_at = $4
@@ -298,7 +302,8 @@ export function createAudienceStore(deps: StoreDeps) {
     ctx: StoreContext,
     id: string,
     locked: LockedRow,
-    jobId: string
+    jobId: string,
+    beginPage: (tx: Queryable) => Promise<void>
   ): Promise<number> {
     const result = await runMaterialization(
       { sql, source: deps.laneFor?.(ctx.projectId, source) ?? source },
@@ -314,6 +319,7 @@ export function createAudienceStore(deps: StoreDeps) {
           snapshotVersion: locked.version,
         },
         progress: null,
+        beginPage,
         saveProgress: async (tx) =>
           (
             await tx.$queryRawUnsafe<unknown[]>(
@@ -482,8 +488,8 @@ export function createAudienceStore(deps: StoreDeps) {
     async freeze(
       ctx: StoreContext,
       id: string,
-      // Throws to abort after materialising and before the snapshot goes live.
-      beforeSwitch?: () => void
+      // Throws when this freeze no longer holds its lock; checked at the start of every page and of the switch.
+      fence?: () => Promise<void>
     ): Promise<AudienceRow> {
       const locked = await sql.$transaction(
         (tx) => lockEditable(tx, ctx, id, null),
@@ -502,13 +508,33 @@ export function createAudienceStore(deps: StoreDeps) {
       }
       // Keyed by the audience, so a crashed freeze's staging rows are wiped by the next freeze's fresh start.
       const jobId = id;
+      let fenceLost = false;
+      // Under the page lock, so a newer freeze's fresh start either ran before this check (which then fails) or waits for this page and wipes it.
+      const beginPage = async (tx: Queryable) => {
+        await tx.$queryRawUnsafe(FREEZE_PAGE_LOCK, id);
+        try {
+          await fence?.();
+        } catch (error) {
+          fenceLost = true;
+          throw error;
+        }
+      };
       try {
-        const total = await materializeSnapshot(source, ctx, id, locked, jobId);
-        beforeSwitch?.();
-        return await switchSnapshot(ctx, id, locked.version, total);
+        const total = await materializeSnapshot(
+          source,
+          ctx,
+          id,
+          locked,
+          jobId,
+          beginPage
+        );
+        return await switchSnapshot(ctx, id, locked.version, total, beginPage);
       } catch (error) {
-        await sql.$executeRawUnsafe(WIPE_STAGING, jobId);
-        await sql.$executeRawUnsafe(DISCARD_UNFROZEN, id, locked.version);
+        // The freeze that holds the lock now uses these staging and snapshot rows; its own fresh start wipes them.
+        if (!fenceLost) {
+          await sql.$executeRawUnsafe(WIPE_STAGING, jobId);
+          await sql.$executeRawUnsafe(DISCARD_UNFROZEN, id, locked.version);
+        }
         throw sourceHttpError(error);
       }
     },

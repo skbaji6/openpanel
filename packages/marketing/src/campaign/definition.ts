@@ -79,12 +79,11 @@ const KEYED_SKIP_ISSUE = {
   path: ['campaignKey'],
 };
 
-export const zCampaignDraft = z
-  .discriminatedUnion('channel', [
-    z.strictObject(journeyShape),
-    z.strictObject(registryShape),
-  ])
-  .refine(keyedSkip, KEYED_SKIP_ISSUE);
+// No cross-field rules here: the service checks the merged draft with zCampaignFields, which answers invalid_campaign.
+export const zCampaignDraft = z.discriminatedUnion('channel', [
+  z.strictObject(journeyShape),
+  z.strictObject(registryShape),
+]);
 
 // The service re-checks a merged draft with this one: it drops fields a client may not set (confirmThreshold).
 export const zCampaignFields = z

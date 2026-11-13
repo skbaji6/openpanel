@@ -22,6 +22,9 @@ import { failCampaignIn } from './service';
 
 const LEASE_MS = 60_000;
 const LEASE_RENEW_MS = LEASE_MS / 3;
+// About 10 minutes of renewals, so a hung source call cannot hold the lease for the life of the process.
+const MAX_LEASE_RENEWALS = 30;
+const LEASE_RENEW_CAP_MS = MAX_LEASE_RENEWALS * LEASE_RENEW_MS;
 const RETRY_MS = 30_000;
 // Bad credentials stay bad until an operator fixes them, so the campaign asks the source less often.
 const AUTH_RETRY_MS = 300_000;
@@ -326,8 +329,18 @@ async function materialize(
 
 // Renewed on a timer for the whole run: a wrapped source call (lane wait, retries, Retry-After) can outlast LEASE_MS.
 function keepLease(deps: RunnerDeps, claim: Claimed, token: string) {
+  const startedAt = deps.now().getTime();
+  let pending = false;
   let renewing: Promise<unknown> = Promise.resolve();
   const timer = setInterval(() => {
+    if (deps.now().getTime() - startedAt >= LEASE_RENEW_CAP_MS) {
+      clearInterval(timer);
+      return;
+    }
+    if (pending) {
+      return;
+    }
+    pending = true;
     // A failed renewal only risks a takeover, which the token fence on every write already handles.
     renewing = deps.sql
       .$executeRawUnsafe(
@@ -336,7 +349,10 @@ function keepLease(deps: RunnerDeps, claim: Claimed, token: string) {
         token,
         later(deps.now(), LEASE_MS)
       )
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        pending = false;
+      });
   }, deps.leaseRenewMs ?? LEASE_RENEW_MS);
   return async () => {
     clearInterval(timer);

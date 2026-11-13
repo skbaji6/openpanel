@@ -152,7 +152,7 @@ export function audienceRoutes(deps: Deps): Route[] {
   // One freeze per audience at a time: a second would wipe the pages the first is writing.
   async function withFreezeLock<T>(
     audienceId: string,
-    run: (assertHeld: () => void) => Promise<T>
+    run: (fence: () => Promise<void>) => Promise<T>
   ): Promise<T> {
     const key = `${FREEZE_LOCK_PREFIX}${audienceId}`;
     const token = randomUUID();
@@ -177,13 +177,17 @@ export function audienceRoutes(deps: Deps): Route[] {
         })
         .catch(markLost);
     }, lockTtlMs / RENEW_DIVISOR);
-    const assertHeld = () => {
+    // Reads the key itself: the renewal timer notices a lapse only on its next tick.
+    const fence = async () => {
+      if (!lost && (await redis.get(key)) !== token) {
+        markLost();
+      }
       if (lost) {
         throw new HttpError(409, 'freeze_lock_lost');
       }
     };
     try {
-      return await run(assertHeld);
+      return await run(fence);
     } finally {
       clearInterval(timer);
       await redis.eval(RELEASE_LOCK, 1, key, token).catch(() => undefined);
@@ -413,9 +417,9 @@ export function audienceRoutes(deps: Deps): Route[] {
         // Scoped lookup first, so another project's audience id never touches its lock.
         await store.get(ctxOf(ctx), audienceId);
         return json(
-          await withFreezeLock(audienceId, async (assertHeld) => {
+          await withFreezeLock(audienceId, async (fence) => {
             try {
-              return await store.freeze(ctxOf(ctx), audienceId, assertHeld);
+              return await store.freeze(ctxOf(ctx), audienceId, fence);
             } catch (error) {
               if (
                 error instanceof HttpError &&

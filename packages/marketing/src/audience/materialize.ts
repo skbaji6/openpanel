@@ -39,6 +39,8 @@ export interface MaterializeJob {
   target: MaterializeTarget;
   // null, or exclusions with a null cursor, is a fresh start: the target and staging rows of earlier attempts are wiped.
   progress: MaterializeProgress | null;
+  // Runs first in every page transaction, before any write: a freeze fences its pages on its lock here.
+  beginPage?(tx: Queryable): Promise<void>;
   saveProgress(
     tx: Queryable,
     next: MaterializeProgress | 'done',
@@ -204,6 +206,7 @@ export async function runMaterialization(
     write: (tx: Queryable) => Promise<number>
   ): Promise<void> {
     return deps.sql.$transaction(async (tx) => {
+      await job.beginPage?.(tx);
       const inserted = await write(tx);
       const overCap =
         target.kind === 'snapshot' &&
@@ -354,6 +357,7 @@ export async function runMaterialization(
       return;
     }
     await deps.sql.$transaction(async (tx) => {
+      await job.beginPage?.(tx);
       await clearTarget(tx, target);
       await tx.$executeRawUnsafe(WIPE_STAGING, job.jobId);
       if (!(await job.saveProgress(tx, FRESH_START, 0))) {

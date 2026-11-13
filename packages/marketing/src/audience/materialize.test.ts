@@ -28,6 +28,8 @@ const DISPLAY_NAME = 'Ada Lovelace';
 const PHONE = '+919812345678';
 const EMAIL = 'ada@example.test';
 const OVERLONG_ID_LENGTH = 257;
+// Two full materialisations of 3,000 members run about 7 s, past Bun's 5 s default.
+const SUBTRACTION_TIMEOUT_MS = 30_000;
 
 const pad = (n: number) => String(n).padStart(6, '0');
 const proId = (n: number) => `pro-${pad(n)}`;
@@ -341,32 +343,36 @@ describe('runMaterialization', () => {
       expect(await recipientIds(campaign.id)).toEqual(expected);
     });
 
-    it('40 excludes are sent as id not_in, 1,500 are subtracted in Postgres', async () => {
-      for (const excludes of [40, 1500]) {
-        await resetMarketingTables();
-        const audienceId = await insertAudience();
-        const campaign = await insertCampaign({ audienceId });
-        const excludedIds = range(excludes).map(proId);
-        await addIds(audienceId, 'exclude', excludedIds);
-        const source = createFakeSource({ members: proMembers() });
+    it(
+      '40 excludes are sent as id not_in, 1,500 are subtracted in Postgres',
+      async () => {
+        for (const excludes of [40, 1500]) {
+          await resetMarketingTables();
+          const audienceId = await insertAudience();
+          const campaign = await insertCampaign({ audienceId });
+          const excludedIds = range(excludes).map(proId);
+          await addIds(audienceId, 'exclude', excludedIds);
+          const source = createFakeSource({ members: proMembers() });
 
-        await runMaterialization(
-          { sql, source },
-          campaignJob({ audienceId, campaign })
-        );
+          await runMaterialization(
+            { sql, source },
+            campaignJob({ audienceId, campaign })
+          );
 
-        const memberCalls = source.calls.filter(
-          (call) => call.method === 'members'
-        );
-        const pushed = excludes === 40 ? 40 : 0;
-        expect(idNotInSizes(memberCalls)).toEqual(
-          memberCalls.map(() => pushed)
-        );
-        const ids = await recipientIds(campaign.id);
-        expect(ids).toHaveLength(MATCHING - excludes);
-        expect(ids.some((id) => excludedIds.includes(id))).toBe(false);
-      }
-    });
+          const memberCalls = source.calls.filter(
+            (call) => call.method === 'members'
+          );
+          const pushed = excludes === 40 ? 40 : 0;
+          expect(idNotInSizes(memberCalls)).toEqual(
+            memberCalls.map(() => pushed)
+          );
+          const ids = await recipientIds(campaign.id);
+          expect(ids).toHaveLength(MATCHING - excludes);
+          expect(ids.some((id) => excludedIds.includes(id))).toBe(false);
+        }
+      },
+      SUBTRACTION_TIMEOUT_MS
+    );
 
     it('a hand-picked id the source does not know is still a pending recipient', async () => {
       const audienceId = await insertAudience();
