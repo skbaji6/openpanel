@@ -7,7 +7,10 @@ import {
   it,
   spyOn,
 } from 'bun:test';
-import { DEFAULT_CHANNEL_SETTINGS } from '../channels/settings';
+import {
+  DEFAULT_CHANNEL_SETTINGS,
+  getChannelSettings,
+} from '../channels/settings';
 import { loadConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
@@ -65,6 +68,14 @@ const put = (
     body: { settings, expectedVersion },
     project,
   });
+
+function storeRaw(channel: string, settings: unknown) {
+  return sql.$executeRawUnsafe(
+    `INSERT INTO marketing.channel_settings (project_id, channel, settings) VALUES ('proj-a', $1, $2::jsonb)`,
+    channel,
+    JSON.stringify(settings)
+  );
+}
 
 const SMS = { ...DEFAULT_CHANNEL_SETTINGS.sms, ratePerSecond: 5 };
 
@@ -222,5 +233,37 @@ describe('channel settings routes', () => {
         spy.mockRestore();
       }
     }
+  });
+
+  it('a stored row missing a newer key reads back with its default', async () => {
+    const { ratePerSecond: _rate, ...older } = SMS;
+    await storeRaw('sms', older);
+    const read = await getChannelSettings(sql, 'proj-a', 'sms');
+    expect(read.settings).toEqual({ ...SMS, ratePerSecond: null });
+    expect(read.version).toBe(1);
+  });
+
+  it('a stored row with an unknown key fails loudly', async () => {
+    await storeRaw('sms', { ...SMS, retired: 1 });
+    await expect(getChannelSettings(sql, 'proj-a', 'sms')).rejects.toThrow();
+  });
+
+  it('quiet hours with start equal to end are 400 invalid_body', async () => {
+    const res = await put(
+      'sms',
+      {
+        ...SMS,
+        quietHours: {
+          ...SMS.quietHours,
+          enabled: true,
+          end: SMS.quietHours.start,
+        },
+      },
+      0
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      'invalid_body'
+    );
   });
 });

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   CAMPAIGN_CHANNELS,
   type CampaignChannel,
+  type ChannelSettingsIssue,
   checkChannelSettings,
   getChannelSettings,
   putChannelSettings,
@@ -11,7 +12,17 @@ import type { Queryable } from '../engine/engine';
 import { HttpError, json, parseJsonBody, type Route } from './http';
 
 // Other issues block starting a campaign, not saving.
-const BLOCKING_ON_SAVE = ['consent_not_supported', 'quota_not_supported'];
+const BLOCKING_ON_SAVE: ChannelSettingsIssue[] = [
+  'consent_not_supported',
+  'quota_not_supported',
+];
+const channelOf = (name: string | undefined): CampaignChannel => {
+  const channel = CAMPAIGN_CHANNELS.find((known) => known === name);
+  if (!channel) {
+    throw new HttpError(404, 'not_found');
+  }
+  return channel;
+};
 const SETTINGS_PATH = new RegExp(
   `^/marketing/channels/(${CAMPAIGN_CHANNELS.join('|')})/settings$`
 );
@@ -40,7 +51,7 @@ export function channelSettingsRoutes(sql: Queryable): Route[] {
       pattern: SETTINGS_PATH,
       auth: 'dashboard',
       async handle(ctx) {
-        const channel = ctx.params[0] as CampaignChannel;
+        const channel = channelOf(ctx.params[0]);
         return respond(
           channel,
           await getChannelSettings(sql, ctx.projectId, channel)
@@ -52,7 +63,7 @@ export function channelSettingsRoutes(sql: Queryable): Route[] {
       pattern: SETTINGS_PATH,
       auth: 'dashboard',
       async handle(ctx) {
-        const channel = ctx.params[0] as CampaignChannel;
+        const channel = channelOf(ctx.params[0]);
         const { settings, expectedVersion } = await parseJsonBody(
           ctx.req,
           zUpdate

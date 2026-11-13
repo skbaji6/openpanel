@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { zQuietHoursOverride } from '../campaign/definition';
 import {
   CAMPAIGN_CHANNELS,
   checkChannelSettings,
@@ -132,5 +133,24 @@ describe('channel settings', () => {
 
   it('override enabled false disables channel quiet hours', () => {
     expect(effectiveQuietHours(CHANNEL_QUIET, { enabled: false })).toBe(null);
+  });
+
+  it('quiet hours with start equal to end are rejected only when enabled', () => {
+    const base = DEFAULT_CHANNEL_SETTINGS.push;
+    const parse = (quietHours: object) =>
+      zChannelSettings.safeParse({ ...base, quietHours }).success;
+    expect(parse({ ...CHANNEL_QUIET, end: '21:00' })).toBe(false);
+    expect(parse({ ...CHANNEL_QUIET, enabled: false, end: '21:00' })).toBe(
+      true
+    );
+  });
+
+  it('a campaign quiet hours override with start equal to end is rejected', () => {
+    const parse = (value: unknown) =>
+      zQuietHoursOverride.safeParse(value).success;
+    expect(parse({ enabled: true, start: '09:00', end: '09:00' })).toBe(false);
+    expect(parse({ enabled: false, start: '09:00', end: '09:00' })).toBe(true);
+    expect(parse({ enabled: true, start: '09:00' })).toBe(true);
+    expect(parse(null)).toBe(true);
   });
 });

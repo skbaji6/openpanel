@@ -30,12 +30,18 @@ const zTimeZone = z
 export const zChannelSettings = z.strictObject({
   concurrency: z.number().int().min(1).max(MAX_CONCURRENCY),
   ratePerSecond: z.number().positive().max(MAX_RATE_PER_SECOND).nullable(),
-  quietHours: z.strictObject({
-    enabled: z.boolean(),
-    start: z.string().regex(HH_MM),
-    end: z.string().regex(HH_MM),
-    timezone: zTimeZone,
-  }),
+  quietHours: z
+    .strictObject({
+      enabled: z.boolean(),
+      start: z.string().regex(HH_MM),
+      end: z.string().regex(HH_MM),
+      timezone: zTimeZone,
+    })
+    // start === end is read as never quiet by the send gate, so it is rejected rather than saved.
+    .refine((q) => !(q.enabled && q.start === q.end), {
+      message: 'start and end must differ',
+      path: ['end'],
+    }),
   requireConsent: z.boolean(),
   pricePerMessage: z
     .strictObject({
@@ -47,6 +53,12 @@ export const zChannelSettings = z.strictObject({
   quotaTimezone: zTimeZone,
 });
 export type ChannelSettings = z.infer<typeof zChannelSettings>;
+
+export type ChannelSettingsIssue =
+  | 'rate_required'
+  | 'quota_required'
+  | 'consent_not_supported'
+  | 'quota_not_supported';
 
 function defaults(concurrency: number): ChannelSettings {
   return {
@@ -83,8 +95,8 @@ const CONSENT_CHANNELS: CampaignChannel[] = ['sms', 'whatsapp'];
 export function checkChannelSettings(
   channel: CampaignChannel,
   settings: ChannelSettings
-): string[] {
-  const issues: string[] = [];
+): ChannelSettingsIssue[] {
+  const issues: ChannelSettingsIssue[] = [];
   if (
     RATE_REQUIRED_CHANNELS.includes(channel) &&
     settings.ratePerSecond === null
@@ -127,7 +139,11 @@ export async function getChannelSettings(
     };
   }
   return {
-    settings: zChannelSettings.parse(row.settings),
+    // A row saved before a key was added to the schema reads back with that key defaulted.
+    settings: zChannelSettings.parse({
+      ...DEFAULT_CHANNEL_SETTINGS[channel],
+      ...(row.settings as object),
+    }),
     version: row.version,
     configured: true,
   };

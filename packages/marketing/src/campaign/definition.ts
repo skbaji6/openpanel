@@ -20,6 +20,12 @@ const REGISTRY_TEMPLATE_CHANNELS = ['sms', 'whatsapp'] as const;
 const zTimeZone = z.string().refine(isTimeZone, 'unknown timezone');
 const zIfLateMinutes = z.number().int().min(0).max(MAX_IF_LATE_MINUTES);
 
+// start === end is read as never quiet by the send gate, so it is rejected rather than saved.
+const START_EQUALS_END = {
+  message: 'start and end must differ',
+  path: ['end'],
+};
+
 export const zQuietHoursOverride = z
   .strictObject({
     enabled: z.boolean(),
@@ -27,6 +33,10 @@ export const zQuietHoursOverride = z
     end: z.string().regex(HH_MM).optional(),
     timezone: zTimeZone.optional(),
   })
+  .refine(
+    (o) => !(o.enabled && o.start !== undefined && o.start === o.end),
+    START_EQUALS_END
+  )
   .nullable();
 
 const zFrequencyCap = z
