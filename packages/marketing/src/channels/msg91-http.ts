@@ -119,6 +119,8 @@ function field(json: unknown, name: string): unknown {
 export interface Msg91Reading {
   success: boolean;
   requestId?: unknown;
+  // A 2xx that judges recipients one by one; takes precedence over `success`.
+  perItem?: (item: BatchItem) => Omit<DeliveryOutcome, 'profileId'>;
 }
 
 export interface Msg91Group {
@@ -226,6 +228,16 @@ export async function sendMsg91Groups(
       const { status, json } = posted;
       if (status >= HTTP_OK_MIN && status < HTTP_REDIRECT_MIN) {
         const reading = spec.readSuccess(json);
+        if (reading.perItem) {
+          const { perItem } = reading;
+          const settled = items.map((item) => ({
+            profileId: item.profileId,
+            ...perItem(item),
+            ...requestIdOf(reading),
+          }));
+          state.succeeded ||= settled.some((o) => o.outcome === 'sent');
+          return settled;
+        }
         if (reading.success) {
           state.succeeded = true;
           return outcomes(items, { outcome: 'sent', ...requestIdOf(reading) });

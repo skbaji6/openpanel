@@ -31,6 +31,7 @@ const PUBLIC_CONFIG_FIELDS: Record<string, string[]> = {
   webhook: ['url'],
   push: [],
   sms: ['baseUrl'],
+  whatsapp: ['integratedNumber', 'baseUrl'],
 };
 const MAX_NAME_LENGTH = 200;
 const MAX_FILTERS = 50;
@@ -202,7 +203,7 @@ function ruleIdParam(params: string[]): string {
   return id;
 }
 
-// A channel whose adapter is not registered (whatsapp until it ships) is a clean 409, not a 500.
+// A channel whose adapter is not registered is a clean 409, not a 500.
 function channelConfigSchema(channel: string) {
   try {
     return configSchemaFor(channel);

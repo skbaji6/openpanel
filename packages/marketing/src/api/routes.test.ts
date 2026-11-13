@@ -927,13 +927,31 @@ describe('dashboard routes', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('PUT channels/whatsapp answers 409 until its adapter is registered, never 500', async () => {
+  it('PUT channels/whatsapp stores the config; GET masks authKey but shows integratedNumber and baseUrl', async () => {
+    const config = {
+      authKey: 'msg91-secret-key-123',
+      integratedNumber: '918700000001',
+      baseUrl: 'http://127.0.0.1:9',
+    };
     const put = await dashboard('PUT', '/marketing/channels/whatsapp', {
-      config: { authKey: 'msg91-secret-key-123' },
+      config,
     });
-    expect(put.status).toBe(409);
+    expect(put.status).toBe(200);
+    expect(JSON.stringify(await put.json())).not.toContain(config.authKey);
     const get = await dashboard('GET', '/marketing/channels/whatsapp');
-    expect(get.status).toBe(200);
+    expect(await get.json()).toEqual({
+      channel: 'whatsapp',
+      configured: true,
+      config: {
+        authKey: MASK,
+        integratedNumber: config.integratedNumber,
+        baseUrl: config.baseUrl,
+      },
+    });
+    const missing = await dashboard('PUT', '/marketing/channels/whatsapp', {
+      config: { authKey: config.authKey },
+    });
+    expect(missing.status).toBe(400);
   });
 
   it('settings validate caps, quiet hours and timezone', async () => {

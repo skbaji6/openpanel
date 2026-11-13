@@ -39,6 +39,17 @@ describe('registerDefaultAdapters', () => {
     ).toBe(true);
   });
 
+  it('registers the whatsapp batch adapter by default', () => {
+    registerDefaultAdapters({ webhookAllowHosts: [] });
+    expect(getBatchAdapter('whatsapp').id).toBe('whatsapp');
+    expect(
+      configSchemaFor('whatsapp').safeParse({
+        authKey: 'key-0123456789',
+        integratedNumber: '918700000001',
+      }).success
+    ).toBe(true);
+  });
+
   it("getBatchAdapter('sms') throws until registered", () => {
     unregisterBatchAdapter('sms');
     expect(() => getBatchAdapter('sms')).toThrow();
