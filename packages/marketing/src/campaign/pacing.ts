@@ -5,7 +5,9 @@ import { zonedTimeToUtc } from './schedule-time';
 
 const MS_PER_SECOND = 1000;
 const MS_PER_DAY = 86_400_000;
-const BUCKET_TTL_MS = 60_000;
+const BUCKET_MIN_TTL_MS = 60_000;
+// A stored ts further ahead than this is a fast replica clock, not a real future.
+const MAX_CLOCK_SKEW_MS = 5000;
 const RETRY_AFTER_MIN_MS = 1000;
 const RETRY_AFTER_MAX_MS = 60_000;
 const RETRY_AFTER_DEFAULT_MS = 5000;
@@ -19,12 +21,16 @@ const TAKE_SCRIPT = `
 local now = tonumber(ARGV[1])
 local rate = tonumber(ARGV[2])
 local wanted = tonumber(ARGV[3])
+local maxSkew = tonumber(ARGV[4])
 local capacity = math.max(1, rate)
 local state = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
 local tokens = tonumber(state[1])
 local ts = tonumber(state[2])
 if tokens == nil or ts == nil then
   tokens = capacity
+  ts = now
+end
+if ts - now > maxSkew then
   ts = now
 end
 local elapsed = math.max(0, now - ts)
@@ -37,7 +43,8 @@ if granted < wanted then
   wait = math.ceil((1 - tokens) / rate * 1000)
 end
 redis.call('HSET', KEYS[1], 'tokens', string.format('%.9f', tokens), 'ts', string.format('%.0f', ts))
-redis.call('PEXPIRE', KEYS[1], ${BUCKET_TTL_MS})
+-- Outlive a full refill, or an idle slow bucket would come back full.
+redis.call('PEXPIRE', KEYS[1], math.max(${BUCKET_MIN_TTL_MS}, math.ceil(capacity / rate * 1000)))
 return {granted, wait}`;
 
 // The value is the epoch ms the backoff ends at, so a shorter one never overwrites a longer one.
@@ -67,7 +74,8 @@ export function createRateBucket(
       if (!(ratePerSecond > 0)) {
         throw new RangeError('ratePerSecond must be positive');
       }
-      if (wanted <= 0) {
+      const whole = Math.floor(wanted);
+      if (!(whole > 0)) {
         return { granted: 0, waitMs: 0 };
       }
       const [granted, waitMs] = (await redis.eval(
@@ -76,7 +84,8 @@ export function createRateBucket(
         `marketing:rate:${key}`,
         String(now()),
         String(ratePerSecond),
-        String(wanted)
+        String(whole),
+        String(MAX_CLOCK_SKEW_MS)
       )) as [number, number];
       return { granted, waitMs };
     },
@@ -117,6 +126,9 @@ export function createChannelBackoff(redis: Redis) {
     `marketing:channel-backoff:${projectId}:${channel}`;
   return {
     async set(projectId: string, channel: string, ms: number): Promise<void> {
+      if (!(ms > 0)) {
+        return;
+      }
       await redis.eval(
         BACKOFF_SCRIPT,
         1,

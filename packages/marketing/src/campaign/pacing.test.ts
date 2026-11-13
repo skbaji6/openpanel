@@ -103,6 +103,38 @@ describe('createRateBucket', () => {
     });
   });
 
+  it('a slow bucket outlives an idle minute instead of returning full', async () => {
+    const c = clock();
+    const bucket = createRateBucket(redis, { now: c.now });
+    expect((await bucket.take(BUCKET_KEY, 0.01, 1)).granted).toBe(1);
+    c.advance(70 * SECOND_MS);
+    expect(await redis.pttl(`marketing:rate:${BUCKET_KEY}`)).toBeGreaterThan(
+      60_000
+    );
+    expect((await bucket.take(BUCKET_KEY, 0.01, 1)).granted).toBe(0);
+  });
+
+  it('a stored ts far in the future does not starve the bucket', async () => {
+    const c = clock();
+    const bucket = createRateBucket(redis, { now: c.now });
+    c.set(START + 3_600_000);
+    expect((await bucket.take(BUCKET_KEY, 10, 10)).granted).toBe(10);
+    c.set(START);
+    expect((await bucket.take(BUCKET_KEY, 10, 1)).granted).toBe(0);
+    c.set(START + 2000);
+    expect((await bucket.take(BUCKET_KEY, 10, 20)).granted).toBe(10);
+  });
+
+  it('wanted 2.5 grants 2 and removes 2 tokens', async () => {
+    const bucket = createRateBucket(redis, { now: clock().now });
+    expect((await bucket.take(BUCKET_KEY, 10, 2.5)).granted).toBe(2);
+    expect((await bucket.take(BUCKET_KEY, 10, 20)).granted).toBe(8);
+    expect(await bucket.take(BUCKET_KEY, 10, -3)).toEqual({
+      granted: 0,
+      waitMs: 0,
+    });
+  });
+
   it('a clock going backwards grants nothing extra', async () => {
     const c = clock();
     const bucket = createRateBucket(redis, { now: c.now });
@@ -169,6 +201,8 @@ describe('createChannelBackoff', () => {
     expect(until).not.toBeNull();
     expect((until as number) - Date.now()).toBeGreaterThan(3500);
     expect(await backoff.until(PROJECT, 'other')).toBeNull();
+    await backoff.set(PROJECT, 'zero', 0);
+    expect(await backoff.until(PROJECT, 'zero')).toBeNull();
   });
 });
 
