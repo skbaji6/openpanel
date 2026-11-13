@@ -20,7 +20,7 @@ const REGISTRY_TEMPLATE_CHANNELS = ['sms', 'whatsapp'] as const;
 const zTimeZone = z.string().refine(isTimeZone, 'unknown timezone');
 const zIfLateMinutes = z.number().int().min(0).max(MAX_IF_LATE_MINUTES);
 
-const zQuietHoursOverride = z
+export const zQuietHoursOverride = z
   .strictObject({
     enabled: z.boolean(),
     start: z.string().regex(HH_MM).optional(),

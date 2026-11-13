@@ -17,6 +17,7 @@ import { createRateLimiter } from './rate-limit';
 import { audienceSourceRoutes } from './routes-audience-source';
 import { audienceRoutes } from './routes-audiences';
 import { campaignRoutes } from './routes-campaigns';
+import { channelSettingsRoutes } from './routes-channel-settings';
 import { dashboardRoutes } from './routes-dashboard';
 import { syncRoutes } from './routes-sync';
 import { createUnsubscribeHandlers } from './unsubscribe';
@@ -115,6 +116,7 @@ export function createServer(deps: ServerDeps) {
     },
     ...syncRoutes(sql),
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),
+    ...channelSettingsRoutes(sql),
     ...(deps.redis && sources
       ? [
           ...audienceSourceRoutes({
