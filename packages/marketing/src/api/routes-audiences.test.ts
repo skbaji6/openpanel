@@ -611,16 +611,29 @@ describe('audience routes', () => {
 
   it('two concurrent freezes: exactly one runs, the other is 409 freeze_in_progress', async () => {
     const created = await create({ mode: 'snapshot' });
-    pageDelayMs = FREEZE_DELAY_MS;
+    // The first freeze stays inside its source call until the second has answered, whatever the timing.
+    const inSource = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const fake = createFakeSource({ members, schema: SCHEMA });
+    sourceOverride = {
+      ...fake,
+      members: async (req) => {
+        inSource.resolve();
+        await release.promise;
+        return await fake.members(req);
+      },
+    };
     const freeze = () =>
       call('POST', `/marketing/audiences/${created.id}/freeze`);
-    const results = await Promise.all([freeze(), freeze()]);
-    const statuses = results.map((res) => res.status).sort();
-    expect(statuses).toEqual([200, 409]);
-    const loser = results.find((res) => res.status === 409);
-    expect(((await loser?.json()) as { error: string }).error).toBe(
+    const first = freeze();
+    await inSource.promise;
+    const second = await freeze();
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { error: string }).error).toBe(
       'freeze_in_progress'
     );
+    release.resolve();
+    expect((await first).status).toBe(200);
     // The lock is released afterwards.
     expect((await freeze()).status).toBe(200);
   });

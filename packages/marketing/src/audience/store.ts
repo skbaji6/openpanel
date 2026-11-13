@@ -108,9 +108,9 @@ const LOCK_ROW = `SELECT a.mode, a.filter, a.exclude_filter, a.version, a.snapsh
   FROM marketing.audiences a WHERE a.id = $1::uuid AND a.project_id = $2 FOR UPDATE`;
 // A separate statement after the lock: under READ COMMITTED it sees campaigns committed while the lock was awaited.
 const IN_USE_AFTER_LOCK = `SELECT ${IN_USE} AS in_use FROM marketing.audiences a WHERE a.id = $1::uuid`;
-// A freeze page commits only while the definition it materialises is still the saved one.
 // Serialises the page transactions of every freeze of one audience: they share the audience's staging rows.
 const FREEZE_PAGE_LOCK = `SELECT pg_advisory_xact_lock(hashtext('marketing:audience-freeze:' || $1))::text AS locked`;
+// A freeze page commits only while the definition it materialises is still the saved one.
 const DEFINITION_UNCHANGED =
   'SELECT 1 FROM marketing.audiences WHERE id = $1::uuid AND version = $2 FOR SHARE';
 const ANY_CAMPAIGN =
