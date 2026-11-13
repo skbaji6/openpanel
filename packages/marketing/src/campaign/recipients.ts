@@ -27,10 +27,12 @@ export const RETRY_BACKOFF_MS = 30_000;
 export const CHANNEL_ERROR_BACKOFF_MS = 60_000;
 // Bounds one reaper pass; the next pass, on any replica, continues.
 export const REAP_BATCH = 1000;
+// Profiles per capped markSending transaction, so concurrent batches cannot fill Postgres's shared lock table.
+export const CAP_LOCK_CHUNK = 100;
 
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 const ALIVE_STATES = new Set(['running', 'paused']);
-const MS = "interval '1 millisecond'";
+const ONE_MILLISECOND = "interval '1 millisecond'";
 const CAMPAIGN_REF = `'campaign:' || changed.campaign_id::text || ':' || changed.profile_id`;
 
 // Appended to a statement whose changed CTE returns (campaign_id, status) of the rows it moved.
@@ -115,7 +117,7 @@ const MARK_OUTCOMES_SQL = `
       END AS status,
       CASE i.outcome
         WHEN 'retry' THEN ${RETRY_BACKOFF_MS}::bigint * r.attempt
-        WHEN 'rate_limited' THEN i.retry_after_ms
+        WHEN 'rate_limited' THEN GREATEST(i.retry_after_ms, ${RETRY_BACKOFF_MS})
         ELSE ${CHANNEL_ERROR_BACKOFF_MS}
       END AS backoff_ms
     FROM marketing.campaign_recipients r
@@ -135,7 +137,7 @@ const MARK_OUTCOMES_SQL = `
       attempt = CASE WHEN d.status = 'pending' AND d.outcome IN ('rate_limited', 'channel_error')
         THEN GREATEST(r.attempt - 1, 0) ELSE r.attempt END,
       due_at = CASE WHEN d.status = 'pending'
-        THEN GREATEST($9::timestamptz, $8::timestamptz + d.backoff_ms * ${MS}) ELSE r.due_at END,
+        THEN GREATEST($9::timestamptz, $8::timestamptz + d.backoff_ms * ${ONE_MILLISECOND}) ELSE r.due_at END,
       provider_ref = CASE WHEN d.status IN ('sent', 'uncertain') THEN COALESCE(d.provider_ref, r.provider_ref)
         ELSE r.provider_ref END,
       sent_at = CASE WHEN d.status = 'sent' THEN $8::timestamptz ELSE r.sent_at END,
@@ -269,20 +271,27 @@ async function cappedProfiles(
   );
 }
 
-export async function markSending(
+interface MarkSendingArgs {
+  campaignId: string;
+  projectId: string;
+  channel: string;
+  token: string;
+  profileIds: string[];
+  now: Date;
+  cap: EffectiveCap | null;
+}
+
+interface MarkSendingResult {
+  sending: string[];
+  capped: string[];
+  notRunning: boolean;
+}
+
+async function markSendingInTransaction(
   sql: Sql,
-  args: {
-    campaignId: string;
-    projectId: string;
-    channel: string;
-    token: string;
-    profileIds: string[];
-    now: Date;
-    cap: EffectiveCap | null;
-  }
-): Promise<{ sending: string[]; capped: string[]; notRunning: boolean }> {
-  const { campaignId, projectId, channel, token, now, cap } = args;
-  const profileIds = [...new Set(args.profileIds)];
+  args: MarkSendingArgs
+): Promise<MarkSendingResult> {
+  const { campaignId, projectId, channel, token, profileIds, now, cap } = args;
   return await sql.$transaction(async (tx) => {
     const [campaign] = await tx.$queryRawUnsafe<{ state: string }[]>(
       SHARE_CAMPAIGN,
@@ -322,6 +331,34 @@ export async function markSending(
       notRunning: false,
     };
   }, TRANSACTION);
+}
+
+export async function markSending(
+  sql: Sql,
+  args: MarkSendingArgs
+): Promise<MarkSendingResult> {
+  const profileIds = [...new Set(args.profileIds)];
+  if (!args.cap) {
+    return await markSendingInTransaction(sql, { ...args, profileIds });
+  }
+  profileIds.sort();
+  const result: MarkSendingResult = {
+    sending: [],
+    capped: [],
+    notRunning: false,
+  };
+  for (let start = 0; start < profileIds.length; start += CAP_LOCK_CHUNK) {
+    const chunk = await markSendingInTransaction(sql, {
+      ...args,
+      profileIds: profileIds.slice(start, start + CAP_LOCK_CHUNK),
+    });
+    result.sending.push(...chunk.sending);
+    result.capped.push(...chunk.capped);
+    if (chunk.notRunning) {
+      return { ...result, notRunning: true };
+    }
+  }
+  return result;
 }
 
 export async function markOutcomes(

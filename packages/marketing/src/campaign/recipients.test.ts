@@ -12,6 +12,7 @@ import {
   recordLedger,
 } from '../engine/ledger';
 import {
+  CAP_LOCK_CHUNK,
   claimRecipients,
   MAX_SEND_ATTEMPTS,
   markLeasedFinal,
@@ -35,7 +36,8 @@ const CAP_ONE_PER_DAY: EffectiveCap = {
   periodSeconds: 86_400,
   scope: 'channel',
 };
-const RACE_PAUSE_MS = 150;
+const LOCK_POLL_MS = 20;
+const LOCK_WAIT_LIMIT_MS = 5000;
 
 const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
 const ids = (prefix: string, count: number) =>
@@ -201,6 +203,23 @@ async function setAttempt(campaignId: string, profileId: string, n: number) {
   );
 }
 
+// Resolves once some session is blocked on an advisory lock; fails clearly if none ever is.
+async function waitForAdvisoryLockWaiter(): Promise<void> {
+  const deadline = Date.now() + LOCK_WAIT_LIMIT_MS;
+  while (Date.now() < deadline) {
+    const [waiting] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+    );
+    if ((waiting?.n ?? 0) > 0) {
+      return;
+    }
+    await Bun.sleep(LOCK_POLL_MS);
+  }
+  throw new Error(
+    `no session waited on an advisory lock within ${LOCK_WAIT_LIMIT_MS} ms`
+  );
+}
+
 describe('campaign recipients', () => {
   beforeAll(async () => {
     await migrate();
@@ -342,7 +361,7 @@ describe('campaign recipients', () => {
     expect((await row(id, 'a')).status).toBe('skipped');
   });
 
-  it('two markSending calls for two batches containing the same capped profile serialise: with cap 1, exactly one is sent', async () => {
+  it('markSending waits for a journey holding the cap lock', async () => {
     // One running campaign per project, so the other sender is a journey holding the same cap lock.
     const id = await insertCampaign();
     await insertRecipients(id, ['a']);
@@ -350,6 +369,10 @@ describe('campaign recipients', () => {
     let journeyLocked: () => void = () => undefined;
     const locked = new Promise<void>((resolve) => {
       journeyLocked = resolve;
+    });
+    let finishJourney: () => void = () => undefined;
+    const journeyMayFinish = new Promise<void>((resolve) => {
+      finishJourney = resolve;
     });
     const journey = sql.$transaction(
       async (tx: Queryable) => {
@@ -360,7 +383,7 @@ describe('campaign recipients', () => {
           scope: 'channel',
         });
         journeyLocked();
-        await Bun.sleep(RACE_PAUSE_MS);
+        await journeyMayFinish;
         await recordLedger(tx, [
           {
             sourceRef: ledgerRef.step(randomUUID(), 0),
@@ -374,10 +397,50 @@ describe('campaign recipients', () => {
       { timeout: 10_000 }
     );
     await locked;
-    const result = await send(id, claimed.token, ['a'], CAP_ONE_PER_DAY);
+    const sending = send(id, claimed.token, ['a'], CAP_ONE_PER_DAY);
+    await waitForAdvisoryLockWaiter();
+    finishJourney();
     await journey;
+    const result = await sending;
     expect(result.capped).toEqual(['a']);
     expect(result.sending).toEqual([]);
+  });
+
+  it('a capped batch larger than one lock chunk marks every row correctly', async () => {
+    const people = Array.from(
+      { length: 250 },
+      (_, i) => `c-${String(i).padStart(3, '0')}`
+    );
+    // One person already at the cap in each chunk of 100.
+    const alreadySent = ['c-005', 'c-150', 'c-249'];
+    expect(CAP_LOCK_CHUNK).toBe(100);
+    const id = await insertCampaign('running', 'done', people.length);
+    await insertRecipients(id, people);
+    await recordLedger(
+      sql,
+      alreadySent.map((profileId) => ({
+        sourceRef: ledgerRef.step(randomUUID(), 0),
+        projectId: PROJECT,
+        profileId,
+        channel: CHANNEL,
+        sentAt: at(-HOUR_MS),
+      }))
+    );
+    const claimed = await claim(id);
+    const result = await send(
+      id,
+      claimed.token,
+      claimed.profileIds,
+      CAP_ONE_PER_DAY
+    );
+    expect(result.notRunning).toBe(false);
+    expect(result.capped.sort()).toEqual(alreadySent);
+    expect(result.sending.length).toBe(247);
+    const all = await rows(id);
+    const statuses = people.map((p) => all.get(p)?.status);
+    expect(statuses.filter((s) => s === 'sending').length).toBe(247);
+    expect((await ledgerRefs()).length).toBe(250);
+    expect((await counters(id))?.skipped).toBe(3);
   });
 
   it('markOutcomes maps each outcome as listed and updates counters once per call', async () => {
@@ -404,7 +467,7 @@ describe('campaign recipients', () => {
           profileId: 'rate',
           outcome: 'rate_limited',
           reason: 'http 429',
-          retryAfterMs: 20 * SECOND_MS,
+          retryAfterMs: 45 * SECOND_MS,
         },
         { profileId: 'chan', outcome: 'channel_error', reason: 'smtp EAUTH' },
       ],
@@ -437,7 +500,7 @@ describe('campaign recipients', () => {
     expect(retry?.due_at.getTime()).toBe(markAt.getTime() + 30 * SECOND_MS);
     const rate = all.get('rate');
     expect([rate?.status, rate?.reason]).toEqual(['pending', 'rate_limited']);
-    expect(rate?.due_at.getTime()).toBe(markAt.getTime() + 20 * SECOND_MS);
+    expect(rate?.due_at.getTime()).toBe(markAt.getTime() + 45 * SECOND_MS);
     const chan = all.get('chan');
     expect([chan?.status, chan?.reason]).toEqual(['pending', 'channel_error']);
     expect(chan?.due_at.getTime()).toBe(markAt.getTime() + 60 * SECOND_MS);
@@ -478,6 +541,18 @@ describe('campaign recipients', () => {
     expect(a.status).toBe('pending');
     expect(a.due_at.getTime()).toBeGreaterThanOrEqual(
       NOW.getTime() + 60 * SECOND_MS
+    );
+  });
+
+  it('a rate_limited outcome without retry-after backs off at least 30 s', async () => {
+    const id = await insertCampaign();
+    await insertRecipients(id, ['a']);
+    const token = await toSending(id);
+    await outcomes(id, token, [{ profileId: 'a', outcome: 'rate_limited' }]);
+    const a = await row(id, 'a');
+    expect([a.status, a.attempt]).toEqual(['pending', 0]);
+    expect(a.due_at.getTime()).toBeGreaterThanOrEqual(
+      NOW.getTime() + 30 * SECOND_MS
     );
   });
 
