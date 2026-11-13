@@ -6,8 +6,6 @@ import { zonedTimeToUtc } from './schedule-time';
 const MS_PER_SECOND = 1000;
 const MS_PER_DAY = 86_400_000;
 const BUCKET_MIN_TTL_MS = 60_000;
-// A stored ts further ahead than this is a fast replica clock, not a real future.
-const MAX_CLOCK_SKEW_MS = 5000;
 const RETRY_AFTER_MIN_MS = 1000;
 const RETRY_AFTER_MAX_MS = 60_000;
 const RETRY_AFTER_DEFAULT_MS = 5000;
@@ -15,22 +13,22 @@ const MAX_CLAIM = 500;
 const CLAIM_SECONDS_OF_TOKENS = 10;
 const MAX_MIDNIGHT_SEARCH_HOURS = 3;
 
-// Time comes from ARGV, never Redis TIME, so an injected clock works and replicas agree.
-// Tokens are a float string; a backwards clock only clamps elapsed to 0 and never moves ts back.
+// Without an injected clock (ARGV[1] empty) time is Redis TIME, so every replica shares one clock.
+// Tokens are a float string; a backwards step only clamps elapsed to 0 and never moves ts back.
 const TAKE_SCRIPT = `
 local now = tonumber(ARGV[1])
+if now == nil then
+  local t = redis.call('TIME')
+  now = t[1] * 1000 + math.floor(t[2] / 1000)
+end
 local rate = tonumber(ARGV[2])
 local wanted = tonumber(ARGV[3])
-local maxSkew = tonumber(ARGV[4])
 local capacity = math.max(1, rate)
 local state = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
 local tokens = tonumber(state[1])
 local ts = tonumber(state[2])
 if tokens == nil or ts == nil then
   tokens = capacity
-  ts = now
-end
-if ts - now > maxSkew then
   ts = now
 end
 local elapsed = math.max(0, now - ts)
@@ -47,12 +45,13 @@ redis.call('HSET', KEYS[1], 'tokens', string.format('%.9f', tokens), 'ts', strin
 redis.call('PEXPIRE', KEYS[1], math.max(${BUCKET_MIN_TTL_MS}, math.ceil(capacity / rate * 1000)))
 return {granted, wait}`;
 
-// The value is the epoch ms the backoff ends at, so a shorter one never overwrites a longer one.
+// The value is the Redis-clock epoch ms the backoff ends at, so a shorter one never overwrites a longer one.
 const BACKOFF_SCRIPT = `
+local t = redis.call('TIME')
+local untilMs = t[1] * 1000 + math.floor(t[2] / 1000) + tonumber(ARGV[1])
 local current = tonumber(redis.call('GET', KEYS[1]))
-local untilMs = tonumber(ARGV[1])
 if current == nil or current < untilMs then
-  redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+  redis.call('SET', KEYS[1], string.format('%.0f', untilMs), 'PX', ARGV[1])
 end
 return 1`;
 
@@ -68,7 +67,7 @@ export function createRateBucket(
   redis: Redis,
   opts: { now?: () => number }
 ): RateBucket {
-  const now = opts.now ?? Date.now;
+  const { now } = opts;
   return {
     async take(key, ratePerSecond, wanted) {
       if (!(ratePerSecond > 0)) {
@@ -82,10 +81,9 @@ export function createRateBucket(
         TAKE_SCRIPT,
         1,
         `marketing:rate:${key}`,
-        String(now()),
+        now ? String(now()) : '',
         String(ratePerSecond),
-        String(whole),
-        String(MAX_CLOCK_SKEW_MS)
+        String(whole)
       )) as [number, number];
       return { granted, waitMs };
     },
@@ -133,13 +131,19 @@ export function createChannelBackoff(redis: Redis) {
         BACKOFF_SCRIPT,
         1,
         key(projectId, channel),
-        String(Date.now() + ms),
         String(Math.ceil(ms))
       );
     },
     async until(projectId: string, channel: string): Promise<number | null> {
-      const value = Number(await redis.get(key(projectId, channel)));
-      return value > Date.now() ? value : null;
+      const [value, [seconds, micros]] = await Promise.all([
+        redis.get(key(projectId, channel)),
+        redis.time(),
+      ]);
+      const until = Number(value);
+      const redisNow =
+        Number(seconds) * MS_PER_SECOND +
+        Math.floor(Number(micros) / MS_PER_SECOND);
+      return until > redisNow ? until : null;
     },
   };
 }

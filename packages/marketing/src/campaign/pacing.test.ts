@@ -114,15 +114,12 @@ describe('createRateBucket', () => {
     expect((await bucket.take(BUCKET_KEY, 0.01, 1)).granted).toBe(0);
   });
 
-  it('a stored ts far in the future does not starve the bucket', async () => {
-    const c = clock();
-    const bucket = createRateBucket(redis, { now: c.now });
-    c.set(START + 3_600_000);
-    expect((await bucket.take(BUCKET_KEY, 10, 10)).granted).toBe(10);
-    c.set(START);
-    expect((await bucket.take(BUCKET_KEY, 10, 1)).granted).toBe(0);
-    c.set(START + 2000);
-    expect((await bucket.take(BUCKET_KEY, 10, 20)).granted).toBe(10);
+  it('without an injected clock it uses the Redis clock and never exceeds capacity', async () => {
+    const bucket = createRateBucket(redis, {});
+    expect((await bucket.take(BUCKET_KEY, 5, 5)).granted).toBe(5);
+    const next = await bucket.take(BUCKET_KEY, 5, 5);
+    expect(next.granted).toBeLessThanOrEqual(1);
+    expect(next.waitMs).toBeGreaterThan(0);
   });
 
   it('wanted 2.5 grants 2 and removes 2 tokens', async () => {
