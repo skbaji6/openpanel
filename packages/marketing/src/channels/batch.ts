@@ -132,18 +132,24 @@ export function perRecipientBatch<C>(
         reason: DEADLINE_REASON,
       });
 
+      // sendBatch rejected provider messages above, so every item here is rendered.
       const sendOne = async (item: BatchItem): Promise<DeliveryOutcome> => {
         const { profileId } = item;
         let started = false;
         try {
-          if (mustStop() || isProviderMessage(item.message)) {
+          if (mustStop()) {
             return notStarted(profileId);
           }
           started = true;
-          const result = await adapter.send(item.message, item.to, config, {
-            idempotencyKey: item.idempotencyKey,
-            unsubscribeUrl: item.unsubscribeUrl,
-          });
+          const result = await adapter.send(
+            item.message as RenderedMessage,
+            item.to,
+            config,
+            {
+              idempotencyKey: item.idempotencyKey,
+              unsubscribeUrl: item.unsubscribeUrl,
+            }
+          );
           return { profileId, ...classifySendResult(result) };
         } catch {
           if (!started) {

@@ -27,6 +27,15 @@ const RATE_OR_CREDENTIAL_CODES = new Set([
   'messaging/message-rate-exceeded',
   'app/invalid-credential',
 ]);
+// Rejected before any delivery, for a reason other than the account: an unlisted code is not here, so it ranks as ambiguous.
+const KNOWN_PERMANENT_CODES = new Set([
+  'messaging/invalid-argument',
+  'messaging/invalid-payload',
+  'messaging/payload-size-limit-exceeded',
+  'messaging/mismatched-credential',
+  'messaging/third-party-auth-error',
+  'messaging/invalid-apns-credentials',
+]);
 const RANK_POSSIBLY_DELIVERED = 2;
 const RANK_ACCOUNT_LEVEL = 1;
 
@@ -186,12 +195,14 @@ class MulticastProgress {
 
   // The reason names the most ambiguous failure: a token that may have been delivered must not be hidden
   // behind a rate-limit code from another token, or the whole send is re-queued and that token is pushed twice.
-  private reportedCode(): string {
+  reportedCode(): string {
     const rank = (code: string) => {
       if (RATE_OR_CREDENTIAL_CODES.has(code)) {
         return RANK_ACCOUNT_LEVEL;
       }
-      return isTransient(code) ? RANK_POSSIBLY_DELIVERED : 0;
+      const certainlyNotSent =
+        INVALID_TOKEN_CODES.has(code) || KNOWN_PERMANENT_CODES.has(code);
+      return certainlyNotSent ? 0 : RANK_POSSIBLY_DELIVERED;
     };
     let [reported = UNKNOWN_CODE] = this.failureCodes;
     for (const code of this.failureCodes) {
@@ -233,9 +244,10 @@ async function sendAll(
     } catch (error) {
       // Only the code is kept: SDK messages can quote the credential.
       const code = errorCode(error);
+      progress.failureCodes.push(code);
       return progress.result({
         retryable: isTransient(code),
-        reason: `fcm ${code}`,
+        reason: `fcm ${progress.reportedCode()}`,
       });
     }
   }

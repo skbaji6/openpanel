@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
+import { classifySendResult } from './batch';
 import {
   appFor,
   createPushAdapter,
@@ -239,6 +240,49 @@ describe('push adapter', () => {
     expect(
       await adapter.send(message, recipient(tokens(600)), config, opts)
     ).toEqual({ ok: true, invalidTokens: ['t1'] });
+  });
+
+  it('a later chunk throwing a credential error after transient failures is never certainly-not-sent', async () => {
+    let call = 0;
+    const sender: MulticastSender = (_json, multicast) => {
+      call++;
+      if (call === 2) {
+        throw Object.assign(new Error('x'), { code: 'app/invalid-credential' });
+      }
+      return Promise.resolve({
+        responses: multicast.tokens.map(() => ({
+          success: false,
+          error: { code: 'messaging/internal-error' },
+        })),
+      });
+    };
+    const result = await createPushAdapter({ sendMulticast: sender }).send(
+      message,
+      recipient(tokens(600)),
+      config,
+      opts
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'fcm messaging/internal-error',
+    });
+    expect(['uncertain', 'failed']).toContain(
+      classifySendResult(result).outcome
+    );
+  });
+
+  it('a rate-limited token next to a token with an unlisted code is not certainly-not-sent', async () => {
+    const { sender } = fakeSender({
+      a: { success: false, code: 'messaging/quota-exceeded' },
+      b: { success: false, code: 'messaging/brand-new-code' },
+    });
+    const result = await createPushAdapter({ sendMulticast: sender }).send(
+      message,
+      recipient(['a', 'b']),
+      config,
+      opts
+    );
+    expect(classifySendResult(result).outcome).not.toBe('rate_limited');
   });
 
   it('the first batch throwing with nothing delivered is a retryable failure', async () => {
