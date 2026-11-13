@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { type BatchChannelAdapter, perRecipientBatch } from './batch';
-import { createEmailAdapter } from './email';
+import { createEmailAdapter, createPooledEmailAdapter } from './email';
 import { createMsg91SmsAdapter } from './msg91-sms';
 import { createMsg91WhatsAppAdapter } from './msg91-whatsapp';
 import { createPushAdapter } from './push';
@@ -34,18 +34,30 @@ export function registerDefaultAdapters(options: {
   );
   registerAdapter(createEmailAdapter());
   registerAdapter(createPushAdapter());
+  registerBatchAdapter(createPooledEmailAdapter());
   registerBatchAdapter(createMsg91SmsAdapter());
   registerBatchAdapter(createMsg91WhatsAppAdapter());
 }
 
 export function registerBatchAdapter<C>(adapter: BatchChannelAdapter<C>): void {
+  const replaced = batchAdapters.get(adapter.id);
+  if (replaced && replaced !== (adapter as unknown)) {
+    replaced.close?.();
+  }
   batchAdapters.set(
     adapter.id,
     adapter as unknown as BatchChannelAdapter<unknown>
   );
 }
 
+export function closeBatchAdapters(): void {
+  for (const adapter of batchAdapters.values()) {
+    adapter.close?.();
+  }
+}
+
 export function unregisterBatchAdapter(channel: CampaignChannel): void {
+  batchAdapters.get(channel)?.close?.();
   batchAdapters.delete(channel);
 }
 

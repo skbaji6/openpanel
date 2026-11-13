@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 import {
+  closeBatchAdapters,
   configSchemaFor,
   getAdapter,
   getBatchAdapter,
@@ -29,6 +30,14 @@ describe('registerDefaultAdapters', () => {
         secrets,
       }).success
     ).toBe(false);
+  });
+
+  it('registers the pooled email batch adapter by default', () => {
+    registerDefaultAdapters({ webhookAllowHosts: [] });
+    const adapter = getBatchAdapter('email');
+    expect(adapter.maxBatch).toBe(500);
+    expect(typeof adapter.close).toBe('function');
+    closeBatchAdapters();
   });
 
   it('registers the sms batch adapter by default', () => {

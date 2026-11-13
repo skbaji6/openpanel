@@ -1,10 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from 'bun:test';
-import { createServer, type Socket } from 'node:net';
 import {
   createEmailAdapter,
   type EmailConfig,
   type MailTransport,
 } from './email';
+import { startFakeSmtp } from './fakes/smtp-server';
 import type { Recipient, RenderedMessage, SendOptions } from './types';
 
 const UNSUBSCRIBE_URL = 'https://marketing.test/unsubscribe?t=abc';
@@ -28,75 +28,8 @@ const opts: SendOptions = {
   unsubscribeUrl: UNSUBSCRIBE_URL,
 };
 
-// A minimal SMTP server: enough of the protocol for nodemailer to deliver one message.
-// `data` is set once the server has the whole message, i.e. it was delivered.
-interface Session {
-  recipients: string[];
-  data: string;
-  closed: boolean;
-}
-let sessions: Session[] = [];
-let mailFromReply = '250 ok';
-let replyDelayMs = 0;
-
-function handle(socket: Socket) {
-  const session: Session = { recipients: [], data: '', closed: false };
-  sessions.push(session);
-  socket.on('close', () => {
-    session.closed = true;
-  });
-  socket.on('error', () => undefined);
-  const reply = (line: string) => {
-    setTimeout(() => {
-      if (socket.writable) {
-        socket.write(`${line}\r\n`);
-      }
-    }, replyDelayMs);
-  };
-  let buffer = '';
-  let inData = false;
-  reply('220 fake smtp');
-  socket.on('data', (chunk) => {
-    buffer += chunk.toString('utf8');
-    if (inData) {
-      const end = buffer.indexOf('\r\n.\r\n');
-      if (end === -1) {
-        return;
-      }
-      session.data = buffer.slice(0, end);
-      buffer = buffer.slice(end + 5);
-      inData = false;
-      reply('250 queued');
-    }
-    let lineEnd = buffer.indexOf('\r\n');
-    while (lineEnd !== -1 && !inData) {
-      const line = buffer.slice(0, lineEnd);
-      buffer = buffer.slice(lineEnd + 2);
-      const verb = line.slice(0, 4).toUpperCase();
-      if (verb === 'EHLO' || verb === 'HELO') {
-        reply('250 fake');
-      } else if (verb === 'MAIL') {
-        reply(mailFromReply);
-      } else if (verb === 'RCPT') {
-        session.recipients.push(line);
-        reply('250 ok');
-      } else if (verb === 'DATA') {
-        inData = true;
-        reply('354 go');
-      } else if (verb === 'QUIT') {
-        socket.end('221 bye\r\n');
-      } else {
-        reply('250 ok');
-      }
-      lineEnd = buffer.indexOf('\r\n');
-    }
-  });
-}
-
-const smtp = createServer(handle);
-await new Promise<void>((resolve) => smtp.listen(0, '127.0.0.1', resolve));
-const address = smtp.address();
-const SMTP_PORT = typeof address === 'object' && address ? address.port : 0;
+const smtp = await startFakeSmtp();
+const SMTP_PORT = smtp.port;
 
 const realConfig: EmailConfig = {
   host: '127.0.0.1',
@@ -121,12 +54,12 @@ function fakeTransport(
 
 describe('email adapter', () => {
   beforeEach(() => {
-    sessions = [];
-    mailFromReply = '250 ok';
-    replyDelayMs = 0;
+    smtp.sessions.length = 0;
+    smtp.reply = undefined;
+    smtp.delayMs = 0;
   });
-  afterAll(() => {
-    smtp.close();
+  afterAll(async () => {
+    await smtp.close();
   });
 
   it('sets List-Unsubscribe and List-Unsubscribe-Post headers', async () => {
@@ -134,7 +67,7 @@ describe('email adapter', () => {
     expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
       ok: true,
     });
-    const [session] = sessions;
+    const [session] = smtp.sessions;
     expect(session?.recipients).toEqual(['RCPT TO:<ada@example.test>']);
     expect(session?.data).toContain(`List-Unsubscribe: <${UNSUBSCRIBE_URL}>`);
     expect(session?.data).toContain(
@@ -152,7 +85,7 @@ describe('email adapter', () => {
     expect(await adapter.send(hostile, recipient, realConfig, opts)).toEqual({
       ok: true,
     });
-    const [session] = sessions;
+    const [session] = smtp.sessions;
     expect(session?.recipients).toEqual(['RCPT TO:<ada@example.test>']);
     expect(session?.data).not.toMatch(/^Bcc:/im);
     expect(session?.data).not.toMatch(/^X-Extra:/im);
@@ -240,7 +173,8 @@ describe('email adapter', () => {
   });
 
   it('a 550 from a real SMTP server is not retryable', async () => {
-    mailFromReply = '550 no such sender';
+    smtp.reply = (command) =>
+      command.startsWith('MAIL') ? '550 no such sender' : undefined;
     const adapter = createEmailAdapter();
     expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
       ok: false,
@@ -274,7 +208,7 @@ describe('email adapter', () => {
   });
 
   it('after a timeout the message is never delivered and the connection is closed', async () => {
-    replyDelayMs = SLOW_REPLY_MS;
+    smtp.delayMs = SLOW_REPLY_MS;
     const adapter = createEmailAdapter({ timeoutMs: SLOW_TIMEOUT_MS });
     expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
       ok: false,
@@ -282,18 +216,18 @@ describe('email adapter', () => {
       reason: 'timeout',
     });
     await Bun.sleep(SLOW_REPLY_MS * 10 * 3);
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]?.data).toBe('');
-    expect(sessions[0]?.closed).toBe(true);
+    expect(smtp.sessions).toHaveLength(1);
+    expect(smtp.sessions[0]?.data).toBe('');
+    expect(smtp.sessions[0]?.closed).toBe(true);
   });
 
   it('a slow but timely server still delivers', async () => {
-    replyDelayMs = 5;
+    smtp.delayMs = 5;
     const adapter = createEmailAdapter({ timeoutMs: 5000 });
     expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
       ok: true,
     });
-    expect(sessions[0]?.data).toContain('Come back');
+    expect(smtp.sessions[0]?.data).toContain('Come back');
   });
 
   it('rejects a List-Unsubscribe url that could break out of its angle brackets', async () => {

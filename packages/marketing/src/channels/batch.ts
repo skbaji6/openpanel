@@ -53,6 +53,8 @@ export interface BatchChannelAdapter<C> {
     config: C,
     opts: { concurrency: number; signal?: AbortSignal; deadlineAt?: number }
   ): Promise<DeliveryOutcome[]>;
+  // Adapters that hold connections release them here (worker shutdown).
+  close?(): void;
 }
 
 // Reasons are the adapters' own strings. The adapters mark some of them non-retryable,
