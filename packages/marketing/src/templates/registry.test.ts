@@ -117,6 +117,36 @@ describe('template registry', () => {
     expect(error.code).toBe('mapping_mismatch');
   });
 
+  it('a non-canonical {{01}} is mapping_mismatch', async () => {
+    const error = await rejection(
+      registry.create(CTX, {
+        ...WHATSAPP,
+        approvedText: 'Hi {{1}} {{01}}',
+        variables: [{ slot: 'body_1', value: '{{profile.firstName}}' }],
+      })
+    );
+    expect(error.code).toBe('mapping_mismatch');
+  });
+
+  it('getVersion with NaN, 1.5, 0 or 2**31 is not_found', async () => {
+    const created = await registry.create(CTX, SMS);
+    for (const version of [Number.NaN, 1.5, 0, 2 ** 31]) {
+      const error = await rejection(
+        registry.getVersion('p1', created.templateId, version)
+      );
+      expect(error.code).toBe('not_found');
+    }
+  });
+
+  it("setEnabled on another project's template is not_found", async () => {
+    const created = await registry.create(CTX, SMS);
+    const error = await rejection(
+      registry.setEnabled(OTHER, created.templateId, false)
+    );
+    expect(error.code).toBe('not_found');
+    expect((await registry.get('p1', created.templateId)).enabled).toBe(true);
+  });
+
   it("a whatsapp slot 'button_1' is accepted", async () => {
     const row = await registry.create(CTX, {
       ...WHATSAPP,

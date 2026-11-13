@@ -2,15 +2,19 @@ import { describe, expect, it } from 'bun:test';
 import { renderProviderVariables } from './provider-render';
 import type { TemplateVersion } from './registry';
 
+const WHATSAPP_REF = { templateName: 't' };
+const SMS_REF = { flowId: 'a' };
+
 function version(
-  variables: { slot: string; value: string }[]
+  variables: { slot: string; value: string }[],
+  providerRef: unknown = WHATSAPP_REF
 ): TemplateVersion {
   return {
     templateId: 't',
     version: 1,
     displayName: 'x',
     category: 'service',
-    providerRef: {},
+    providerRef,
     approvedText: 'x',
     variables,
     createdBy: 'u',
@@ -20,8 +24,9 @@ function version(
 
 const render = (
   variables: { slot: string; value: string }[],
-  traits: Record<string, string | number | boolean>
-) => renderProviderVariables(version(variables), traits);
+  traits: Record<string, string | number | boolean>,
+  providerRef: unknown = WHATSAPP_REF
+) => renderProviderVariables(version(variables, providerRef), traits);
 
 describe('renderProviderVariables', () => {
   it('fills body_1 from {{profile.firstName}}', () => {
@@ -75,7 +80,8 @@ describe('renderProviderVariables', () => {
         { slot: 'var2', value: 'b' },
         { slot: 'var1', value: 'a' },
       ],
-      {}
+      {},
+      SMS_REF
     );
     expect(result.ok && result.variables.map((v) => v.slot)).toEqual([
       'var2',
@@ -99,5 +105,35 @@ describe('renderProviderVariables', () => {
       ok: true,
       variables: [{ slot: 'body_1', value: '{{profile.x}}' }],
     });
+  });
+
+  it('sms slots [var2, body_1, var1] keep the order given', () => {
+    const result = render(
+      ['var2', 'body_1', 'var1'].map((slot) => ({ slot, value: 'v' })),
+      {},
+      SMS_REF
+    );
+    expect(result.ok && result.variables.map((v) => v.slot)).toEqual([
+      'var2',
+      'body_1',
+      'var1',
+    ]);
+  });
+
+  it('a blank trait next to literal text is missing_variable', () => {
+    for (const firstName of ['  ', '']) {
+      expect(
+        render([{ slot: 'body_1', value: 'Hi {{profile.firstName}}' }], {
+          firstName,
+        })
+      ).toEqual({ ok: false, reason: 'missing_variable' });
+    }
+  });
+
+  it('a cut never leaves half of a surrogate pair', () => {
+    const result = render([{ slot: 'body_1', value: '{{profile.t}}' }], {
+      t: `${'x'.repeat(1023)}\u{1F600}tail`,
+    });
+    expect(result.ok && result.variables[0]?.value).toBe('x'.repeat(1023));
   });
 });

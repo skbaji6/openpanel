@@ -11,7 +11,9 @@ const MAX_DISPLAY_NAME_LENGTH = 200;
 const SMS_SLOT = /^[A-Za-z][A-Za-z0-9_]{0,29}$/;
 const WHATSAPP_SLOT = /^(header|body|button)_[1-9][0-9]?$/;
 const BODY_SLOT = /^body_([1-9][0-9]?)$/;
-const BODY_PLACEHOLDER = /\{\{(\d+)\}\}/g;
+const NUMBERED_PLACEHOLDER = /\{\{(\d+)\}\}/g;
+const CANONICAL_NUMBER = /^[1-9][0-9]?$/;
+const MAX_INT32 = 2_147_483_647;
 const ANY_PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
 const PROFILE_PLACEHOLDER = /^profile\.[A-Za-z0-9_]+$/;
 
@@ -169,9 +171,14 @@ function whatsAppMappingMatches(
   approvedText: string,
   variables: { slot: string }[]
 ): boolean {
-  const placeholders = new Set(
-    [...approvedText.matchAll(BODY_PLACEHOLDER)].map((m) => Number(m[1]))
+  const numbers = [...approvedText.matchAll(NUMBERED_PLACEHOLDER)].map(
+    (m) => m[1] ?? ''
   );
+  // {{01}} looks numbered but is not a placeholder Meta fills, so it is rejected rather than ignored.
+  if (!numbers.every((n) => CANONICAL_NUMBER.test(n))) {
+    return false;
+  }
+  const placeholders = new Set(numbers.map(Number));
   const bodySlots = new Set(
     variables.flatMap((v) => {
       const n = BODY_SLOT.exec(v.slot)?.[1];
@@ -256,7 +263,9 @@ export function createTemplateRegistry(deps: { sql: Sql; now: () => Date }) {
       id: string,
       version: number
     ): Promise<TemplateVersion> {
-      if (!isUuid(id)) {
+      const validVersion =
+        Number.isInteger(version) && version >= 1 && version <= MAX_INT32;
+      if (!(isUuid(id) && validVersion)) {
         throw new HttpError(404, 'not_found');
       }
       const [row] = await sql.$queryRawUnsafe<DbRow[]>(
