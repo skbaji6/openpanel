@@ -3,10 +3,16 @@ import { HttpError } from '../api/http';
 import type { FilterTree, Schema } from '../audience/contract';
 import { createFakeSource, type FakeMember } from '../audience/fake-source';
 import { createAudienceStore } from '../audience/store';
+import {
+  DEFAULT_CHANNEL_SETTINGS,
+  putChannelSettings,
+} from '../channels/settings';
 import type { MarketingConfig } from '../config';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
+import { createTemplateRegistry } from '../templates/registry';
+import { createChannelReady, pinTemplate } from './channel-ready';
 import { createCampaignService, isOneActiveViolation } from './service';
 
 const PROJECT = 'p1';
@@ -42,8 +48,11 @@ const proMembers = (count: number) =>
     values: { plan: 'pro' },
   }));
 
+type ServiceDeps = Parameters<typeof createCampaignService>[0];
+
 function makeDeps(
-  channelReady?: Parameters<typeof createCampaignService>[0]['channelReady']
+  channelReady?: ServiceDeps['channelReady'],
+  pin?: ServiceDeps['pinTemplate']
 ) {
   const fake = createFakeSource({ members, schema: SCHEMA });
   const source = async (projectId: string) =>
@@ -56,8 +65,49 @@ function makeDeps(
     source,
     now: () => now,
     channelReady,
+    pinTemplate: pin,
   });
   return { audiences, campaigns };
+}
+
+const templates = createTemplateRegistry({ sql, now: () => now });
+const SMS_TEMPLATE = {
+  channel: 'sms' as const,
+  displayName: 'Welcome',
+  category: 'service' as const,
+  providerRef: { flowId: 'abc123' },
+  approvedText: 'Hi {#var#}',
+  variables: [{ slot: 'var1', value: '{{profile.firstName}}' }],
+};
+const SMS_RATE = 5;
+
+// A configured sms channel, an enabled template and a previewed sms campaign using it.
+async function previewedSmsDraft() {
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted) VALUES ($1, 'sms', 'x')`,
+    PROJECT
+  );
+  await putChannelSettings(
+    sql,
+    PROJECT,
+    'sms',
+    { ...DEFAULT_CHANNEL_SETTINGS.sms, ratePerSecond: SMS_RATE },
+    0
+  );
+  const template = await templates.create(CTX, SMS_TEMPLATE);
+  const { campaigns, audiences } = makeDeps(
+    createChannelReady({ sql, registry: templates }),
+    pinTemplate
+  );
+  const audience = await dynamicAudience(audiences);
+  const draft = await campaigns.create(CTX, {
+    name: 'Text',
+    channel: 'sms',
+    template: { templateId: template.templateId },
+    audienceId: audience.id,
+  });
+  await campaigns.countPreview(CTX, draft.id);
+  return { campaigns, template, draft };
 }
 
 async function caught(promise: Promise<unknown>): Promise<HttpError> {
@@ -726,5 +776,62 @@ describe('campaign service', () => {
     const error = await (start as Promise<HttpError>);
     expect([error.status, error.code]).toEqual([409, 'count_preview_required']);
     expect((await campaigns.get(CTX, draft.id)).state).toBe('draft');
+  });
+
+  it('start pins template_version to the current version', async () => {
+    const { campaigns, template, draft } = await previewedSmsDraft();
+    expect(draft.templateVersion).toBeNull();
+    await templates.update(CTX, template.templateId, SMS_TEMPLATE, 1);
+    const started = await campaigns.start(CTX, draft.id, {});
+    expect(started).toMatchObject({ state: 'running', templateVersion: 2 });
+  });
+
+  it('a template disabled between the gate and the pin answers its readiness code', async () => {
+    const { draft, template } = await previewedSmsDraft();
+    const racing = makeDeps(async () => null, pinTemplate).campaigns;
+    await templates.setEnabled(CTX, template.templateId, false);
+    expect(await codeOf(racing.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'template_unavailable',
+    ]);
+    const hooked = makeDeps(
+      createChannelReady({ sql, registry: templates }),
+      pinTemplate
+    ).campaigns;
+    expect(await codeOf(hooked.start(CTX, draft.id, {}))).toEqual([
+      409,
+      'template_disabled',
+    ]);
+    expect((await hooked.get(CTX, draft.id)).state).toBe('draft');
+  });
+
+  it('editing the template after start leaves the campaign on its pinned version', async () => {
+    const { campaigns, template, draft } = await previewedSmsDraft();
+    await campaigns.start(CTX, draft.id, {});
+    await templates.update(
+      CTX,
+      template.templateId,
+      { ...SMS_TEMPLATE, approvedText: 'Hello {#var#}' },
+      1
+    );
+    expect((await campaigns.get(CTX, draft.id)).templateVersion).toBe(1);
+  });
+
+  it('disabling the template after start does not stop the campaign', async () => {
+    const { campaigns, template, draft } = await previewedSmsDraft();
+    await campaigns.start(CTX, draft.id, {});
+    await templates.setEnabled(CTX, template.templateId, false);
+    expect(await campaigns.get(CTX, draft.id)).toMatchObject({
+      state: 'running',
+      templateVersion: 1,
+    });
+  });
+
+  it('a queued start leaves template_version for the scheduler to pin', async () => {
+    const first = await previewedDraft('First');
+    await first.campaigns.start(CTX, first.draft.id, {});
+    const { campaigns, draft } = await previewedSmsDraft();
+    const queued = await campaigns.start(CTX, draft.id, {});
+    expect(queued).toMatchObject({ state: 'scheduled', templateVersion: null });
   });
 });

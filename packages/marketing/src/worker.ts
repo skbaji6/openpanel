@@ -126,6 +126,7 @@ export async function startWorker(
     { createLagReporter, LAG_REPORT_INTERVAL_MS },
     { createSourceResolver },
     { runScheduleTick },
+    { pinTemplate },
     { runMaterializeTick },
   ] = await Promise.all([
     import('./db/client'),
@@ -139,6 +140,7 @@ export async function startWorker(
     import('./kafka/lag'),
     import('./audience/resolver'),
     import('./campaign/scheduler'),
+    import('./campaign/channel-ready'),
     import('./campaign/materialize-runner'),
   ]);
   const secrets = secretsOf(cfg);
@@ -209,7 +211,7 @@ export async function startWorker(
     // Not gated on the unsubscribe renderer: neither job sends anything.
     started.push(
       every(cfg.tickMs, 'campaign schedules', secrets, () =>
-        runScheduleTick({ sql, now: () => new Date() })
+        runScheduleTick({ sql, now: () => new Date(), pinTemplate })
       ),
       every(cfg.tickMs, 'campaign materialisation', secrets, (stopping) =>
         runMaterializeTick({

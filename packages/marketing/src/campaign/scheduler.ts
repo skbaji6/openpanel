@@ -1,5 +1,5 @@
-import type { Sql } from '../engine/engine';
-import { isOneActiveViolation } from './service';
+import type { Queryable, Sql } from '../engine/engine';
+import { failCampaignIn, isOneActiveViolation } from './service';
 import { fromStates } from './state';
 
 const DEFAULT_BATCH = 20;
@@ -8,7 +8,7 @@ const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 // Late once a whole minute past the ifLate window, so ifLate 0 still allows a claim within the due minute.
 // That "due minute" assumes send_at is minute-aligned, as send_at_local (no seconds) makes it.
 // A queued start (send_kind 'now') is never late.
-const CLAIM_DUE = `SELECT c.id::text, l.late
+const CLAIM_DUE = `SELECT c.id::text, c.project_id, c.channel, c.template, l.late
   FROM marketing.campaigns c
   CROSS JOIN LATERAL (SELECT c.send_kind = 'scheduled'
     AND c.send_at + make_interval(mins => c.if_late_minutes + 1) <= $1 AS late) l
@@ -21,7 +21,7 @@ const MISS = `UPDATE marketing.campaigns SET state = 'missed', state_reason = 'l
   WHERE id = $1::uuid AND state = ANY($3::text[])`;
 // The audience version is taken now: a queued start's confirmation counts as given when it was queued.
 const START = `UPDATE marketing.campaigns c SET state = 'running', started_at = $2, updated_at = $2,
-    materialize_state = 'not_started',
+    materialize_state = 'not_started', template_version = $4,
     audience_version = (SELECT a.version FROM marketing.audiences a WHERE a.id = c.audience_id)
   WHERE c.id = $1::uuid AND c.state = ANY($3::text[])`;
 const CREATE_COUNTERS =
@@ -30,7 +30,21 @@ const CREATE_COUNTERS =
 interface ScheduleDeps {
   sql: Sql;
   now: () => Date;
+  pinTemplate: (
+    tx: Queryable,
+    projectId: string,
+    channel: string,
+    template: unknown
+  ) => Promise<number | null>;
   batch?: number;
+}
+
+interface DueCampaign {
+  id: string;
+  project_id: string;
+  channel: string;
+  template: unknown;
+  late: boolean;
 }
 
 export async function runScheduleTick(
@@ -38,7 +52,7 @@ export async function runScheduleTick(
 ): Promise<{ started: number; missed: number }> {
   const now = deps.now();
   return await deps.sql.$transaction(async (tx) => {
-    const due = await tx.$queryRawUnsafe<{ id: string; late: boolean }[]>(
+    const due = await tx.$queryRawUnsafe<DueCampaign[]>(
       CLAIM_DUE,
       now,
       deps.batch ?? DEFAULT_BATCH
@@ -58,13 +72,23 @@ export async function runScheduleTick(
       // Another campaign of the project started first (this batch or another replica): stay scheduled.
       await tx.$executeRawUnsafe('SAVEPOINT claim_due');
       try {
+        const pinned = await deps.pinTemplate(
+          tx,
+          campaign.project_id,
+          campaign.channel,
+          campaign.template
+        );
         const updated = await tx.$executeRawUnsafe(
           START,
           campaign.id,
           now,
-          fromStates('claim_due')
+          fromStates('claim_due'),
+          pinned
         );
-        if (updated === 1) {
+        // Fails inside this transaction: it holds the row FOR UPDATE, and only a running campaign can fail.
+        if (updated === 1 && pinned === null) {
+          await failCampaignIn(tx, campaign.id, 'template_unavailable', now);
+        } else if (updated === 1) {
           await tx.$executeRawUnsafe(CREATE_COUNTERS, campaign.id);
           started += 1;
         }

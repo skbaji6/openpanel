@@ -77,6 +77,7 @@ export interface CampaignRow {
   materializeRetryAt: string | null;
   materializeError: string | null;
   materializeAttempts: number;
+  templateVersion: number | null;
   version: number;
   createdBy: string;
   createdAt: string;
@@ -107,6 +108,12 @@ interface CampaignDeps {
     channel: string,
     template: unknown
   ) => Promise<string | null>;
+  pinTemplate?: (
+    tx: Queryable,
+    projectId: string,
+    channel: string,
+    template: unknown
+  ) => Promise<number | null>;
 }
 
 interface LockedAudience {
@@ -122,7 +129,7 @@ const SELECT_ROWS = `SELECT c.id::text, c.project_id, c.name, c.state, c.state_r
   c.send_at_local, c.timezone, c.if_late_minutes, c.quiet_hours_override, c.frequency_cap, c.confirm_threshold,
   c.count_preview, c.materialize_state, c.materialize_phase, c.materialize_cursor,
   c.materialize_lease_token::text, c.materialize_lease_until, c.materialize_retry_at, c.materialize_error,
-  c.materialize_attempts, c.version, c.created_by, c.created_at, c.updated_at, c.started_at, c.finished_at,
+  c.materialize_attempts, c.template_version, c.version, c.created_by, c.created_at, c.updated_at, c.started_at, c.finished_at,
   json_build_object('queued', COALESCE(n.queued, 0), 'sent', COALESCE(n.sent, 0), 'failed', COALESCE(n.failed, 0),
     'skipped', COALESCE(n.skipped, 0), 'uncertain', COALESCE(n.uncertain, 0)) AS counters
   FROM marketing.campaigns c LEFT JOIN marketing.campaign_counters n ON n.campaign_id = c.id
@@ -420,12 +427,43 @@ export function createCampaignService(deps: CampaignDeps) {
     return { campaign, audience };
   }
 
+  async function pinVersion(
+    tx: Queryable,
+    ctx: CampaignContext,
+    campaign: CampaignRow
+  ) {
+    if (!deps.pinTemplate) {
+      return;
+    }
+    const version = await deps.pinTemplate(
+      tx,
+      ctx.projectId,
+      campaign.channel,
+      campaign.template
+    );
+    if (version === null) {
+      // The gate passed, so the template changed since; the hook names how.
+      const code = await channelReady(
+        ctx.projectId,
+        campaign.channel,
+        campaign.template
+      );
+      throw new HttpError(409, code ?? 'template_unavailable');
+    }
+    await tx.$executeRawUnsafe(
+      'UPDATE marketing.campaigns SET template_version = $2 WHERE id = $1::uuid',
+      campaign.id,
+      version
+    );
+  }
+
   async function startNow(
     tx: Queryable,
     ctx: CampaignContext,
-    id: string,
+    campaign: CampaignRow,
     audienceVersion: number
   ) {
+    const { id } = campaign;
     const now = deps.now();
     // The one-active index aborts the statement; the savepoint keeps the transaction usable for the queued path.
     await tx.$executeRawUnsafe('SAVEPOINT campaign_start');
@@ -452,6 +490,7 @@ export function createCampaignService(deps: CampaignDeps) {
       );
       return;
     }
+    await pinVersion(tx, ctx, campaign);
     await tx.$executeRawUnsafe(
       'INSERT INTO marketing.campaign_counters (campaign_id) VALUES ($1::uuid) ON CONFLICT DO NOTHING',
       id
@@ -627,14 +666,14 @@ export function createCampaignService(deps: CampaignDeps) {
       body: { confirm?: Confirmation }
     ): Promise<CampaignRow> {
       return await sql.$transaction(async (tx) => {
-        const { audience } = await passGates(
+        const { campaign, audience } = await passGates(
           tx,
           ctx,
           id,
           'start',
           body.confirm
         );
-        await startNow(tx, ctx, id, audience.version);
+        await startNow(tx, ctx, campaign, audience.version);
         return await fetchRow(tx, ctx, id);
       }, TRANSACTION);
     },

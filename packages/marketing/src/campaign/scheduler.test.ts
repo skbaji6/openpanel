@@ -2,6 +2,8 @@ import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { truncateMarketingTables } from '../db/test-helpers';
+import { createTemplateRegistry } from '../templates/registry';
+import { pinTemplate } from './channel-ready';
 import { runScheduleTick } from './scheduler';
 
 const START = new Date('2026-11-03T10:00:00.000Z');
@@ -10,9 +12,19 @@ const SECOND_MS = 1000;
 const AUDIENCE_VERSION = 7;
 // Two default batches, so overlapping ticks contend for the same rows.
 const PARALLEL_PROJECTS = 40;
+const CTX = { projectId: 'p1', userId: 'u1' };
+const SMS_TEMPLATE = {
+  channel: 'sms' as const,
+  displayName: 'Welcome',
+  category: 'service' as const,
+  providerRef: { flowId: 'abc123' },
+  approvedText: 'Hi {#var#}',
+  variables: [{ slot: 'var1', value: '{{profile.firstName}}' }],
+};
 
 let now = START;
-const tick = () => runScheduleTick({ sql, now: () => now });
+const templates = createTemplateRegistry({ sql, now: () => now });
+const tick = () => runScheduleTick({ sql, now: () => now, pinTemplate });
 const minutesAgo = (minutes: number) =>
   new Date(now.getTime() - minutes * MINUTE_MS);
 
@@ -32,19 +44,23 @@ async function insertCampaign(opts: {
   sendKind?: 'now' | 'scheduled';
   sendAt?: Date;
   ifLate?: number;
+  channel?: string;
+  template?: unknown;
 }): Promise<string> {
   const projectId = opts.projectId ?? 'p1';
   const [row] = await sql.$queryRawUnsafe<{ id: string }[]>(
     `INSERT INTO marketing.campaigns (id, project_id, name, state, channel, template, audience_id, send_kind, send_at,
        if_late_minutes, confirm_threshold, created_by)
-     VALUES (gen_random_uuid(), $1, 'c', $2, 'push', '{}'::jsonb, $3::uuid, $4, $5, $6, 5000, 'u1')
+     VALUES (gen_random_uuid(), $1, 'c', $2, $7, $8::jsonb, $3::uuid, $4, $5, $6, 5000, 'u1')
      RETURNING id::text`,
     projectId,
     opts.state ?? 'scheduled',
     await insertAudience(projectId),
     opts.sendKind ?? 'scheduled',
     opts.sendAt ?? now,
-    opts.ifLate ?? 60
+    opts.ifLate ?? 60,
+    opts.channel ?? 'push',
+    JSON.stringify(opts.template ?? {})
   );
   return row?.id as string;
 }
@@ -57,9 +73,10 @@ async function campaign(id: string) {
       audience_version: number | null;
       started_at: Date | null;
       materialize_state: string;
+      template_version: number | null;
     }[]
   >(
-    `SELECT state, state_reason, audience_version, started_at, materialize_state
+    `SELECT state, state_reason, audience_version, started_at, materialize_state, template_version
      FROM marketing.campaigns WHERE id = $1::uuid`,
     id
   );
@@ -72,7 +89,11 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   now = START;
-  await truncateMarketingTables(['campaigns', 'audiences']);
+  await truncateMarketingTables([
+    'campaigns',
+    'audiences',
+    'message_templates',
+  ]);
 });
 
 describe('runScheduleTick', () => {
@@ -191,9 +212,46 @@ describe('runScheduleTick', () => {
       sendAt: minutesAgo(5),
     });
     const other = await insertCampaign({ projectId: 'free' });
-    const result = await runScheduleTick({ sql, now: () => now, batch: 1 });
+    const result = await runScheduleTick({
+      sql,
+      now: () => now,
+      pinTemplate,
+      batch: 1,
+    });
     expect(result).toEqual({ started: 1, missed: 0 });
     expect((await campaign(waiting))?.state).toBe('scheduled');
     expect((await campaign(other))?.state).toBe('running');
+  });
+
+  it('a due campaign starts pinned to its template version', async () => {
+    const push = await insertCampaign({ projectId: 'p2' });
+    const template = await templates.create(CTX, SMS_TEMPLATE);
+    await templates.update(CTX, template.templateId, SMS_TEMPLATE, 1);
+    const sms = await insertCampaign({
+      channel: 'sms',
+      template: { templateId: template.templateId },
+    });
+    expect(await tick()).toEqual({ started: 2, missed: 0 });
+    expect(await campaign(sms)).toMatchObject({
+      state: 'running',
+      template_version: 2,
+    });
+    expect((await campaign(push))?.template_version).toBe(0);
+  });
+
+  it('a scheduled sms campaign whose template was disabled fails with template_unavailable when due', async () => {
+    const template = await templates.create(CTX, SMS_TEMPLATE);
+    const id = await insertCampaign({
+      channel: 'sms',
+      template: { templateId: template.templateId },
+      sendAt: minutesAgo(1),
+    });
+    await templates.setEnabled(CTX, template.templateId, false);
+    expect(await tick()).toEqual({ started: 0, missed: 0 });
+    expect(await campaign(id)).toMatchObject({
+      state: 'failed',
+      state_reason: 'template_unavailable',
+      template_version: null,
+    });
   });
 });

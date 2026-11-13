@@ -85,7 +85,7 @@ interface Deps {
 }
 
 // Path and query parameters are not the body, so their failures get their own code.
-function validateQuery<T>(schema: z.ZodType<T>, data: unknown): T {
+export function validateQuery<T>(schema: z.ZodType<T>, data: unknown): T {
   try {
     return validate(schema, data);
   } catch (error) {

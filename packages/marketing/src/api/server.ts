@@ -1,10 +1,12 @@
 import type { Redis } from '@openpanel/redis';
 import type { SourceResolver } from '../audience/resolver';
 import { createAudienceStore } from '../audience/store';
+import { createChannelReady, pinTemplate } from '../campaign/channel-ready';
 import { createCampaignService } from '../campaign/service';
 import type { MarketingConfig } from '../config';
 import type { Sql } from '../engine/engine';
 import { redactSecrets } from '../redact';
+import { createTemplateRegistry } from '../templates/registry';
 import type { WorkerContext } from '../worker';
 import {
   authenticateDashboard,
@@ -20,6 +22,7 @@ import { campaignRoutes } from './routes-campaigns';
 import { channelSettingsRoutes } from './routes-channel-settings';
 import { dashboardRoutes } from './routes-dashboard';
 import { syncRoutes } from './routes-sync';
+import { templateRoutes } from './routes-templates';
 import { createUnsubscribeHandlers } from './unsubscribe';
 
 const LOG_PREFIX = 'marketing api:';
@@ -98,6 +101,7 @@ export function createServer(deps: ServerDeps) {
 
   const { sources } = deps;
   const clock = () => new Date((deps.now ?? Date.now)());
+  const templates = createTemplateRegistry({ sql, now: clock });
 
   const routes: Route[] = [
     {
@@ -117,6 +121,7 @@ export function createServer(deps: ServerDeps) {
     ...syncRoutes(sql),
     ...dashboardRoutes({ cfg, sql, onRulesChanged }),
     ...channelSettingsRoutes(sql),
+    ...templateRoutes(templates),
     ...(deps.redis && sources
       ? [
           ...audienceSourceRoutes({
@@ -146,6 +151,8 @@ export function createServer(deps: ServerDeps) {
               }),
               source: (projectId) => sources.forProject(projectId),
               now: clock,
+              channelReady: createChannelReady({ sql, registry: templates }),
+              pinTemplate,
             })
           ),
         ]

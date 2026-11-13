@@ -10,6 +10,7 @@ import { getRedisCache } from '@openpanel/redis';
 import type { FilterTree, Schema } from '../audience/contract';
 import { createFakeSource, type FakeMember } from '../audience/fake-source';
 import type { SourceResolver } from '../audience/resolver';
+import { pinTemplate } from '../campaign/channel-ready';
 import { runMaterializeTick } from '../campaign/materialize-runner';
 import { runScheduleTick } from '../campaign/scheduler';
 import { loadConfig } from '../config';
@@ -154,6 +155,10 @@ beforeEach(async () => {
   now = START;
   await resetMarketingTables();
   await redis.flushdb();
+  // The server's readiness hook starts push campaigns only once the channel has credentials.
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted) VALUES ('proj-a', 'push', 'x')`
+  );
 });
 afterAll(async () => {
   redis.disconnect();
@@ -214,6 +219,7 @@ describe('campaign routes', () => {
     const running = (await started.json()) as Body;
     expect(running.state).toBe('running');
     expect(running.materializeState).toBe('not_started');
+    expect(running.templateVersion).toBe(0);
 
     await runMaterializeTick({
       sql,
@@ -235,6 +241,22 @@ describe('campaign routes', () => {
     });
     expect(after.materializeError).toBeNull();
     expect(after.stateReason).toBeNull();
+  });
+
+  it('an sms campaign without channel credentials does not start', async () => {
+    const draft = await createCampaign({
+      channel: 'sms',
+      template: { templateId: 'otp' },
+    });
+    await preview(draft.id);
+    const started = await call(
+      'POST',
+      `/marketing/campaigns/${draft.id}/start`
+    );
+    expect(started.status).toBe(409);
+    expect(((await started.json()) as { error: string }).error).toBe(
+      'channel_not_configured'
+    );
   });
 
   it('never exposes worker internals', async () => {
@@ -373,7 +395,7 @@ describe('campaign routes', () => {
     );
     expect(scheduled.status).toBe(200);
     now = new Date(START.getTime() + 3 * HOUR_MS);
-    await runScheduleTick({ sql, now: () => now });
+    await runScheduleTick({ sql, now: () => now, pinTemplate });
     const row = (await (
       await call('GET', `/marketing/campaigns/${draft.id}`)
     ).json()) as Body;
