@@ -317,6 +317,30 @@ describe('send ledger', () => {
     expect([completedOld, cancelledOld]).not.toContain(recipients[0]?.id);
   });
 
+  it('purgeSendHistory shares one time budget between the ledger and the recipients', async () => {
+    const oldDay = new Date(Date.now() - 401 * DAY_MS);
+    await recordLedger(sql, [
+      {
+        sourceRef: 'step:a:0',
+        projectId: PROJECT,
+        profileId: 'u1',
+        channel: 'push',
+        sentAt: oldDay,
+      },
+      {
+        sourceRef: 'step:b:0',
+        projectId: PROJECT,
+        profileId: 'u1',
+        channel: 'push',
+        sentAt: oldDay,
+      },
+    ]);
+    await insertCampaign('completed', oldDay);
+    expect(
+      await purgeSendHistory(sql, undefined, { chunkSize: 1, budgetMs: 0 })
+    ).toEqual({ ledger: 1, recipients: 0 });
+  });
+
   it('two concurrent sends to one profile on different channels cannot both pass a cap of 1 with scope all', async () => {
     const start = startingLine(RACERS);
     const admitted = await Promise.all([

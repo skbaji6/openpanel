@@ -27,7 +27,13 @@ import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine, lockProfiles } from './engine';
-import { ledgerRef, lockCap, recordLedger } from './ledger';
+import {
+  countRecentSends,
+  effectiveCap,
+  ledgerRef,
+  lockCap,
+  recordLedger,
+} from './ledger';
 import {
   CLAIM_SQL,
   createTickState,
@@ -755,6 +761,36 @@ describe('runTick', () => {
     ]);
   });
 
+  it('a campaign cap sees a journey send when the project has no caps', async () => {
+    await enrollOne();
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    const cap = effectiveCap({ max: 1, periodSeconds: DAY }, null);
+    if (!cap) {
+      throw new Error('a campaign cap must give an effective cap');
+    }
+    const counts = await countRecentSends(sql, {
+      projectId: PROJECT,
+      profileIds: [PROFILE],
+      channel: cap.scope === 'all' ? null : 'email',
+      since: new Date(NOW.getTime() - cap.periodSeconds * 1000),
+    });
+    expect(counts.get(PROFILE)).toBe(1);
+  });
+
+  it('a sent mark restamps the ledger row with the mark time', async () => {
+    const markedAt = new Date(NOW.getTime() + 5 * MINUTE_MS);
+    respond = async () => {
+      clock = markedAt;
+      return { ok: true };
+    };
+    await enrollOne();
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    const [row] = await sql.$queryRawUnsafe<{ sent_at: Date }[]>(
+      'SELECT sent_at FROM marketing.send_ledger'
+    );
+    expect(row?.sent_at).toEqual(markedAt);
+  });
+
   it('a campaign ledger row counts against a journey cap of 1 per day on push', async () => {
     await setSettings({ max: 1, periodSeconds: DAY }, null);
     await addDevice();
@@ -1185,6 +1221,8 @@ describe('runTick', () => {
     expect(errorLog.mock.calls.flat().join(' ')).toContain(
       'recording the send result failed'
     );
+    // Possibly sent, so it keeps counting against caps until the step is reclaimed.
+    expect(await ledgerRefs()).toEqual([ledgerRef.step(enrollmentId, 0)]);
   });
 
   it('REGRESSION e2: each step is sent once when a second tick overlaps a slow first tick (leaseSeconds 1)', async () => {

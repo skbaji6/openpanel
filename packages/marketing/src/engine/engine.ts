@@ -11,12 +11,16 @@ import {
 const BATCH_TRANSACTION_TIMEOUT_MS = 60_000;
 // The default 2 s wait for a pooled connection is too short while the ticker holds the pool.
 const BATCH_TRANSACTION_MAX_WAIT_MS = 30_000;
-const MS_PER_DAY = 86_400_000;
+export const MS_PER_DAY = 86_400_000;
 // Events can be forged; a far-future time would push inactivity timers out indefinitely.
 export const MAX_FUTURE_SKEW_MS = MS_PER_DAY;
 // The purge works in short chunks so it never holds a long lock or a long transaction, and stops
 // after a time budget so one run cannot occupy the database; the next hourly run continues.
-const PURGE_DEFAULTS = { chunkSize: 10_000, pauseMs: 100, budgetMs: 600_000 };
+export const PURGE_DEFAULTS = {
+  chunkSize: 10_000,
+  pauseMs: 100,
+  budgetMs: 600_000,
+};
 
 export type Sql = typeof marketingSql;
 export type Queryable = Pick<Sql, '$queryRawUnsafe' | '$executeRawUnsafe'>;

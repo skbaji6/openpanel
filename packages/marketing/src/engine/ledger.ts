@@ -1,12 +1,13 @@
 import {
   deleteInChunks,
+  MS_PER_DAY,
+  PURGE_DEFAULTS,
   type PurgeOptions,
   type Queryable,
   type Sql,
 } from './engine';
 
 export const LEDGER_RETENTION_DAYS = 400;
-const MS_PER_DAY = 86_400_000;
 
 export type CapScope = 'channel' | 'all';
 
@@ -54,7 +55,7 @@ const PURGE_LEDGER_CHUNK_SQL = `
   DELETE FROM marketing.send_ledger WHERE ctid IN (
     SELECT ctid FROM marketing.send_ledger WHERE sent_at < $1::timestamptz LIMIT $2::int)`;
 
-// Every state here is final; a completed campaign that was reopened has a fresh finished_at or none.
+// Safe for completed (reopenable) too: a campaign untouched for 400 days has nothing left to send to these recipients.
 const PURGE_RECIPIENTS_CHUNK_SQL = `
   DELETE FROM marketing.campaign_recipients WHERE ctid IN (
     SELECT r.ctid FROM marketing.campaigns c
@@ -176,18 +177,25 @@ export async function purgeSendHistory(
   retentionDays: number = LEDGER_RETENTION_DAYS,
   options: Partial<PurgeOptions> = {}
 ): Promise<{ ledger: number; recipients: number }> {
-  const cutoff = new Date(Date.now() - retentionDays * MS_PER_DAY);
+  const started = Date.now();
+  const cutoff = new Date(started - retentionDays * MS_PER_DAY);
+  const budgetMs = options.budgetMs ?? PURGE_DEFAULTS.budgetMs;
   const ledger = await deleteInChunks(
     sql,
     PURGE_LEDGER_CHUNK_SQL,
     cutoff,
     options
   );
+  // One budget for the whole run; the next hourly run continues where this one stopped.
+  const remainingMs = budgetMs - (Date.now() - started);
+  if (remainingMs <= 0) {
+    return { ledger, recipients: 0 };
+  }
   const recipients = await deleteInChunks(
     sql,
     PURGE_RECIPIENTS_CHUNK_SQL,
     cutoff,
-    options
+    { ...options, budgetMs: remainingMs }
   );
   return { ledger, recipients };
 }
