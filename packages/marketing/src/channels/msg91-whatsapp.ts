@@ -1,13 +1,17 @@
 import { z } from 'zod';
 import { zWhatsAppProviderRef } from '../templates/registry';
-import type { BatchChannelAdapter, BatchItem, DeliveryOutcome } from './batch';
-import { sendMsg91Groups, zMsg91BaseUrl } from './msg91-http';
+import type {
+  BatchChannelAdapter,
+  BatchItem,
+  DeliveryOutcome,
+  ProviderMessage,
+} from './batch';
+import { providerReason, sendMsg91Groups, zMsg91BaseUrl } from './msg91-http';
 
 export const MSG91_WHATSAPP_BASE_URL = 'https://api.msg91.com';
 export const MSG91_WHATSAPP_MAX_RECIPIENTS = 100;
 const BULK_PATH = '/api/v5/whatsapp/whatsapp-outbound-message/bulk/';
 const NO_PHONE_REASON = 'no_phone';
-const PROVIDER_CODE = /^[A-Za-z0-9_]{1,32}$/;
 const URL_BUTTON_SLOT = /^button_/;
 
 export const zMsg91WhatsAppConfig = z.strictObject({
@@ -19,6 +23,9 @@ export type Msg91WhatsAppConfig = z.infer<typeof zMsg91WhatsAppConfig>;
 
 type WhatsAppRef = z.infer<typeof zWhatsAppProviderRef>;
 type Outcome = Omit<DeliveryOutcome, 'profileId'>;
+type Slots = ProviderMessage['variables'];
+
+const digitsOf = (phone: string) => phone.replace(/\D/g, '');
 
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -27,6 +34,7 @@ const record = (value: unknown): Record<string, unknown> =>
 
 function buildBody(
   items: BatchItem[],
+  slotsOf: Map<BatchItem, Slots>,
   ref: WhatsAppRef,
   integratedNumber: string
 ) {
@@ -43,28 +51,17 @@ function buildBody(
         to_and_components: items.map((item) => ({
           to: [item.to.phone],
           components: Object.fromEntries(
-            'kind' in item.message
-              ? item.message.variables.map(({ slot, value }) => [
-                  slot,
-                  URL_BUTTON_SLOT.test(slot)
-                    ? { type: 'text', value, subtype: 'url' }
-                    : { type: 'text', value },
-                ])
-              : []
+            (slotsOf.get(item) ?? []).map(({ slot, value }) => [
+              slot,
+              URL_BUTTON_SLOT.test(slot)
+                ? { type: 'text', value, subtype: 'url' }
+                : { type: 'text', value },
+            ])
           ),
         })),
       },
     },
   };
-}
-
-// An error_code that echoes a phone, the key or the integrated number is not a code.
-function reasonFor(code: unknown, secrets: string[]): string {
-  const usable =
-    typeof code === 'string' &&
-    PROVIDER_CODE.test(code) &&
-    !secrets.some((secret) => code.includes(secret));
-  return `msg91 ${usable ? code : 'failed'}`;
 }
 
 function readResponse(json: unknown, secrets: string[]) {
@@ -77,20 +74,33 @@ function readResponse(json: unknown, secrets: string[]) {
       if (typeof to !== 'string') {
         continue;
       }
-      if (status === 'success') {
-        byPhone.set(to, { outcome: 'sent' });
-      } else if (status === 'failed') {
-        byPhone.set(to, {
-          outcome: 'failed',
-          reason: reasonFor(code, secrets),
-        });
+      const outcome: Outcome | undefined =
+        status === 'success'
+          ? { outcome: 'sent' }
+          : status === 'failed'
+            ? {
+                outcome: 'failed',
+                reason: providerReason(code, secrets, 'failed'),
+              }
+            : undefined;
+      if (!outcome) {
+        continue;
       }
+      const key = digitsOf(to);
+      const earlier = byPhone.get(key);
+      // The provider contradicting itself about one phone settles nothing.
+      byPhone.set(
+        key,
+        earlier && earlier.outcome !== outcome.outcome
+          ? { outcome: 'uncertain', reason: 'msg91 conflicting' }
+          : (earlier ?? outcome)
+      );
     }
     return {
       success: false,
       requestId,
       perItem: (item: BatchItem): Outcome =>
-        byPhone.get(item.to.phone ?? '') ?? {
+        byPhone.get(digitsOf(item.to.phone ?? '')) ?? {
           outcome: 'uncertain',
           reason: 'msg91 unlisted',
         },
@@ -115,10 +125,12 @@ export function createMsg91WhatsAppAdapter(
         { ref: WhatsAppRef; integratedNumber: string; items: BatchItem[] }
       >();
       const results: DeliveryOutcome[] = [];
+      const slotsOf = new Map<BatchItem, Slots>();
       for (const item of items) {
         if (!('kind' in item.message)) {
           throw new Error('the whatsapp adapter only sends provider messages');
         }
+        slotsOf.set(item, item.message.variables);
         const ref = zWhatsAppProviderRef.parse(
           item.message.version.providerRef
         );
@@ -155,7 +167,7 @@ export function createMsg91WhatsAppAdapter(
           [...groups.values()].map((group) => ({
             items: group.items,
             buildBody: (chunk) =>
-              buildBody(chunk, group.ref, group.integratedNumber),
+              buildBody(chunk, slotsOf, group.ref, group.integratedNumber),
           })),
           {
             url: `${config.baseUrl ?? MSG91_WHATSAPP_BASE_URL}${BULK_PATH}`,

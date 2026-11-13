@@ -154,18 +154,25 @@ function requestIdOf(reading: Msg91Reading): { providerRef?: string } {
     : {};
 }
 
-// A code that echoes a phone number or the key is not a code.
+// A code that echoes a phone number, the integrated number or the key is not a code.
+export function providerReason(
+  code: unknown,
+  secrets: string[],
+  fallback: string | number
+): string {
+  const usable =
+    typeof code === 'string' &&
+    PROVIDER_CODE.test(code) &&
+    !secrets.some((secret) => code.includes(secret));
+  return `msg91 ${usable ? code : fallback}`;
+}
+
 function failureReason(
   status: number,
   json: unknown,
   secrets: string[]
 ): string {
-  const code = field(json, 'code');
-  const usable =
-    typeof code === 'string' &&
-    PROVIDER_CODE.test(code) &&
-    !secrets.some((secret) => code.includes(secret));
-  return `msg91 ${usable ? code : status}`;
+  return providerReason(field(json, 'code'), secrets, status);
 }
 
 // What a group has shown so far: a template the provider rejects fails every recipient.
@@ -269,6 +276,8 @@ export async function sendMsg91Groups(
       const { status, json } = posted;
       if (status >= HTTP_OK_MIN && status < HTTP_REDIRECT_MIN) {
         const reading = spec.readSuccess(json);
+        // Any 2xx shows the provider takes the template, so it disarms the breaker.
+        state.succeeded = true;
         if (reading.perItem) {
           const { perItem } = reading;
           const settled = items.map((item) => ({
@@ -276,11 +285,9 @@ export async function sendMsg91Groups(
             ...perItem(item),
             ...requestIdOf(reading),
           }));
-          state.succeeded ||= settled.some((o) => o.outcome === 'sent');
           return settled;
         }
         if (reading.success) {
-          state.succeeded = true;
           return outcomes(items, { outcome: 'sent', ...requestIdOf(reading) });
         }
         return outcomes(items, {

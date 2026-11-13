@@ -1,5 +1,4 @@
 import type { Redis } from '@openpanel/redis';
-import { retryAfterMs } from '../channels/retry-after';
 import type { Queryable } from '../engine/engine';
 import { countChannelSendsSince } from '../engine/ledger';
 import { zonedTimeToUtc } from './schedule-time';
@@ -208,4 +207,4 @@ export function claimSize(ratePerSecond: number | null): number {
   );
 }
 
-export { retryAfterMs };
+export { retryAfterMs } from '../channels/retry-after';

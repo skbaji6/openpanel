@@ -8,6 +8,7 @@ import {
 } from 'bun:test';
 import type { BatchItem, ProviderMessage } from './batch';
 import {
+  extractPhones,
   type FakeMsg91,
   responses,
   startFakeMsg91,
@@ -369,6 +370,106 @@ describe('msg91 whatsapp adapter', () => {
       count(await run(items(3), {}, { signal: controller.signal }), 'retry')
     ).toBe(3);
     expect(fake.requests).toHaveLength(0);
+  });
+
+  it('results echo phones with a plus or spaces and still match; results for unknown phones are ignored', async () => {
+    fake.script(WHATSAPP_PATH, () => ({
+      status: 200,
+      body: {
+        status: 'success',
+        hasError: true,
+        request_id: 'req-0123456789',
+        results: [
+          { to: `+${phoneOf(1)}`, status: 'success' },
+          {
+            to: ` ${phoneOf(2).slice(0, 2)} ${phoneOf(2).slice(2)}`,
+            status: 'failed',
+            error_code: 'blocked',
+          },
+          { to: '919999999999', status: 'failed', error_code: 'other' },
+        ],
+      },
+    }));
+    const results = await run(items(3));
+    const by = Object.fromEntries(results.map((r) => [r.profileId, r]));
+    expect(by.p1?.outcome).toBe('sent');
+    expect(by.p2).toMatchObject({ outcome: 'failed', reason: 'msg91 blocked' });
+    expect(by.p3?.outcome).toBe('uncertain');
+  });
+
+  it('a phone listed twice with conflicting statuses is uncertain; the same status twice stands', async () => {
+    fake.script(WHATSAPP_PATH, () => ({
+      status: 200,
+      body: {
+        status: 'success',
+        hasError: true,
+        request_id: 'req-0123456789',
+        results: [
+          { to: phoneOf(1), status: 'success' },
+          { to: phoneOf(1), status: 'failed', error_code: 'blocked' },
+          { to: phoneOf(2), status: 'success' },
+          { to: phoneOf(2), status: 'success' },
+        ],
+      },
+    }));
+    const by = Object.fromEntries(
+      (await run(items(2))).map((r) => [r.profileId, r])
+    );
+    expect(by.p1?.outcome).toBe('uncertain');
+    expect(by.p2?.outcome).toBe('sent');
+  });
+
+  it('an empty results array is uncertain for everyone', async () => {
+    fake.script(WHATSAPP_PATH, () => ({
+      status: 200,
+      body: {
+        status: 'success',
+        hasError: false,
+        request_id: 'req-0123456789',
+        results: [],
+      },
+    }));
+    expect(count(await run(items(3)), 'uncertain')).toBe(3);
+  });
+
+  describe('breaker probe', () => {
+    const bad = [1, 2, 3].map((n) => phoneOf(n));
+    const hasBad = (body: unknown) =>
+      bad.some((phone) => extractPhones(body).includes(phone));
+
+    it('a probe answered 2xx but listed failed disarms the breaker and the good recipients are sent once', async () => {
+      const partial = responses.partial([phoneOf(5)]);
+      fake.script(WHATSAPP_PATH, (body, index) =>
+        hasBad(body)
+          ? { status: 400, body: { message: 'bad' } }
+          : partial(body, index)
+      );
+      const results = await run(items(20), {}, { concurrency: 1 });
+      expect(
+        results
+          .filter((r) => r.outcome === 'failed')
+          .map((r) => r.profileId)
+          .sort()
+      ).toEqual(['p1', 'p2', 'p3', 'p5']);
+      expect(count(results, 'sent')).toBe(16);
+      expect(fake.delivered.size).toBe(16);
+      expect([...fake.delivered.values()].every((n) => n === 1)).toBe(true);
+    });
+
+    it('a probe answered 5xx is uncertain, the rest are retry breaker and nothing else is sent', async () => {
+      fake.script(WHATSAPP_PATH, (body, index) =>
+        hasBad(body)
+          ? { status: 400, body: { message: 'bad' } }
+          : responses.serverError()(body, index)
+      );
+      const results = await run(items(20), {}, { concurrency: 1 });
+      const retried = results.filter((r) => r.outcome === 'retry');
+      expect(retried.length).toBeGreaterThan(0);
+      expect(retried.every((r) => r.reason === 'breaker')).toBe(true);
+      expect(count(results, 'failed')).toBe(3);
+      expect(count(results, 'uncertain')).toBe(17 - retried.length);
+      expect(fake.delivered.size).toBe(0);
+    });
   });
 
   it('the config requires an integrated number and a valid base url', () => {
