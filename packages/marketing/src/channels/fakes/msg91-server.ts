@@ -19,6 +19,7 @@ const MALFORMED_BODY = '<html>upstream gateway hiccup</html>';
 export interface FakeRequest {
   path: string;
   authkey: string | null;
+  contentType: string | null;
   body: unknown;
 }
 
@@ -31,6 +32,7 @@ export interface ScriptedResponse {
   failedPhones?: string[];
 }
 
+/** `index` is per path and keeps counting across `script()` calls. */
 export type Responder = (
   body: unknown,
   index: number
@@ -41,6 +43,7 @@ export interface FakeMsg91 {
   requests: FakeRequest[];
   connections: () => number;
   script: (path: FakePath, responder: Responder | 'hang' | 'reset') => void;
+  /** Any 2xx counts as delivered: the provider may have accepted it. */
   delivered: Map<string, number>;
   close: () => Promise<void>;
 }
@@ -53,7 +56,7 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-/** Phones from the SMS `recipients[].mobiles` and WhatsApp `to_and_components[].to[]` shapes. */
+/** `mobiles` is one phone per recipient; it is not split on commas. Phones from the SMS `recipients[].mobiles` and WhatsApp `to_and_components[].to[]` shapes. */
 export function extractPhones(body: unknown): string[] {
   if (!isRecord(body)) {
     return [];
@@ -153,27 +156,53 @@ export function startFakeMsg91(
   const sockets = new Set<Socket>();
   let connectionCount = 0;
 
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const delay = () =>
+    new Promise<void>((resolve) => {
+      if (!opts.delayMs) {
+        resolve();
+        return;
+      }
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        resolve();
+      }, opts.delayMs);
+      timers.add(timer);
+    });
+
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(chunk as Buffer);
+    try {
+      for await (const chunk of req) {
+        chunks.push(chunk as Buffer);
+      }
+    } catch {
+      // client aborted mid-body: nothing was received, so nothing is recorded
+      req.socket.destroy();
+      return;
     }
     const path = (req.url ?? '').split('?')[0] ?? '';
     const authkey = req.headers.authkey;
-    const authkeyValue = typeof authkey === 'string' ? authkey : null;
+    const entry = {
+      path,
+      authkey: typeof authkey === 'string' ? authkey : null,
+      contentType: req.headers['content-type'] ?? null,
+    };
 
     let body: unknown = null;
     try {
       body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     } catch {
-      requests.push({ path, authkey: authkeyValue, body: null });
+      requests.push({ ...entry, body: null });
+      await delay();
       res.writeHead(BAD_REQUEST_STATUS, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ type: 'error', message: 'invalid json' }));
       return;
     }
-    requests.push({ path, authkey: authkeyValue, body });
+    requests.push({ ...entry, body });
 
     if (!isFakePath(path) || req.method !== 'POST') {
+      await delay();
       res.writeHead(NOT_FOUND_STATUS);
       res.end();
       return;
@@ -185,13 +214,12 @@ export function startFakeMsg91(
     const answer =
       typeof responder === 'function' ? responder(body, index) : responder;
 
-    if (opts.delayMs) {
-      await new Promise((resolve) => setTimeout(resolve, opts.delayMs));
-    }
+    await delay();
     if (answer === 'hang') {
       return;
     }
     if (answer === 'reset') {
+      // Bun's resetAndDestroy() leaves fetch hanging instead of sending an RST, so destroy() it is
       req.socket.destroy();
       return;
     }
@@ -222,6 +250,9 @@ export function startFakeMsg91(
   const close = () => {
     closing ??= new Promise<void>((resolve) => {
       server.close(() => resolve());
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
       // hanging requests and keep-alive sockets would otherwise hold close() open
       for (const socket of sockets) {
         socket.destroy();

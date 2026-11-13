@@ -134,6 +134,57 @@ describe('fake MSG91 server', () => {
     expect(await hung).toBe('failed');
   });
 
+  it('hang and reset deliver nothing; reset rejects the fetch after the body was received', async () => {
+    const { baseUrl, script, delivered, requests } = await start();
+    script(SMS_PATH, 'reset');
+    await expect(post(baseUrl, SMS_PATH, smsBody(SMS_PHONE))).rejects.toThrow();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).toMatchObject({ template_id: 'flow_1' });
+    script(SMS_PATH, 'hang');
+    post(baseUrl, SMS_PATH, smsBody(SMS_PHONE)).catch(() => undefined);
+    await Bun.sleep(HANG_OBSERVE_MS);
+    expect(delivered.size).toBe(0);
+  });
+
+  it('records the content-type header', async () => {
+    const { baseUrl, requests } = await start();
+    await post(baseUrl, SMS_PATH, smsBody(SMS_PHONE));
+    expect(requests[0]?.contentType).toBe('application/json');
+  });
+
+  it('a WhatsApp entry with two phones counts both', async () => {
+    const { baseUrl, delivered } = await start();
+    const body = whatsappBody('1');
+    body.payload.template.to_and_components[0]!.to = ['1', '2'];
+    await post(baseUrl, WHATSAPP_PATH, body);
+    expect(Object.fromEntries(delivered)).toEqual({ '1': 1, '2': 1 });
+  });
+
+  it('the responder index is per path', async () => {
+    const { baseUrl, script } = await start();
+    const seen: string[] = [];
+    script(SMS_PATH, (_body, index) => {
+      seen.push(`sms${index}`);
+      return { status: 200, body: {} };
+    });
+    script(WHATSAPP_PATH, (_body, index) => {
+      seen.push(`wa${index}`);
+      return { status: 200, body: {} };
+    });
+    await post(baseUrl, SMS_PATH, smsBody('1'));
+    await post(baseUrl, WHATSAPP_PATH, whatsappBody('1'));
+    await post(baseUrl, SMS_PATH, smsBody('1'));
+    expect(seen).toEqual(['sms0', 'wa0', 'sms1']);
+  });
+
+  it('delayMs also delays the invalid-JSON 400', async () => {
+    const delayMs = 120;
+    const { baseUrl } = await start({ delayMs });
+    const startedAt = performance.now();
+    await post(baseUrl, SMS_PATH, '{nope');
+    expect(performance.now() - startedAt).toBeGreaterThanOrEqual(delayMs - 10);
+  });
+
   it('three sequential fetches with keep-alive use one connection', async () => {
     const { baseUrl, connections } = await start();
     for (let i = 0; i < 3; i++) {
