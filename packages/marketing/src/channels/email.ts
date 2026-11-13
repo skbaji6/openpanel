@@ -74,7 +74,12 @@ function failureFor(error: unknown): SendResult {
   };
   // nodemailer sets responseCode on auth failures too; the code is what tells credentials apart.
   if (code === 'EAUTH') {
-    return { ok: false, retryable: false, reason: 'smtp EAUTH' };
+    // A transient 4xx auth reply stays retryable, as it was when the response code decided.
+    const isTransient =
+      typeof responseCode === 'number' &&
+      responseCode >= SMTP_TRANSIENT_FAILURE &&
+      responseCode < SMTP_PERMANENT_FAILURE;
+    return { ok: false, retryable: isTransient, reason: 'smtp EAUTH' };
   }
   if (typeof responseCode === 'number') {
     return {
@@ -126,19 +131,19 @@ function socketOwnedBy(
   };
 }
 
-function invalidRecipientReason(
+function checkRecipient(
   email: string | undefined,
   unsubscribeUrl: string
-): string | undefined {
+): { email: string } | { reason: string } {
   if (!email) {
-    return 'no email';
+    return { reason: 'no email' };
   }
   if (!zEmail.safeParse(email).success) {
-    return 'invalid email';
+    return { reason: 'invalid email' };
   }
   return isSafeUnsubscribeUrl(unsubscribeUrl)
-    ? undefined
-    : 'invalid unsubscribe url';
+    ? { email }
+    : { reason: 'invalid unsubscribe url' };
 }
 
 function buildMail(
@@ -171,15 +176,15 @@ export function createEmailAdapter(
     id: 'email',
     configSchema,
     send(msg, to, config, opts) {
-      const invalid = invalidRecipientReason(to.email, opts.unsubscribeUrl);
-      if (invalid || !to.email) {
+      const checked = checkRecipient(to.email, opts.unsubscribeUrl);
+      if ('reason' in checked) {
         return Promise.resolve({
           ok: false,
           retryable: false,
-          reason: invalid ?? 'no email',
+          reason: checked.reason,
         });
       }
-      const mail = buildMail(msg, to.email, config, opts.unsubscribeUrl);
+      const mail = buildMail(msg, checked.email, config, opts.unsubscribeUrl);
       return withSendTimeout(timeoutMs, async (signal) => {
         const transport = createTransport({
           host: config.host,
@@ -232,6 +237,7 @@ export type PooledEmailAdapter = BatchChannelAdapter<EmailConfig> & {
 };
 
 interface Pool {
+  key: string;
   digest: string;
   transport: PooledTransport;
   // Aborting destroys every socket the pool opened.
@@ -239,6 +245,12 @@ interface Pool {
   // Settle functions of the sends that were handed to the transport and have not settled.
   inflight: Set<() => void>;
   users: number;
+  // Connections the pool has; sends in flight never exceed it, so a handed-over send is never queued.
+  size: number;
+  free: number;
+  waiters: (() => void)[];
+  // Replaced by a pool of another size or config: drains, then closes.
+  retired: boolean;
   idleTimer?: ReturnType<typeof setTimeout>;
   closed: boolean;
 }
@@ -259,6 +271,11 @@ function configDigest(config: EmailConfig): string {
     .digest('hex');
 }
 
+interface Target {
+  item: BatchItem;
+  email: string;
+}
+
 function retryOutcome(profileId: string, reason: string): DeliveryOutcome {
   return { profileId, outcome: 'retry', reason };
 }
@@ -276,15 +293,20 @@ export function createPooledEmailAdapter(
   const idleCloseMs = options.idleCloseMs ?? DEFAULT_IDLE_CLOSE_MS;
   const now = options.now ?? Date.now;
   const pools = new Map<string, Pool>();
+  const allPools = new Set<Pool>();
 
-  const closePool = (key: string, pool: Pool) => {
+  const closePool = (pool: Pool) => {
     if (pool.closed) {
       return;
     }
     pool.closed = true;
     clearTimeout(pool.idleTimer);
-    if (pools.get(key) === pool) {
-      pools.delete(key);
+    if (pools.get(pool.key) === pool) {
+      pools.delete(pool.key);
+    }
+    allPools.delete(pool);
+    for (const wake of pool.waiters.splice(0)) {
+      wake();
     }
     pool.sockets.abort();
     pool.transport.close?.();
@@ -297,11 +319,19 @@ export function createPooledEmailAdapter(
   ): Pool => {
     const digest = configDigest(config);
     const existing = pools.get(projectId);
-    if (existing && existing.digest === digest) {
+    if (
+      existing &&
+      existing.digest === digest &&
+      existing.size === concurrency
+    ) {
       return existing;
     }
     if (existing) {
-      closePool(projectId, existing);
+      pools.delete(projectId);
+      existing.retired = true;
+      if (existing.users === 0) {
+        closePool(existing);
+      }
     }
     const sockets = new AbortController();
     const transport = createTransport({
@@ -323,20 +353,26 @@ export function createPooledEmailAdapter(
       disableUrlAccess: true,
     });
     const pool: Pool = {
+      key: projectId,
       digest,
       transport,
       sockets,
       inflight: new Set(),
       users: 0,
+      size: concurrency,
+      free: concurrency,
+      waiters: [],
+      retired: false,
       closed: false,
     };
     pools.set(projectId, pool);
+    allPools.add(pool);
     return pool;
   };
 
   const sendGroup = async (
     projectId: string,
-    items: BatchItem[],
+    items: Target[],
     config: EmailConfig,
     opts: { concurrency: number; signal?: AbortSignal; deadlineAt?: number }
   ): Promise<DeliveryOutcome[]> => {
@@ -344,7 +380,7 @@ export function createPooledEmailAdapter(
     try {
       pool = acquire(projectId, config, opts.concurrency);
     } catch {
-      return items.map((item) =>
+      return items.map(({ item }) =>
         retryOutcome(item.profileId, POOL_CLOSED_REASON)
       );
     }
@@ -354,7 +390,23 @@ export function createPooledEmailAdapter(
       opts.signal?.aborted === true ||
       (opts.deadlineAt !== undefined && now() >= opts.deadlineAt);
 
-    const sendOne = (item: BatchItem, email: string) =>
+    const takeSlot = (): Promise<void> => {
+      if (pool.free > 0) {
+        pool.free -= 1;
+        return Promise.resolve();
+      }
+      return new Promise((wake) => pool.waiters.push(wake));
+    };
+    const releaseSlot = () => {
+      const wake = pool.waiters.shift();
+      if (wake) {
+        wake();
+      } else {
+        pool.free += 1;
+      }
+    };
+
+    const sendOne = ({ item, email }: Target) =>
       new Promise<DeliveryOutcome>((resolve) => {
         const { profileId } = item;
         let settled = false;
@@ -375,7 +427,7 @@ export function createPooledEmailAdapter(
           for (const settleInflight of [...pool.inflight]) {
             settleInflight();
           }
-          closePool(projectId, pool);
+          closePool(pool);
         }, timeoutMs);
         pool.inflight.add(expire);
         // From this call on the message may reach the server.
@@ -399,17 +451,21 @@ export function createPooledEmailAdapter(
     let next = 0;
     const worker = async () => {
       while (next < items.length) {
-        const item = items[next++];
-        if (!item) {
+        const entry = items[next++];
+        if (!entry) {
           continue;
         }
+        const { profileId } = entry.item;
+        // Waiting for a slot is not being handed over: the send has not started.
+        await takeSlot();
         if (pool.closed) {
-          outcomes.push(retryOutcome(item.profileId, POOL_CLOSED_REASON));
+          outcomes.push(retryOutcome(profileId, POOL_CLOSED_REASON));
         } else if (mustStop()) {
-          outcomes.push(retryOutcome(item.profileId, DEADLINE_REASON));
+          outcomes.push(retryOutcome(profileId, DEADLINE_REASON));
         } else {
-          outcomes.push(await sendOne(item, item.to.email as string));
+          outcomes.push(await sendOne(entry));
         }
+        releaseSlot();
       }
     };
     try {
@@ -421,11 +477,10 @@ export function createPooledEmailAdapter(
       );
     } finally {
       pool.users -= 1;
-      if (pool.users === 0 && !pool.closed) {
-        pool.idleTimer = setTimeout(
-          () => closePool(projectId, pool),
-          idleCloseMs
-        );
+      if (pool.users === 0 && pool.retired) {
+        closePool(pool);
+      } else if (pool.users === 0 && !pool.closed) {
+        pool.idleTimer = setTimeout(() => closePool(pool), idleCloseMs);
         pool.idleTimer.unref();
       }
     }
@@ -443,22 +498,22 @@ export function createPooledEmailAdapter(
         );
       }
       const outcomes: DeliveryOutcome[] = [];
-      const groups = new Map<string, BatchItem[]>();
+      const groups = new Map<string, Target[]>();
       for (const item of items) {
-        const reason = invalidRecipientReason(
-          item.to.email,
-          item.unsubscribeUrl
-        );
-        if (reason) {
+        const checked = checkRecipient(item.to.email, item.unsubscribeUrl);
+        if ('reason' in checked) {
           outcomes.push({
             profileId: item.profileId,
             outcome: 'failed',
-            reason,
+            reason: checked.reason,
           });
           continue;
         }
         const { projectId } = (item.message as RenderedMessage).meta;
-        groups.set(projectId, [...(groups.get(projectId) ?? []), item]);
+        groups.set(projectId, [
+          ...(groups.get(projectId) ?? []),
+          { item, email: checked.email },
+        ]);
       }
       for (const [projectId, group] of groups) {
         outcomes.push(...(await sendGroup(projectId, group, config, opts)));
@@ -466,8 +521,8 @@ export function createPooledEmailAdapter(
       return outcomes;
     },
     close() {
-      for (const [key, pool] of pools) {
-        closePool(key, pool);
+      for (const pool of [...allPools]) {
+        closePool(pool);
       }
     },
   };

@@ -292,6 +292,27 @@ describe('email adapter', () => {
     }
   });
 
+  it('EAUTH is not retryable, except for a transient 4xx auth reply', async () => {
+    for (const [responseCode, retryable] of [
+      [535, false],
+      [454, true],
+      [undefined, false],
+    ] as const) {
+      const adapter = createEmailAdapter({
+        createTransport: fakeTransport(() =>
+          Promise.reject(
+            Object.assign(new Error('auth'), { code: 'EAUTH', responseCode })
+          )
+        ),
+      });
+      expect(await adapter.send(message, recipient, realConfig, opts)).toEqual({
+        ok: false,
+        retryable,
+        reason: 'smtp EAUTH',
+      });
+    }
+  });
+
   it('config schema bounds the port and requires a sender', () => {
     const parse = (config: unknown) =>
       createEmailAdapter().configSchema.safeParse(config).success;

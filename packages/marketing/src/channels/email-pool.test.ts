@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import nodemailer from 'nodemailer';
+import type SMTPPool from 'nodemailer/lib/smtp-pool';
 import type { BatchItem, DeliveryOutcome } from './batch';
 import {
   createPooledEmailAdapter,
   type EmailConfig,
   type PooledEmailAdapter,
+  type PooledTransport,
 } from './email';
 import { type FakeSmtp, startFakeSmtp } from './fakes/smtp-server';
 import type { RenderedMessage } from './types';
@@ -52,6 +55,28 @@ const pooled = (options: Parameters<typeof createPooledEmailAdapter>[0]) => {
 const byProfile = (outcomes: DeliveryOutcome[]) =>
   Object.fromEntries(outcomes.map((o) => [o.profileId, o]));
 
+// Wraps the real pooled transport to count how many sendMail calls are in flight at once.
+function countingTransport() {
+  const stats = { inFlight: 0, peak: 0, sizes: [] as number[] };
+  const createTransport = (options: SMTPPool.Options): PooledTransport => {
+    stats.sizes.push(options.maxConnections ?? 0);
+    const real = nodemailer.createTransport(options);
+    return {
+      sendMail: async (mail) => {
+        stats.inFlight += 1;
+        stats.peak = Math.max(stats.peak, stats.inFlight);
+        try {
+          return await real.sendMail(mail);
+        } finally {
+          stats.inFlight -= 1;
+        }
+      },
+      close: () => real.close(),
+    };
+  };
+  return { stats, createTransport };
+}
+
 async function until(condition: () => boolean): Promise<boolean> {
   for (let i = 0; i < POLL_LIMIT && !condition(); i++) {
     await Bun.sleep(POLL_MS);
@@ -73,13 +98,49 @@ describe('pooled email adapter', () => {
 
   it('200 messages with concurrency 3 use at most 3 connections', async () => {
     const items = Array.from({ length: 200 }, (_, n) => item(n));
-    const outcomes = await pooled({}).sendBatch(items, config(), {
-      concurrency: 3,
-    });
+    const counting = countingTransport();
+    const outcomes = await pooled({
+      createTransport: counting.createTransport,
+    }).sendBatch(items, config(), { concurrency: 3 });
+    expect(counting.stats.peak).toBeLessThanOrEqual(3);
     expect(outcomes).toHaveLength(200);
     expect(outcomes.every((o) => o.outcome === 'sent')).toBe(true);
     expect(smtp.messages).toHaveLength(200);
     expect(smtp.connections()).toBeLessThanOrEqual(3);
+  });
+
+  it('two concurrent batches on one project never exceed the pool size and lose nothing', async () => {
+    smtp.delayMs = 15;
+    const counting = countingTransport();
+    const adapter = pooled({ createTransport: counting.createTransport });
+    const batch = (offset: number) =>
+      adapter.sendBatch(
+        Array.from({ length: 20 }, (_, n) => item(offset + n)),
+        config(),
+        { concurrency: 3 }
+      );
+    const outcomes = (await Promise.all([batch(0), batch(100)])).flat();
+    expect(outcomes).toHaveLength(40);
+    expect(outcomes.every((o) => o.outcome === 'sent')).toBe(true);
+    expect(counting.stats.peak).toBeLessThanOrEqual(3);
+    expect(counting.stats.sizes).toEqual([3]);
+  });
+
+  it('a batch with higher concurrency than the existing pool gets a pool of the new size', async () => {
+    const counting = countingTransport();
+    const adapter = pooled({ createTransport: counting.createTransport });
+    const run = (concurrency: number) =>
+      adapter.sendBatch(
+        Array.from({ length: 10 }, (_, n) => item(n)),
+        config(),
+        { concurrency }
+      );
+    await run(2);
+    expect(counting.stats.peak).toBeLessThanOrEqual(2);
+    const outcomes = await run(5);
+    expect(outcomes.every((o) => o.outcome === 'sent')).toBe(true);
+    expect(counting.stats.sizes).toEqual([2, 5]);
+    expect(counting.stats.peak).toBeLessThanOrEqual(5);
   });
 
   it('List-Unsubscribe is present on every message', async () => {
