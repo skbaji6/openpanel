@@ -11,7 +11,6 @@ import type {
 const PER_RECIPIENT_MAX_BATCH = 500;
 const EXCEPTION_REASON = 'exception';
 const DEADLINE_REASON = 'deadline';
-const UNSUPPORTED_REASON = 'unsupported message';
 
 export interface ProviderMessage {
   kind: 'provider';
@@ -74,7 +73,11 @@ const CHANNEL_ERROR_REASONS = new Set([
   'http 403',
 ]);
 // Nothing was sent. The webhook's 'network error' is left out: it also covers resets after the request was written.
-const RETRY_REASONS = new Set(['smtp ECONNREFUSED', 'smtp EDNS']);
+const RETRY_REASONS = new Set([
+  'smtp ECONNREFUSED',
+  'smtp ENOTFOUND',
+  'smtp EAI_AGAIN',
+]);
 
 export function classifySendResult(
   result: SendResult
@@ -113,27 +116,39 @@ export function perRecipientBatch<C>(
     configSchema: adapter.configSchema,
     maxBatch: PER_RECIPIENT_MAX_BATCH,
     async sendBatch(items, config, opts) {
+      if (items.some((item) => isProviderMessage(item.message))) {
+        throw new Error(
+          'provider messages cannot go through a per-recipient adapter'
+        );
+      }
       const outcomes: DeliveryOutcome[] = [];
       let next = 0;
       const mustStop = () =>
         opts.signal?.aborted === true ||
         (opts.deadlineAt !== undefined && now() >= opts.deadlineAt);
+      const notStarted = (profileId: string): DeliveryOutcome => ({
+        profileId,
+        outcome: 'retry',
+        reason: DEADLINE_REASON,
+      });
 
       const sendOne = async (item: BatchItem): Promise<DeliveryOutcome> => {
         const { profileId } = item;
-        if (mustStop()) {
-          return { profileId, outcome: 'retry', reason: DEADLINE_REASON };
-        }
-        if (isProviderMessage(item.message)) {
-          return { profileId, outcome: 'failed', reason: UNSUPPORTED_REASON };
-        }
+        let started = false;
         try {
+          if (mustStop() || isProviderMessage(item.message)) {
+            return notStarted(profileId);
+          }
+          started = true;
           const result = await adapter.send(item.message, item.to, config, {
             idempotencyKey: item.idempotencyKey,
             unsubscribeUrl: item.unsubscribeUrl,
           });
           return { profileId, ...classifySendResult(result) };
         } catch {
+          if (!started) {
+            return notStarted(profileId);
+          }
           return { profileId, outcome: 'uncertain', reason: EXCEPTION_REASON };
         }
       };
@@ -146,7 +161,10 @@ export function perRecipientBatch<C>(
           }
         }
       };
-      const workers = Math.max(1, Math.min(opts.concurrency, items.length));
+      const workers = Math.max(
+        1,
+        Math.min(Math.trunc(opts.concurrency) || 1, items.length)
+      );
       await Promise.all(Array.from({ length: workers }, worker));
       return outcomes;
     },

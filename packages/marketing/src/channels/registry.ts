@@ -41,6 +41,10 @@ export function registerBatchAdapter<C>(adapter: BatchChannelAdapter<C>): void {
   );
 }
 
+export function unregisterBatchAdapter(channel: CampaignChannel): void {
+  batchAdapters.delete(channel);
+}
+
 // push, email and webhook default to their per-recipient adapter; other channels must register one.
 export function getBatchAdapter(
   channel: CampaignChannel

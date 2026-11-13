@@ -6,6 +6,7 @@ import {
   getBatchAdapter,
   registerBatchAdapter,
   registerDefaultAdapters,
+  unregisterBatchAdapter,
 } from './registry';
 
 describe('registerDefaultAdapters', () => {
@@ -39,6 +40,7 @@ describe('registerDefaultAdapters', () => {
       sendBatch: () => Promise.resolve([]),
     });
     expect(getBatchAdapter('sms').id).toBe('sms');
+    unregisterBatchAdapter('sms');
   });
 
   it("configSchemaFor('push') is the push config schema", () => {

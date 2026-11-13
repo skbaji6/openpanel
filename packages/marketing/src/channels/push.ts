@@ -21,6 +21,15 @@ const TRANSIENT_CODES = new Set([
   'app/app-deleted',
 ]);
 
+// Codes where the message certainly reached nobody and the account, not the token, is the problem.
+const RATE_OR_CREDENTIAL_CODES = new Set([
+  'messaging/quota-exceeded',
+  'messaging/message-rate-exceeded',
+  'app/invalid-credential',
+]);
+const RANK_POSSIBLY_DELIVERED = 2;
+const RANK_ACCOUNT_LEVEL = 1;
+
 const zServiceAccount = z.object({
   project_id: z.string().min(1),
   client_email: z.string().min(1),
@@ -175,8 +184,26 @@ class MulticastProgress {
     return { ok: false, ...failure, ...invalid };
   }
 
+  // The reason names the most ambiguous failure: a token that may have been delivered must not be hidden
+  // behind a rate-limit code from another token, or the whole send is re-queued and that token is pushed twice.
+  private reportedCode(): string {
+    const rank = (code: string) => {
+      if (RATE_OR_CREDENTIAL_CODES.has(code)) {
+        return RANK_ACCOUNT_LEVEL;
+      }
+      return isTransient(code) ? RANK_POSSIBLY_DELIVERED : 0;
+    };
+    let [reported = UNKNOWN_CODE] = this.failureCodes;
+    for (const code of this.failureCodes) {
+      if (rank(code) > rank(reported)) {
+        reported = code;
+      }
+    }
+    return reported;
+  }
+
   final(): SendResult {
-    const [firstCode = UNKNOWN_CODE] = this.failureCodes;
+    const firstCode = this.reportedCode();
     return this.result({
       retryable: this.failureCodes.every(isTransient),
       reason: `fcm ${firstCode}`,

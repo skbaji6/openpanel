@@ -7,7 +7,7 @@ interface FakeFcmOptions {
   latencyMs?: number;
   tokensPerSecond?: number;
   invalidTokens?: Set<string>;
-  failCode?: () => string | null;
+  failCode?: (token: string) => string | null;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -31,9 +31,9 @@ export function createFakeFcm(options: FakeFcmOptions = {}): FakeFcm {
     if (delayMs > 0) {
       await sleep(delayMs);
     }
-    const failCode = options.failCode?.() ?? null;
     return {
       responses: multicast.tokens.map((token) => {
+        const failCode = options.failCode?.(token) ?? null;
         if (failCode) {
           return { success: false, error: { code: failCode } };
         }
