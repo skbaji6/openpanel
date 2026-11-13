@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { retryAfterMs } from '../campaign/pacing';
 import type { BatchItem, DeliveryOutcome } from './batch';
+import { retryAfterMs } from './retry-after';
 import { SEND_TIMEOUT_MS } from './timeouts';
 
 export const MSG91_SMS_BASE_URL = 'https://control.msg91.com';

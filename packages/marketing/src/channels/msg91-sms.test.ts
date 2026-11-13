@@ -14,6 +14,7 @@ import {
   SMS_PATH,
   startFakeMsg91,
 } from './fakes/msg91-server';
+import { sendMsg91Groups } from './msg91-http';
 import { createMsg91SmsAdapter, zMsg91SmsConfig } from './msg91-sms';
 
 const AUTH_KEY = 'msg91-auth-key-0123456789';
@@ -428,8 +429,6 @@ describe('msg91 sms adapter', () => {
   });
 
   it('a throw after the request was issued is uncertain exception', async () => {
-    // Loaded after msg91-sms: msg91-http entered first closes an import cycle through the engine.
-    const { sendMsg91Groups } = await import('./msg91-http');
     const results = await sendMsg91Groups(
       [{ items: items(2), buildBody: () => ({}) }],
       {

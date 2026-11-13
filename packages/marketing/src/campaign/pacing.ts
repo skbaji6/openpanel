@@ -1,4 +1,5 @@
 import type { Redis } from '@openpanel/redis';
+import { retryAfterMs } from '../channels/retry-after';
 import type { Queryable } from '../engine/engine';
 import { countChannelSendsSince } from '../engine/ledger';
 import { zonedTimeToUtc } from './schedule-time';
@@ -6,9 +7,6 @@ import { zonedTimeToUtc } from './schedule-time';
 const MS_PER_SECOND = 1000;
 const MS_PER_DAY = 86_400_000;
 const BUCKET_MIN_TTL_MS = 60_000;
-const RETRY_AFTER_MIN_MS = 1000;
-const RETRY_AFTER_MAX_MS = 60_000;
-const RETRY_AFTER_DEFAULT_MS = 5000;
 const MAX_CLAIM = 500;
 const CLAIM_SECONDS_OF_TOKENS = 10;
 const MAX_MIDNIGHT_SEARCH_HOURS = 3;
@@ -148,23 +146,6 @@ export function createChannelBackoff(redis: Redis) {
   };
 }
 
-export function retryAfterMs(
-  header: string | null,
-  fallbackMs = RETRY_AFTER_DEFAULT_MS
-): number {
-  const clamp = (ms: number) =>
-    Math.min(RETRY_AFTER_MAX_MS, Math.max(RETRY_AFTER_MIN_MS, ms));
-  const trimmed = header?.trim();
-  if (!trimmed) {
-    return clamp(fallbackMs);
-  }
-  if (/^\d+$/.test(trimmed)) {
-    return clamp(Number(trimmed) * MS_PER_SECOND);
-  }
-  const date = Date.parse(trimmed);
-  return clamp(Number.isNaN(date) ? fallbackMs : date - Date.now());
-}
-
 function localDate(instant: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -226,3 +207,5 @@ export function claimSize(ratePerSecond: number | null): number {
     Math.max(1, Math.ceil(ratePerSecond * CLAIM_SECONDS_OF_TOKENS))
   );
 }
+
+export { retryAfterMs };
