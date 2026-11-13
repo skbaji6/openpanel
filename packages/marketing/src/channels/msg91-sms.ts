@@ -73,9 +73,13 @@ export function createMsg91SmsAdapter(
         groups.set(key, group);
       }
       const url = `${config.baseUrl ?? MSG91_SMS_BASE_URL}${FLOW_PATH}`;
-      for (const { ref, items: groupItems } of groups.values()) {
-        results.push(
-          ...(await sendMsg91Groups([groupItems], {
+      results.push(
+        ...(await sendMsg91Groups(
+          [...groups.values()].map(({ ref, items: groupItems }) => ({
+            items: groupItems,
+            buildBody: (chunk) => buildBody(chunk, ref),
+          })),
+          {
             url,
             authKey: config.authKey,
             maxBatch: MSG91_SMS_MAX_RECIPIENTS,
@@ -84,11 +88,10 @@ export function createMsg91SmsAdapter(
             signal: sendOpts.signal,
             deadlineAt: sendOpts.deadlineAt,
             now: opts.now,
-            buildBody: (chunk) => buildBody(chunk, ref),
             readSuccess,
-          }))
-        );
-      }
+          }
+        ))
+      );
       return results;
     },
   };

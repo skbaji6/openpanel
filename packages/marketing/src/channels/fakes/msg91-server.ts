@@ -42,6 +42,10 @@ export interface FakeMsg91 {
   baseUrl: string;
   requests: FakeRequest[];
   connections: () => number;
+  /** Most requests that were being handled at the same moment. */
+  peakInFlight: () => number;
+  /** Destroys every open socket, as a server closing its idle keep-alive connections. */
+  dropSockets: () => void;
   script: (path: FakePath, responder: Responder | 'hang' | 'reset') => void;
   /** Any 2xx counts as delivered: the provider may have accepted it. */
   delivered: Map<string, number>;
@@ -155,6 +159,8 @@ export function startFakeMsg91(
   const counts = new Map<FakePath, number>();
   const sockets = new Set<Socket>();
   let connectionCount = 0;
+  let inFlight = 0;
+  let peakInFlight = 0;
 
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const delay = () =>
@@ -171,6 +177,11 @@ export function startFakeMsg91(
     });
 
   const server = createServer(async (req, res) => {
+    inFlight++;
+    peakInFlight = Math.max(peakInFlight, inFlight);
+    res.on('close', () => {
+      inFlight--;
+    });
     const chunks: Buffer[] = [];
     try {
       for await (const chunk of req) {
@@ -269,6 +280,12 @@ export function startFakeMsg91(
         baseUrl: `http://${LOOPBACK}:${port}`,
         requests,
         connections: () => connectionCount,
+        peakInFlight: () => peakInFlight,
+        dropSockets: () => {
+          for (const socket of sockets) {
+            socket.destroy();
+          }
+        },
         script: (path, responder) => {
           responders.set(path, responder);
         },

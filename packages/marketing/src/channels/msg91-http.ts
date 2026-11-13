@@ -15,6 +15,10 @@ const HTTP_UNPROCESSABLE = 422;
 const HTTP_RATE_LIMITED = 429;
 const HTTP_SERVER_ERROR_MIN = 500;
 const HTTP_SERVER_ERROR_MAX = 599;
+// Single recipients rejected before a group (one template) that never succeeded is written off.
+const BREAKER_SINGLE_REJECTIONS = 3;
+// Bisection requests share one budget of this many request timeouts per chunk.
+const CHUNK_BUDGET_FACTOR = 3;
 const PROVIDER_CODE = /^[A-Za-z0-9_]{1,32}$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 // Errors Bun's fetch raises before a single byte of the request could have left; anything else may have been delivered.
@@ -24,31 +28,37 @@ const NOT_SENT_ERROR_CODES = new Set([
   'ENOTFOUND',
   'EAI_AGAIN',
 ]);
+const BASE_URL_MESSAGE = 'must be an https origin (http only for localhost)';
 
+function toOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const secure =
+      url.protocol === 'https:' ||
+      (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
+    const bare =
+      !(url.username || url.password || url.search || url.hash) &&
+      url.pathname === '/' &&
+      !value.includes('?') &&
+      !value.includes('#');
+    return secure && bare ? url.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+// Stored as an origin, so appending a path can never produce a double slash.
 export const zMsg91BaseUrl = z
   .string()
   .max(200)
-  .refine(
-    (value) => {
-      try {
-        const url = new URL(value);
-        const secure =
-          url.protocol === 'https:' ||
-          (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
-        return (
-          secure &&
-          !url.username &&
-          !url.password &&
-          url.pathname === '/' &&
-          !url.search &&
-          !url.hash
-        );
-      } catch {
-        return false;
-      }
-    },
-    { message: 'must be an https origin (http only for localhost)' }
-  );
+  .transform((value, ctx) => {
+    const origin = toOrigin(value);
+    if (origin === null) {
+      ctx.addIssue({ code: 'custom', message: BASE_URL_MESSAGE });
+      return z.NEVER;
+    }
+    return origin;
+  });
 
 export type Msg91Post =
   | {
@@ -111,6 +121,11 @@ export interface Msg91Reading {
   requestId?: unknown;
 }
 
+export interface Msg91Group {
+  items: BatchItem[];
+  buildBody: (items: BatchItem[]) => unknown;
+}
+
 export interface Msg91BatchSpec {
   url: string;
   authKey: string;
@@ -120,7 +135,6 @@ export interface Msg91BatchSpec {
   signal?: AbortSignal;
   deadlineAt?: number;
   now?: () => number;
-  buildBody: (items: BatchItem[]) => unknown;
   readSuccess: (json: unknown) => Msg91Reading;
 }
 
@@ -152,90 +166,152 @@ function failureReason(
   return `msg91 ${usable ? code : status}`;
 }
 
+// What a group has shown so far: a template the provider rejects fails every recipient.
+interface GroupState {
+  singleRejections: number;
+  succeeded: boolean;
+  lastRejection: string;
+}
+
+const isStoppingOutcome = (outcome: DeliveryOutcome) =>
+  outcome.outcome === 'rate_limited' || outcome.outcome === 'channel_error';
+
 /**
  * Sends each group in chunks of `maxBatch` with at most `concurrency` requests in flight.
- * A whole-request 400/422 is bisected so only the recipients the provider rejects end failed.
+ * A whole-request 400/422 is bisected so only the recipients the provider rejects end failed,
+ * until several single recipients were rejected and nothing in the group ever succeeded.
  * A recipient is `retry` only when the provider certainly did not accept it.
  */
 export async function sendMsg91Groups(
-  groups: BatchItem[][],
+  groups: Msg91Group[],
   spec: Msg91BatchSpec
 ): Promise<DeliveryOutcome[]> {
   const now = spec.now ?? Date.now;
   const timeoutMs = spec.timeoutMs ?? SEND_TIMEOUT_MS;
-  const mustStop = () =>
-    spec.signal?.aborted === true ||
-    (spec.deadlineAt !== undefined && now() >= spec.deadlineAt);
 
-  async function sendChunk(items: BatchItem[]): Promise<DeliveryOutcome[]> {
-    if (mustStop()) {
+  async function sendChunk(
+    items: BatchItem[],
+    group: Msg91Group,
+    state: GroupState,
+    chunkEnd: number,
+    isHalf: boolean
+  ): Promise<DeliveryOutcome[]> {
+    const breakerTripped =
+      state.singleRejections >= BREAKER_SINGLE_REJECTIONS && !state.succeeded;
+    if (breakerTripped && isHalf) {
+      return outcomes(items, {
+        outcome: 'failed',
+        reason: state.lastRejection,
+      });
+    }
+    if (spec.signal?.aborted === true || now() >= chunkEnd) {
       return outcomes(items, { outcome: 'retry', reason: 'deadline' });
     }
-    const posted = await postMsg91(
-      spec.url,
-      spec.authKey,
-      spec.buildBody(items),
-      AbortSignal.timeout(timeoutMs)
-    );
-    if (posted.kind === 'not_sent') {
-      return outcomes(items, { outcome: 'retry', reason: 'not_sent' });
-    }
-    if (posted.kind === 'unknown') {
-      return outcomes(items, { outcome: 'uncertain', reason: posted.reason });
-    }
-    const { status, json } = posted;
-    if (status >= HTTP_OK_MIN && status < HTTP_REDIRECT_MIN) {
-      const reading = spec.readSuccess(json);
-      if (reading.success) {
-        return outcomes(items, { outcome: 'sent', ...requestIdOf(reading) });
+    let issued = false;
+    try {
+      const body = group.buildBody(items);
+      issued = true;
+      const posted = await postMsg91(
+        spec.url,
+        spec.authKey,
+        body,
+        AbortSignal.timeout(timeoutMs)
+      );
+      if (posted.kind === 'not_sent') {
+        return outcomes(items, { outcome: 'retry', reason: 'not_sent' });
       }
+      if (posted.kind === 'unknown') {
+        return outcomes(items, { outcome: 'uncertain', reason: posted.reason });
+      }
+      const { status, json } = posted;
+      if (status >= HTTP_OK_MIN && status < HTTP_REDIRECT_MIN) {
+        const reading = spec.readSuccess(json);
+        if (reading.success) {
+          state.succeeded = true;
+          return outcomes(items, { outcome: 'sent', ...requestIdOf(reading) });
+        }
+        return outcomes(items, {
+          outcome: 'uncertain',
+          reason: `msg91 ${status}`,
+          ...requestIdOf(reading),
+        });
+      }
+      if (status === HTTP_RATE_LIMITED) {
+        return outcomes(items, {
+          outcome: 'rate_limited',
+          reason: 'msg91 429',
+          retryAfterMs: retryAfterMs(posted.retryAfter),
+        });
+      }
+      if (status === HTTP_UNAUTHORIZED || status === HTTP_FORBIDDEN) {
+        return outcomes(items, {
+          outcome: 'channel_error',
+          reason: 'msg91 auth',
+        });
+      }
+      const rejected =
+        status === HTTP_BAD_REQUEST || status === HTTP_UNPROCESSABLE;
+      if (rejected && items.length > 1 && !breakerTripped) {
+        const middle = Math.ceil(items.length / 2);
+        const first = await sendChunk(
+          items.slice(0, middle),
+          group,
+          state,
+          chunkEnd,
+          true
+        );
+        const second = items.slice(middle);
+        const stop = first.find(isStoppingOutcome);
+        if (stop) {
+          // Never sent, so the same outcome is safe and spares a doomed request.
+          const { profileId: _profileId, ...rest } = stop;
+          return [...first, ...outcomes(second, rest)];
+        }
+        return [
+          ...first,
+          ...(await sendChunk(second, group, state, chunkEnd, true)),
+        ];
+      }
+      if (status >= HTTP_SERVER_ERROR_MIN && status <= HTTP_SERVER_ERROR_MAX) {
+        return outcomes(items, {
+          outcome: 'uncertain',
+          reason: `msg91 ${status}`,
+        });
+      }
+      const secrets = [
+        spec.authKey,
+        ...items.map((item) => item.to.phone ?? ''),
+      ].filter(Boolean);
+      const reason = failureReason(status, json, secrets);
+      if (rejected) {
+        if (items.length === 1) {
+          state.singleRejections += 1;
+        }
+        state.lastRejection = reason;
+      }
+      return outcomes(items, { outcome: 'failed', reason });
+    } catch {
       return outcomes(items, {
-        outcome: 'uncertain',
-        reason: `msg91 ${status}`,
-        ...requestIdOf(reading),
+        outcome: issued ? 'uncertain' : 'retry',
+        reason: 'exception',
       });
     }
-    if (status === HTTP_RATE_LIMITED) {
-      return outcomes(items, {
-        outcome: 'rate_limited',
-        reason: 'msg91 429',
-        retryAfterMs: retryAfterMs(posted.retryAfter),
-      });
-    }
-    if (status === HTTP_UNAUTHORIZED || status === HTTP_FORBIDDEN) {
-      return outcomes(items, {
-        outcome: 'channel_error',
-        reason: 'msg91 auth',
-      });
-    }
-    const rejected =
-      status === HTTP_BAD_REQUEST || status === HTTP_UNPROCESSABLE;
-    if (rejected && items.length > 1) {
-      const middle = Math.ceil(items.length / 2);
-      const first = await sendChunk(items.slice(0, middle));
-      const second = await sendChunk(items.slice(middle));
-      return [...first, ...second];
-    }
-    if (status >= HTTP_SERVER_ERROR_MIN && status <= HTTP_SERVER_ERROR_MAX) {
-      return outcomes(items, {
-        outcome: 'uncertain',
-        reason: `msg91 ${status}`,
-      });
-    }
-    const secrets = [
-      spec.authKey,
-      ...items.map((item) => item.to.phone ?? ''),
-    ].filter(Boolean);
-    return outcomes(items, {
-      outcome: 'failed',
-      reason: failureReason(status, json, secrets),
-    });
   }
 
-  const chunks: BatchItem[][] = [];
+  const chunks: { items: BatchItem[]; group: Msg91Group; state: GroupState }[] =
+    [];
   for (const group of groups) {
-    for (let at = 0; at < group.length; at += spec.maxBatch) {
-      chunks.push(group.slice(at, at + spec.maxBatch));
+    const state: GroupState = {
+      singleRejections: 0,
+      succeeded: false,
+      lastRejection: '',
+    };
+    for (let at = 0; at < group.items.length; at += spec.maxBatch) {
+      chunks.push({
+        items: group.items.slice(at, at + spec.maxBatch),
+        group,
+        state,
+      });
     }
   }
   const results: DeliveryOutcome[] = [];
@@ -244,7 +320,19 @@ export async function sendMsg91Groups(
     while (next < chunks.length) {
       const chunk = chunks[next++];
       if (chunk) {
-        results.push(...(await sendChunk(chunk)));
+        const chunkEnd = Math.min(
+          spec.deadlineAt ?? Number.POSITIVE_INFINITY,
+          now() + timeoutMs * CHUNK_BUDGET_FACTOR
+        );
+        results.push(
+          ...(await sendChunk(
+            chunk.items,
+            chunk.group,
+            chunk.state,
+            chunkEnd,
+            false
+          ))
+        );
       }
     }
   };

@@ -8,12 +8,13 @@ import {
 } from 'bun:test';
 import type { BatchItem, ProviderMessage } from './batch';
 import {
+  extractPhones,
   type FakeMsg91,
   responses,
   SMS_PATH,
   startFakeMsg91,
 } from './fakes/msg91-server';
-import { createMsg91SmsAdapter } from './msg91-sms';
+import { createMsg91SmsAdapter, zMsg91SmsConfig } from './msg91-sms';
 
 const AUTH_KEY = 'msg91-auth-key-0123456789';
 const CONCURRENCY = 2;
@@ -203,10 +204,27 @@ describe('msg91 sms adapter', () => {
     expect(count(await run(items(2)), 'uncertain')).toBe(2);
   });
 
-  it('three chunks over keep-alive use at most concurrency connections', async () => {
-    const before = fake.connections();
-    await run(items(250), {}, { concurrency: 1 });
-    expect(fake.connections() - before).toBeLessThanOrEqual(1);
+  it('chunks across groups never exceed concurrency in flight, and keep-alive reuses connections', async () => {
+    const slow = await startFakeMsg91({ delayMs: 60 });
+    try {
+      const batch = [
+        ...items(300),
+        ...Array.from({ length: 300 }, (_, i) =>
+          item(i + 301, { flowId: 'otherflow9' })
+        ),
+      ];
+      const results = await createMsg91SmsAdapter().sendBatch(
+        batch,
+        { authKey: AUTH_KEY, baseUrl: slow.baseUrl },
+        { concurrency: CONCURRENCY }
+      );
+      expect(count(results, 'sent')).toBe(600);
+      expect(slow.requests).toHaveLength(6);
+      expect(slow.peakInFlight()).toBe(CONCURRENCY);
+      expect(slow.connections()).toBeLessThanOrEqual(CONCURRENCY);
+    } finally {
+      await slow.close();
+    }
   });
 
   it('an error body echoing the phone and the auth key yields a reason with neither', async () => {
@@ -290,23 +308,168 @@ describe('msg91 sms adapter', () => {
     expect(fake.requests).toHaveLength(0);
   });
 
-  it('the deadline passing mid-run stops later chunks and bisection halves, never the one in flight', async () => {
+  it('the deadline passing mid-run stops bisection halves and later chunks, never the request in flight', async () => {
     let clock = 0;
-    // The clock jumps past the deadline once the first request went out.
+    // The clock jumps past the deadline while the first (rejected) request is in flight.
     fake.script(SMS_PATH, () => {
       clock = 10;
-      return {
-        status: 200,
-        body: { type: 'success', message: 'req-0123456789' },
-      };
+      return { status: 400, body: { type: 'error', message: 'bad' } };
     });
     const results = await run(
       items(250),
       { now: () => clock },
       { deadlineAt: 5, concurrency: 1 }
     );
-    expect(count(results, 'sent')).toBe(100);
-    expect(count(results, 'retry')).toBe(150);
     expect(fake.requests).toHaveLength(1);
+    expect(results).toHaveLength(250);
+    expect(
+      results.every((r) => r.outcome === 'retry' && r.reason === 'deadline')
+    ).toBe(true);
+  });
+
+  it('bisection shares a chunk budget of three request timeouts', async () => {
+    let clock = 0;
+    fake.script(SMS_PATH, () => {
+      clock = 1000;
+      return { status: 400, body: { type: 'error', message: 'bad' } };
+    });
+    const results = await run(
+      items(100),
+      { now: () => clock, timeoutMs: 100 },
+      { concurrency: 1 }
+    );
+    expect(fake.requests).toHaveLength(1);
+    expect(count(results, 'retry')).toBe(100);
+  });
+
+  it('a systematically rejected template stops bisecting after a few probes', async () => {
+    fake.script(SMS_PATH, () => ({
+      status: 400,
+      body: { type: 'error', code: 'TEMPLATE_NOT_FOUND' },
+    }));
+    const results = await run(items(250), {}, { concurrency: 1 });
+    expect(count(results, 'failed')).toBe(250);
+    expect(results.every((r) => r.reason === 'msg91 TEMPLATE_NOT_FOUND')).toBe(
+      true
+    );
+    expect(fake.requests.length).toBeLessThanOrEqual(15);
+  });
+
+  it('a success in the group disarms the breaker so bad phones are still found one by one', async () => {
+    const bad = [3, 40, 41, 77].map((n) => phoneOf(n));
+    fake.script(SMS_PATH, (body) => {
+      const phones = extractPhones(body);
+      return bad.some((phone) => phones.includes(phone))
+        ? { status: 400, body: { type: 'error' } }
+        : {
+            status: 200,
+            body: { type: 'success', message: 'req-0123456789' },
+          };
+    });
+    const results = await run(items(100), {}, { concurrency: 1 });
+    expect(
+      results
+        .filter((r) => r.outcome === 'failed')
+        .map((r) => r.profileId)
+        .sort()
+    ).toEqual(['p3', 'p40', 'p41', 'p77']);
+    expect(count(results, 'sent')).toBe(96);
+  });
+
+  it('a 429 on the first bisection half spares the sibling half', async () => {
+    let calls = 0; // the responder index keeps counting across tests
+    fake.script(SMS_PATH, (body, index) =>
+      calls++ === 0
+        ? { status: 400, body: { type: 'error' } }
+        : responses.rateLimited(RETRY_AFTER_SECONDS)(body, index)
+    );
+    const results = await run(items(100), {}, { concurrency: 1 });
+    expect(fake.requests).toHaveLength(2);
+    expect(results).toHaveLength(100);
+    expect(
+      results.every(
+        (r) => r.outcome === 'rate_limited' && r.retryAfterMs === 7000
+      )
+    ).toBe(true);
+  });
+
+  it('a 401 on the first bisection half spares the sibling half', async () => {
+    let calls = 0; // the responder index keeps counting across tests
+    fake.script(SMS_PATH, (body, index) =>
+      calls++ === 0
+        ? { status: 400, body: { type: 'error' } }
+        : responses.authFailed()(body, index)
+    );
+    const results = await run(items(100), {}, { concurrency: 1 });
+    expect(fake.requests).toHaveLength(2);
+    expect(
+      results.every(
+        (r) => r.outcome === 'channel_error' && r.reason === 'msg91 auth'
+      )
+    ).toBe(true);
+  });
+
+  it('a throw while building one chunk keeps the other chunks and marks it retry exception', async () => {
+    const batch = items(250);
+    const poisoned = batch[150];
+    if (poisoned?.message && 'kind' in poisoned.message) {
+      Object.defineProperty(poisoned.message, 'variables', {
+        get() {
+          throw new Error('boom');
+        },
+      });
+    }
+    const results = await run(batch, {}, { concurrency: 2 });
+    expect(results).toHaveLength(250);
+    expect(count(results, 'sent')).toBe(150);
+    const retried = results.filter((r) => r.outcome === 'retry');
+    expect(retried).toHaveLength(100);
+    expect(retried.every((r) => r.reason === 'exception')).toBe(true);
+  });
+
+  it('a throw after the request was issued is uncertain exception', async () => {
+    // Loaded after msg91-sms: msg91-http entered first closes an import cycle through the engine.
+    const { sendMsg91Groups } = await import('./msg91-http');
+    const results = await sendMsg91Groups(
+      [{ items: items(2), buildBody: () => ({}) }],
+      {
+        url: `${fake.baseUrl}${SMS_PATH}`,
+        authKey: AUTH_KEY,
+        maxBatch: 100,
+        concurrency: 1,
+        readSuccess: () => {
+          throw new Error('boom');
+        },
+      }
+    );
+    expect(
+      results.every(
+        (r) => r.outcome === 'uncertain' && r.reason === 'exception'
+      )
+    ).toBe(true);
+  });
+});
+
+describe('msg91 base url', () => {
+  it.each([
+    ['https://h.example/', 'https://h.example'],
+    ['https://h.example', 'https://h.example'],
+    ['http://127.0.0.1:8080/', 'http://127.0.0.1:8080'],
+  ])('%s is normalised to its origin', (input, origin) => {
+    const parsed = zMsg91SmsConfig.parse({ authKey: AUTH_KEY, baseUrl: input });
+    expect(parsed.baseUrl).toBe(origin);
+  });
+
+  it.each([
+    'https://h.example/x',
+    'https://h.example?x',
+    'https://h.example/?',
+    'https://u@h.example',
+    'http://h.example',
+    'ftp://h.example',
+  ])('%s is rejected', (input) => {
+    expect(
+      zMsg91SmsConfig.safeParse({ authKey: AUTH_KEY, baseUrl: input }).success
+    ).toBe(false);
   });
 });
