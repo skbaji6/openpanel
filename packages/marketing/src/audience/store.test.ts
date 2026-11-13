@@ -44,6 +44,7 @@ let hasSource = true;
 interface StoreOptions {
   failAfterPages?: number;
   wrap?: (source: AudienceSource) => AudienceSource;
+  laneFor?: (projectId: string, source: AudienceSource) => AudienceSource;
 }
 
 function makeStore(options: StoreOptions = {}) {
@@ -59,6 +60,7 @@ function makeStore(options: StoreOptions = {}) {
     source: async (projectId) =>
       hasSource && projectId === PROJECT ? source : null,
     now: () => NOW,
+    laneFor: options.laneFor,
   });
 }
 
@@ -248,6 +250,35 @@ describe('audience store', () => {
       expect([error.status, error.code]).toEqual([409, 'version_conflict']);
     }
     expect((await store.get(CTX, row.id)).name).toBe('v2');
+  });
+
+  it('freeze pages the source through the campaign lane of its project', async () => {
+    const laned: string[] = [];
+    const store = makeStore({
+      laneFor: (projectId, source) => ({
+        ...source,
+        members: (req) => {
+          laned.push(projectId);
+          return source.members(req);
+        },
+      }),
+    });
+    const row = await store.create(CTX, snapshotInput);
+    await store.freeze(CTX, row.id);
+    expect(laned.length).toBeGreaterThan(0);
+    expect(new Set(laned)).toEqual(new Set([PROJECT]));
+  });
+
+  it("a crashed freeze's staging rows are wiped by the next freeze", async () => {
+    const store = makeStore();
+    const row = await store.create(CTX, snapshotInput);
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.materialize_exclusions (job_id, profile_id) VALUES ($1::uuid, 'pro-000002')`,
+      row.id
+    );
+    const frozen = await store.freeze(CTX, row.id);
+    expect(await stagedRows()).toBe(0);
+    expect(frozen.snapshotCount).toBe(PRO_COUNT);
   });
 
   it('freeze stores the exact materialised set and snapshot_count', async () => {

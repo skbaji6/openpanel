@@ -56,6 +56,8 @@ interface StoreDeps {
   sql: Sql;
   source: (projectId: string) => Promise<AudienceSource | null>;
   now: () => Date;
+  // Freezes page the whole audience, so they go through the campaign lane and cannot starve journeys.
+  laneFor?: (projectId: string, source: AudienceSource) => AudienceSource;
 }
 
 interface DbRow {
@@ -299,7 +301,7 @@ export function createAudienceStore(deps: StoreDeps) {
     jobId: string
   ): Promise<number> {
     const result = await runMaterialization(
-      { sql, source },
+      { sql, source: deps.laneFor?.(ctx.projectId, source) ?? source },
       {
         jobId,
         projectId: ctx.projectId,
@@ -498,7 +500,8 @@ export function createAudienceStore(deps: StoreDeps) {
       if (!source) {
         throw new HttpError(409, 'source_not_http');
       }
-      const jobId = randomUUID();
+      // Keyed by the audience, so a crashed freeze's staging rows are wiped by the next freeze's fresh start.
+      const jobId = id;
       try {
         const total = await materializeSnapshot(source, ctx, id, locked, jobId);
         beforeSwitch?.();

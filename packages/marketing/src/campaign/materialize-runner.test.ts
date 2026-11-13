@@ -38,6 +38,8 @@ const CFG = { sourceConcurrency: 4 } as MarketingConfig;
 const POLL_STEP_MS = 10;
 const AUTH_RETRY_SECONDS = 300;
 const CONCURRENT_TIMEOUT_MS = 10_000;
+const LEASE_RENEW_TEST_MS = 20;
+const RENEW_WAIT_MS = 150;
 
 const redis = getRedisCache();
 let now = START;
@@ -115,7 +117,11 @@ async function waitForLockWait() {
   }
 }
 
-const tick = (source: AudienceSource | null, stopping?: () => boolean) =>
+const tick = (
+  source: AudienceSource | null,
+  stopping?: () => boolean,
+  leaseRenewMs?: number
+) =>
   runMaterializeTick({
     sql,
     sources: resolverOf(source),
@@ -123,7 +129,24 @@ const tick = (source: AudienceSource | null, stopping?: () => boolean) =>
     cfg: CFG,
     now: () => now,
     stopping,
+    leaseRenewMs,
   });
+
+async function stageExclusion(campaignId: string) {
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.materialize_exclusions (job_id, profile_id) VALUES ($1::uuid, 'x1')
+     ON CONFLICT DO NOTHING`,
+    campaignId
+  );
+}
+
+async function stagedCount(jobId: string): Promise<number> {
+  const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+    'SELECT count(*)::int AS n FROM marketing.materialize_exclusions WHERE job_id = $1::uuid',
+    jobId
+  );
+  return row?.n ?? 0;
+}
 
 async function insertCampaign(): Promise<string> {
   const [audience] = await sql.$queryRawUnsafe<{ id: string }[]>(
@@ -509,7 +532,9 @@ describe('runMaterializeTick', () => {
       });
       advance(RETRY_SECONDS);
     }
+    await stageExclusion(id);
     expect(await tick(broken)).toEqual({ ran: 1 });
+    expect(await stagedCount(id)).toBe(0);
     expect(await campaign(id)).toMatchObject({
       state: 'failed',
       state_reason: 'materialize_failed',
@@ -556,14 +581,90 @@ describe('runMaterializeTick', () => {
     expect(await sourceStatus()).toBe('ok');
   });
 
-  it('a project without an http source waits with source_not_http', async () => {
+  it('a project without an http source fails the campaign with source_not_http', async () => {
     const id = await insertCampaign();
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, status)
+       VALUES ($1::uuid, 'pro-000001', $2, 'pending')`,
+      id,
+      PROJECT
+    );
     expect(await tick(null)).toEqual({ ran: 1 });
     expect(await campaign(id)).toMatchObject({
-      state: 'running',
-      materialize_error: 'source_not_http',
-      materialize_retry_at: new Date(now.getTime() + RETRY_SECONDS * SECOND_MS),
+      state: 'failed',
+      state_reason: 'source_not_http',
+      materialize_state: 'failed',
+      materialize_lease_token: null,
     });
+    expect(await recipients(id, 'pending')).toEqual([]);
+    advance(RETRY_SECONDS);
+    expect(await tick(null)).toEqual({ ran: 0 });
+  });
+
+  it('a snapshot campaign materialises without an http source', async () => {
+    const id = await insertCampaign();
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.audiences a SET mode = 'snapshot', snapshot_version = 1, snapshot_count = 2
+       FROM marketing.campaigns c WHERE c.id = $1::uuid AND a.id = c.audience_id`,
+      id
+    );
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.audience_snapshot_ids (audience_id, snapshot_version, profile_id)
+       SELECT audience_id, 1, unnest(ARRAY['s1', 's2']) FROM marketing.campaigns WHERE id = $1::uuid`,
+      id
+    );
+    expect(await tick(null)).toEqual({ ran: 1 });
+    expect(await recipients(id, 'pending')).toEqual(['s1', 's2']);
+    expect(await campaign(id)).toMatchObject({
+      state: 'running',
+      materialize_state: 'done',
+      queued: 2,
+    });
+  });
+
+  it("a runner that lost its lease never renews the new owner's lease", async () => {
+    const id = await insertCampaign();
+    const stuck = gate();
+    const reached = gate();
+    const stale = hooked(fake(), async (call) => {
+      if (call === 2) {
+        reached.open();
+        await stuck.opened;
+      }
+    });
+    const staleRun = tick(stale, undefined, LEASE_RENEW_TEST_MS);
+    await reached.opened;
+    // Another runner took the campaign over and released it, as a stopped run does.
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET materialize_lease_token = NULL, materialize_lease_until = NULL
+       WHERE id = $1::uuid`,
+      id
+    );
+    await sleep(RENEW_WAIT_MS);
+    expect(await tick(fake())).toEqual({ ran: 1 });
+    expect((await campaign(id)).materialize_state).toBe('done');
+    stuck.open();
+    expect(await staleRun).toEqual({ ran: 1 });
+    expect(await recipients(id, 'pending')).toEqual(proIds());
+  });
+
+  it('a source call slower than the lease keeps the lease renewed, so a second runner cannot take over', async () => {
+    const id = await insertCampaign();
+    const renewed = gate();
+    const slow = hooked(fake(), async (call) => {
+      if (call === 2) {
+        advance(LEASE_SECONDS + 1);
+        await sleep(RENEW_WAIT_MS);
+        expect(await tick(fake())).toEqual({ ran: 0 });
+        renewed.open();
+      }
+    });
+    expect(await tick(slow, undefined, LEASE_RENEW_TEST_MS)).toEqual({
+      ran: 1,
+    });
+    await renewed.opened;
+    expect(await recipients(id, 'pending')).toEqual(proIds());
+    expect((await campaign(id)).materialize_state).toBe('done');
   });
 
   it('a restart from scratch after sending began fails the campaign', async () => {
@@ -574,7 +675,9 @@ describe('runMaterializeTick', () => {
       id,
       PROJECT
     );
+    await stageExclusion(id);
     expect(await tick(fake())).toEqual({ ran: 1 });
+    expect(await stagedCount(id)).toBe(0);
     expect(await campaign(id)).toMatchObject({
       state: 'failed',
       state_reason: 'materialize_restart_after_sending',

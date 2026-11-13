@@ -10,6 +10,7 @@ import {
 } from '../audience/builder';
 import { MAX_PAGE_SIZE } from '../audience/contract';
 import { zAudienceInput, zIdListChange } from '../audience/definition';
+import { withCampaignLane } from '../audience/lane';
 import type { SourceResolver } from '../audience/resolver';
 import type { AudienceSource } from '../audience/source';
 import { createAudienceStore, sourceHttpError } from '../audience/store';
@@ -80,6 +81,7 @@ interface Deps {
   resolver: SourceResolver;
   now?: () => number;
   freezeLockTtlMs?: number;
+  sourceConcurrency: number;
 }
 
 // Path and query parameters are not the body, so their failures get their own code.
@@ -118,6 +120,12 @@ export function audienceRoutes(deps: Deps): Route[] {
     sql,
     source: (projectId) => resolver.forProject(projectId),
     now: () => new Date(now()),
+    laneFor: (projectId, source) =>
+      withCampaignLane(source, {
+        redis,
+        projectId,
+        sourceConcurrency: deps.sourceConcurrency,
+      }),
   });
 
   async function missingSourceError(projectId: string) {

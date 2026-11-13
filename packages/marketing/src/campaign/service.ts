@@ -142,6 +142,9 @@ const SKIP_UNSENT_RECIPIENTS = `WITH skipped AS (
   SELECT $1::uuid, count(*)::int, $2 FROM skipped
   ON CONFLICT (campaign_id) DO UPDATE
   SET skipped = marketing.campaign_counters.skipped + EXCLUDED.skipped, updated_at = EXCLUDED.updated_at`;
+// The materialiser stages exclusions under the campaign id; no foreign key removes them.
+const WIPE_STAGING =
+  'DELETE FROM marketing.materialize_exclusions WHERE job_id = $1::uuid';
 const COMPLETE_IF_DONE = `UPDATE marketing.campaigns c SET state = 'completed', finished_at = $2, updated_at = $2
   WHERE c.id = $1::uuid AND c.state = ANY($3::text[]) AND c.materialize_state = 'done'
   AND NOT EXISTS (SELECT 1 FROM marketing.campaign_recipients r
@@ -168,6 +171,16 @@ export function isOneActiveViolation(error: unknown): boolean {
   );
 }
 
+async function endUnsentRecipients(
+  tx: Queryable,
+  campaignId: string,
+  now: Date,
+  reason: string
+): Promise<void> {
+  await tx.$executeRawUnsafe(SKIP_UNSENT_RECIPIENTS, campaignId, now, reason);
+  await tx.$executeRawUnsafe(WIPE_STAGING, campaignId);
+}
+
 // Takes the caller's transaction, so a runner can record its own state in the same commit.
 export async function failCampaignIn(
   tx: Queryable,
@@ -184,12 +197,7 @@ export async function failCampaignIn(
     fromStates('fail')
   );
   if (failed === 1) {
-    await tx.$executeRawUnsafe(
-      SKIP_UNSENT_RECIPIENTS,
-      campaignId,
-      now,
-      'failed'
-    );
+    await endUnsentRecipients(tx, campaignId, now, 'failed');
   }
 }
 
@@ -685,12 +693,7 @@ export function createCampaignService(deps: CampaignDeps) {
         const now = deps.now();
         await transition(tx, ctx, id, 'cancel', { finished_at: now });
         // Rows already sending belong to the dispatcher, which records their outcome.
-        await tx.$executeRawUnsafe(
-          SKIP_UNSENT_RECIPIENTS,
-          id,
-          now,
-          'cancelled'
-        );
+        await endUnsentRecipients(tx, id, now, 'cancelled');
         return await fetchRow(tx, ctx, id);
       }, TRANSACTION);
     },

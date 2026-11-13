@@ -30,6 +30,8 @@ const CHUNKS = 10;
 const OVER_RESOLVE_LIMIT = 201;
 const PHONE = '+919800000001';
 const FREEZE_DELAY_MS = 150;
+// 10 requests of 2,000 ids plus a 20,000-id freeze run close to Bun's 5 s default test timeout.
+const ROUND_TRIP_TIMEOUT_MS = 30_000;
 
 const SCHEMA: Schema = {
   dimensions: [
@@ -193,65 +195,77 @@ describe('audience routes', () => {
     }
   });
 
-  it('create, update, add 20,000 ids in 2,000-id chunks, count, preview, explain and freeze round-trip', async () => {
-    const created = await create({ mode: 'snapshot' });
-    let { version } = created;
-    const put = await call('PUT', `/marketing/audiences/${created.id}`, {
-      body: {
-        ...input({ mode: 'snapshot', name: 'Pros 2' }),
-        expectedVersion: version,
-      },
-    });
-    expect(put.status).toBe(200);
-    version = ((await put.json()) as Row).version;
-    for (let chunk = 0; chunk < CHUNKS; chunk++) {
-      const res = await call('POST', `/marketing/audiences/${created.id}/ids`, {
+  it(
+    'create, update, add 20,000 ids in 2,000-id chunks, count, preview, explain and freeze round-trip',
+    async () => {
+      const created = await create({ mode: 'snapshot' });
+      let { version } = created;
+      const put = await call('PUT', `/marketing/audiences/${created.id}`, {
         body: {
-          list: 'include',
-          add: ids(chunk * CHUNK, CHUNK),
+          ...input({ mode: 'snapshot', name: 'Pros 2' }),
           expectedVersion: version,
         },
       });
-      expect(res.status).toBe(200);
-      version = ((await res.json()) as Row).version;
-    }
-    const page = await call(
-      'GET',
-      `/marketing/audiences/${created.id}/ids?list=include&limit=3`
-    );
-    expect(await page.json()).toEqual({
-      ids: ids(0, 3),
-      nextCursor: ids(2, 1)[0],
-    });
-    const base = `/marketing/audiences/${created.id}`;
-    const count = (await (await call('POST', `${base}/count`)).json()) as {
-      count: number;
-      filterCount: number;
-      includeCount: number;
-    };
-    expect(count.filterCount).toBe(PRO_COUNT);
-    expect(count.includeCount).toBe(CHUNK * CHUNKS);
-    const preview = await call('POST', `${base}/preview`, {
-      body: { limit: 5 },
-    });
-    expect(
-      ((await preview.json()) as { members: unknown[] }).members
-    ).toHaveLength(5);
-    const explain = await call('POST', `${base}/explain`, {
-      body: { id: 'm0001' },
-    });
-    expect(((await explain.json()) as { verdict: string }).verdict).toBe('in');
-    const freeze = await call('POST', `${base}/freeze`);
-    expect(freeze.status).toBe(200);
-    expect(((await freeze.json()) as Row).snapshotCount).toBeGreaterThan(0);
-    const list = (await (await call('GET', '/marketing/audiences')).json()) as {
-      audiences: Row[];
-    };
-    expect(list.audiences).toHaveLength(1);
-    const del = await call('DELETE', base);
-    expect(del.status).toBe(204);
-    expect((await call('GET', base)).status).toBe(404);
-  });
+      expect(put.status).toBe(200);
+      version = ((await put.json()) as Row).version;
+      for (let chunk = 0; chunk < CHUNKS; chunk++) {
+        const res = await call(
+          'POST',
+          `/marketing/audiences/${created.id}/ids`,
+          {
+            body: {
+              list: 'include',
+              add: ids(chunk * CHUNK, CHUNK),
+              expectedVersion: version,
+            },
+          }
+        );
+        expect(res.status).toBe(200);
+        version = ((await res.json()) as Row).version;
+      }
+      const page = await call(
+        'GET',
+        `/marketing/audiences/${created.id}/ids?list=include&limit=3`
+      );
+      expect(await page.json()).toEqual({
+        ids: ids(0, 3),
+        nextCursor: ids(2, 1)[0],
+      });
+      const base = `/marketing/audiences/${created.id}`;
+      const count = (await (await call('POST', `${base}/count`)).json()) as {
+        count: number;
+        filterCount: number;
+        includeCount: number;
+      };
+      expect(count.filterCount).toBe(PRO_COUNT);
+      expect(count.includeCount).toBe(CHUNK * CHUNKS);
+      const preview = await call('POST', `${base}/preview`, {
+        body: { limit: 5 },
+      });
+      expect(
+        ((await preview.json()) as { members: unknown[] }).members
+      ).toHaveLength(5);
+      const explain = await call('POST', `${base}/explain`, {
+        body: { id: 'm0001' },
+      });
+      expect(((await explain.json()) as { verdict: string }).verdict).toBe(
+        'in'
+      );
+      const freeze = await call('POST', `${base}/freeze`);
+      expect(freeze.status).toBe(200);
+      expect(((await freeze.json()) as Row).snapshotCount).toBeGreaterThan(0);
+      const list = (await (
+        await call('GET', '/marketing/audiences')
+      ).json()) as {
+        audiences: Row[];
+      };
+      expect(list.audiences).toHaveLength(1);
+      const del = await call('DELETE', base);
+      expect(del.status).toBe(204);
+      expect((await call('GET', base)).status).toBe(404);
+    },
+    ROUND_TRIP_TIMEOUT_MS
+  );
 
   it('a 2,001-id chunk is 400 invalid_body', async () => {
     const created = await create();
@@ -547,14 +561,23 @@ describe('audience routes', () => {
   it('a freeze whose lock renewal fails is 409 freeze_lock_lost and never goes live', async () => {
     const created = await create({ mode: 'snapshot' });
     pageDelayMs = FREEZE_DELAY_MS;
-    const failingRenewal = {
-      set: (...args: unknown[]) =>
-        (redis.set as (...a: unknown[]) => unknown)(...args),
-      eval: (script: string, ...rest: unknown[]) =>
-        script.includes('PEXPIRE')
-          ? Promise.resolve(0)
-          : (redis.eval as (...a: unknown[]) => unknown)(script, ...rest),
-    } as unknown as typeof redis;
+    // Fails only the freeze lock's renewal; the campaign lane's limiter scripts also call PEXPIRE.
+    const isLockRenewal = (script: string) =>
+      script.startsWith(
+        "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE'"
+      );
+    const failingRenewal = new Proxy(redis, {
+      get(target, property) {
+        if (property === 'eval') {
+          return (script: string, ...rest: unknown[]) =>
+            isLockRenewal(script)
+              ? Promise.resolve(0)
+              : (target.eval as (...a: unknown[]) => unknown)(script, ...rest);
+        }
+        const value = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
     const server = createServer({
       cfg,
       sql,

@@ -131,6 +131,7 @@ export function createServer(deps: ServerDeps) {
             resolver: sources,
             now: deps.now,
             freezeLockTtlMs: deps.freezeLockTtlMs,
+            sourceConcurrency: cfg.sourceConcurrency,
           }),
           ...campaignRoutes(
             createCampaignService({

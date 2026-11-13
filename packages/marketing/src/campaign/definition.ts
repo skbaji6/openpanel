@@ -69,16 +69,30 @@ const registryShape = {
   }),
 };
 
-export const zCampaignDraft = z.discriminatedUnion('channel', [
-  z.strictObject(journeyShape),
-  z.strictObject(registryShape),
-]);
+// Skipping earlier recipients is keyed on campaignKey, so without one it would silently skip no one.
+const keyedSkip = (draft: {
+  campaignKey?: string | null;
+  skipPreviousRecipients?: boolean;
+}) => !draft.skipPreviousRecipients || Boolean(draft.campaignKey);
+const KEYED_SKIP_ISSUE = {
+  message: 'skipPreviousRecipients needs a campaignKey',
+  path: ['campaignKey'],
+};
+
+export const zCampaignDraft = z
+  .discriminatedUnion('channel', [
+    z.strictObject(journeyShape),
+    z.strictObject(registryShape),
+  ])
+  .refine(keyedSkip, KEYED_SKIP_ISSUE);
 
 // The service re-checks a merged draft with this one: it drops fields a client may not set (confirmThreshold).
-export const zCampaignFields = z.discriminatedUnion('channel', [
-  z.object(journeyShape),
-  z.object(registryShape),
-]);
+export const zCampaignFields = z
+  .discriminatedUnion('channel', [
+    z.object(journeyShape),
+    z.object(registryShape),
+  ])
+  .refine(keyedSkip, KEYED_SKIP_ISSUE);
 
 // Template and channel are checked together once merged into the stored draft.
 export const zCampaignPatch = z

@@ -15,11 +15,13 @@ import {
   runMaterialization,
 } from '../audience/materialize';
 import type { SourceResolver } from '../audience/resolver';
+import type { AudienceSource } from '../audience/source';
 import type { MarketingConfig } from '../config';
 import type { Queryable, Sql } from '../engine/engine';
 import { failCampaignIn } from './service';
 
 const LEASE_MS = 60_000;
+const LEASE_RENEW_MS = LEASE_MS / 3;
 const RETRY_MS = 30_000;
 // Bad credentials stay bad until an operator fixes them, so the campaign asks the source less often.
 const AUTH_RETRY_MS = 300_000;
@@ -61,6 +63,8 @@ const SOURCE_OK = `UPDATE marketing.audience_sources SET status = 'ok', status_a
 // Fenced on the token: a run that stopped hands the campaign straight to the next claimer.
 const RELEASE_LEASE = `UPDATE marketing.campaigns SET materialize_lease_token = NULL, materialize_lease_until = NULL
   WHERE id = $1::uuid AND materialize_lease_token = $2::uuid`;
+const RENEW_LEASE = `UPDATE marketing.campaigns SET materialize_lease_until = $3
+  WHERE id = $1::uuid AND materialize_lease_token = $2::uuid`;
 const IS_ACTIVE = `SELECT 1 FROM marketing.campaigns WHERE id = $1::uuid AND state IN ('running', 'paused')`;
 // Releases the lease so the retry is claimable at once when due; transient source errors spend no attempt.
 const RETRY_LATER = `UPDATE marketing.campaigns SET materialize_retry_at = $3, materialize_error = $4,
@@ -74,6 +78,15 @@ const MARK_FAILED = `UPDATE marketing.campaigns SET materialize_state = 'failed'
   WHERE id = $1::uuid AND materialize_lease_token = $2::uuid`;
 const SOURCE_AUTH_FAILED = `UPDATE marketing.audience_sources SET status = 'source_auth_failed', status_at = $2
   WHERE project_id = $1 AND status IS DISTINCT FROM 'source_auth_failed'`;
+
+// A snapshot copy reads only the plugin's own tables, so it runs without an http source.
+const SNAPSHOT_COPY_ONLY = new Proxy(
+  {},
+  {
+    get: () => () =>
+      Promise.reject(new Error('snapshot copy called the audience source')),
+  }
+) as AudienceSource;
 
 interface Claimed {
   id: string;
@@ -100,6 +113,7 @@ interface RunnerDeps {
   now: () => Date;
   // Shutdown: the run stops after the page in flight instead of finishing the whole audience.
   stopping?: () => boolean;
+  leaseRenewMs?: number;
 }
 
 const later = (now: Date, ms: number) => new Date(now.getTime() + ms);
@@ -255,26 +269,32 @@ async function materialize(
   claim: Claimed,
   token: string
 ): Promise<void> {
-  const source = await deps.sources.forProject(claim.project_id);
-  if (!source) {
-    await retryLater(deps, claim, token, 'source_not_http', false);
-    return;
-  }
   try {
+    const job = await buildJob(deps, claim, token);
+    const copiesSnapshot =
+      job.target.kind === 'campaign' && job.target.fromSnapshot !== null;
+    const source = await deps.sources.forProject(claim.project_id);
+    // A source switched to stored will not heal, so waiting would only hold the project's slot.
+    if (!(source || copiesSnapshot)) {
+      await failMaterialization(deps, claim, token, 'source_not_http');
+      return;
+    }
     const result = await runMaterialization(
       {
         sql: deps.sql,
-        source: withCampaignLane(source, {
-          redis: deps.redis,
-          projectId: claim.project_id,
-          sourceConcurrency: deps.cfg.sourceConcurrency,
-        }),
+        source: source
+          ? withCampaignLane(source, {
+              redis: deps.redis,
+              projectId: claim.project_id,
+              sourceConcurrency: deps.cfg.sourceConcurrency,
+            })
+          : SNAPSHOT_COPY_ONLY,
         shouldStop: async () =>
           Boolean(deps.stopping?.()) ||
           (await deps.sql.$queryRawUnsafe<unknown[]>(IS_ACTIVE, claim.id))
             .length === 0,
       },
-      await buildJob(deps, claim, token)
+      job
     );
     if (result.status !== 'done') {
       await deps.sql.$executeRawUnsafe(RELEASE_LEASE, claim.id, token);
@@ -304,6 +324,26 @@ async function materialize(
   }
 }
 
+// Renewed on a timer for the whole run: a wrapped source call (lane wait, retries, Retry-After) can outlast LEASE_MS.
+function keepLease(deps: RunnerDeps, claim: Claimed, token: string) {
+  let renewing: Promise<unknown> = Promise.resolve();
+  const timer = setInterval(() => {
+    // A failed renewal only risks a takeover, which the token fence on every write already handles.
+    renewing = deps.sql
+      .$executeRawUnsafe(
+        RENEW_LEASE,
+        claim.id,
+        token,
+        later(deps.now(), LEASE_MS)
+      )
+      .catch(() => undefined);
+  }, deps.leaseRenewMs ?? LEASE_RENEW_MS);
+  return async () => {
+    clearInterval(timer);
+    await renewing;
+  };
+}
+
 export async function runMaterializeTick(
   deps: RunnerDeps
 ): Promise<{ ran: number }> {
@@ -318,6 +358,11 @@ export async function runMaterializeTick(
   if (!claim) {
     return { ran: 0 };
   }
-  await materialize(deps, claim, token);
+  const stopRenewing = keepLease(deps, claim, token);
+  try {
+    await materialize(deps, claim, token);
+  } finally {
+    await stopRenewing();
+  }
   return { ran: 1 };
 }

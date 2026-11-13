@@ -125,6 +125,22 @@ async function recipients(campaignId: string) {
   );
 }
 
+// A materialiser's staging rows are keyed by the campaign id.
+async function stageExclusion(campaignId: string) {
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.materialize_exclusions (job_id, profile_id) VALUES ($1::uuid, 'x1')`,
+    campaignId
+  );
+}
+
+async function stagedCount(jobId: string): Promise<number> {
+  const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+    'SELECT count(*)::int AS n FROM marketing.materialize_exclusions WHERE job_id = $1::uuid',
+    jobId
+  );
+  return row?.n ?? 0;
+}
+
 async function setState(campaignId: string, state: string, extra = '') {
   await sql.$executeRawUnsafe(
     `UPDATE marketing.campaigns SET state = $2 ${extra} WHERE id = $1::uuid`,
@@ -448,7 +464,9 @@ describe('campaign service', () => {
     const { campaigns, draft } = await previewedDraft();
     await campaigns.start(CTX, draft.id, {});
     await insertRecipients(draft.id, ['pending', 'leased', 'sending', 'sent']);
+    await stageExclusion(draft.id);
     const cancelled = await campaigns.cancel(CTX, draft.id);
+    expect(await stagedCount(draft.id)).toBe(0);
     expect(cancelled.state).toBe('cancelled');
     expect(cancelled.finishedAt).toBe(START.toISOString());
     expect(cancelled.counters.skipped).toBe(2);
@@ -458,6 +476,43 @@ describe('campaign service', () => {
       { profile_id: 'r2', status: 'sending', reason: null },
       { profile_id: 'r3', status: 'sent', reason: null },
     ]);
+  });
+
+  it('skipPreviousRecipients without a campaignKey is invalid_campaign on create and update', async () => {
+    const { campaigns } = makeDeps();
+    const fields = {
+      name: 'Launch',
+      channel: 'push' as const,
+      template: PUSH_TEMPLATE,
+    };
+    expect(
+      await codeOf(
+        campaigns.create(CTX, { ...fields, skipPreviousRecipients: true })
+      )
+    ).toEqual([400, 'invalid_campaign']);
+
+    const plain = await campaigns.create(CTX, fields);
+    expect(
+      await codeOf(
+        campaigns.update(
+          CTX,
+          plain.id,
+          { skipPreviousRecipients: true },
+          plain.version
+        )
+      )
+    ).toEqual([400, 'invalid_campaign']);
+
+    const keyed = await campaigns.create(CTX, {
+      ...fields,
+      campaignKey: 'launch',
+      skipPreviousRecipients: true,
+    });
+    expect(
+      await codeOf(
+        campaigns.update(CTX, keyed.id, { campaignKey: null }, keyed.version)
+      )
+    ).toEqual([400, 'invalid_campaign']);
   });
 
   it('cancel on completed is invalid_transition', async () => {
@@ -572,7 +627,9 @@ describe('campaign service', () => {
     const { campaigns, draft } = await previewedDraft();
     await campaigns.start(CTX, draft.id, {});
     await insertRecipients(draft.id, ['pending', 'leased', 'sending']);
+    await stageExclusion(draft.id);
     await campaigns.failCampaign(draft.id, 'materialize_failed');
+    expect(await stagedCount(draft.id)).toBe(0);
     const failed = await campaigns.get(CTX, draft.id);
     expect(failed).toMatchObject({
       state: 'failed',

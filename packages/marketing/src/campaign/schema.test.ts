@@ -97,6 +97,16 @@ describe('campaign schema', () => {
     expect(row?.indexdef).toContain("'sending'");
   });
 
+  it('campaign_recipients_unfinished_idx covers pending, leased and sending rows by campaign', async () => {
+    const [row] = await sql.$queryRawUnsafe<{ indexdef: string }[]>(
+      `SELECT indexdef FROM pg_indexes WHERE schemaname = 'marketing' AND indexname = 'campaign_recipients_unfinished_idx'`
+    );
+    expect(row?.indexdef).toContain('(campaign_id)');
+    expect(row?.indexdef).toContain("'pending'");
+    expect(row?.indexdef).toContain("'leased'");
+    expect(row?.indexdef).toContain("'sending'");
+  });
+
   it("a recipient row has idempotency_key '<campaign_id>:<profile_id>'", async () => {
     const campaignId = await insertCampaign('p1', 'draft');
     await insertRecipient(campaignId);
