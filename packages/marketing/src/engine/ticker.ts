@@ -39,6 +39,15 @@ import {
   lagAllowsSending,
   nextAllowedTime,
 } from './gates';
+import {
+  capLockKey,
+  countRecentSends,
+  deleteLedger,
+  type EffectiveCap,
+  effectiveCap,
+  ledgerRef,
+  lockCap,
+} from './ledger';
 import { gatherLookupBatch } from './lookup-batch';
 
 const MAX_ATTEMPTS = 5;
@@ -144,6 +153,7 @@ const zCaps = z
   .object({
     max: z.number().int().nonnegative(),
     periodSeconds: z.number().int().positive(),
+    scope: z.enum(['channel', 'all']).optional(),
   })
   .nullable();
 const zQuietHours = z
@@ -157,12 +167,23 @@ const EARLIER_STEPS_FINAL = `NOT EXISTS (SELECT 1 FROM marketing.steps earlier
   WHERE earlier.enrollment_id = s.enrollment_id AND earlier.step_index < s.step_index
     AND earlier.status IN ('pending', 'sending'))`;
 
+// A step's ledger row; built the same way as in the 0015 backfill.
+const STEP_REF = `'step:' || s.enrollment_id::text || ':' || s.step_index`;
+// Appended to a statement whose changed CTE returns the refs of steps that are no longer a send.
+const DROP_LEDGER = `dropped AS (
+    DELETE FROM marketing.send_ledger l USING changed WHERE l.source_ref = changed.ref RETURNING 1
+  )`;
+
 // Params: now. Expired leases of ended enrollments or inactive rules are cancelled, never resent.
 // Set-based without the profile lock: it only touches 'sending' rows, which the engine never writes.
 const CANCEL_ORPHANED_SQL = `
-  UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
-    lease_until = NULL, sent_at = NULL
-  WHERE s.status = 'sending' AND s.lease_until < $1::timestamptz AND NOT ${ACTIVE}`;
+  WITH changed AS (
+    UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
+      lease_until = NULL, sent_at = NULL
+    WHERE s.status = 'sending' AND s.lease_until < $1::timestamptz AND NOT ${ACTIVE}
+    RETURNING ${STEP_REF} AS ref
+  ), ${DROP_LEDGER}
+  SELECT count(*)::int AS updated FROM changed`;
 
 // Params: now, latest claimable due_at (now - grace), batch size, lease end.
 // Both arms walk a partial index; the joins keep paused rules and ended enrollments out of the batch.
@@ -256,36 +277,50 @@ const SOURCE_STATUS_SQL = `
 const OWNED = `s.enrollment_id = $1::uuid AND s.step_index = $2::int AND s.status = 'sending' AND s.attempt = $3::int`;
 
 // Params: enrollment, step, attempt, status, outcome, sent_at. One statement, no profile lock,
-// so a send's result is recorded even while the engine holds the profile.
+// so a send's result is recorded even while the engine holds the profile. A sent step keeps its
+// ledger row, stamped with the mark time; any other final status takes it out of the cap count.
 export const MARK_SQL = `
-  UPDATE marketing.steps s SET status = $4, outcome = $5::jsonb, sent_at = $6::timestamptz, lease_until = NULL
-  WHERE ${OWNED}`;
+  WITH marked AS (
+    UPDATE marketing.steps s SET status = $4, outcome = $5::jsonb, sent_at = $6::timestamptz, lease_until = NULL
+    WHERE ${OWNED}
+    RETURNING ${STEP_REF} AS ref, s.status
+  ), kept AS (
+    UPDATE marketing.send_ledger l SET sent_at = $6::timestamptz
+    FROM marked WHERE l.source_ref = marked.ref AND marked.status = 'sent' RETURNING 1
+  ), changed AS (
+    SELECT ref FROM marked WHERE status <> 'sent'
+  ), ${DROP_LEDGER}
+  SELECT count(*)::int AS updated FROM marked`;
 
 // Params: enrollment, step, attempt, now, new lease end.
 const EXTEND_LEASE_SQL = `
   UPDATE marketing.steps s SET lease_until = $5::timestamptz
   WHERE ${OWNED} AND s.lease_until > $4::timestamptz AND ${ACTIVE}`;
 
-// Params: enrollment, step, attempt.
+// Params: enrollment, step, attempt. Runs after the reservation, so it also releases the cap slot.
 const CANCEL_IF_INACTIVE_SQL = `
-  UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
-    lease_until = NULL, sent_at = NULL
-  WHERE ${OWNED} AND NOT ${ACTIVE}`;
+  WITH changed AS (
+    UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"inactive"}',
+      lease_until = NULL, sent_at = NULL
+    WHERE ${OWNED} AND NOT ${ACTIVE}
+    RETURNING ${STEP_REF} AS ref
+  ), ${DROP_LEDGER}
+  SELECT count(*)::int AS updated FROM changed`;
 
 // Params: enrollment, step, attempt.
 const GOAL_MET_SQL = `
-  WITH step AS (
+  WITH changed AS (
     UPDATE marketing.steps s SET status = 'cancelled', outcome = '{"reason":"goal_met"}',
       lease_until = NULL, sent_at = NULL
-    WHERE ${OWNED} RETURNING s.enrollment_id
-  ), rest AS (
+    WHERE ${OWNED} RETURNING ${STEP_REF} AS ref
+  ), ${DROP_LEDGER}, rest AS (
     UPDATE marketing.steps SET status = 'cancelled'
     WHERE enrollment_id = $1::uuid AND status = 'pending' RETURNING 1
   ), done AS (
     UPDATE marketing.enrollments SET status = 'completed', end_reason = 'goal'
     WHERE id = $1::uuid AND status = 'active' RETURNING 1
   )
-  SELECT count(*)::int AS updated FROM step`;
+  SELECT count(*)::int AS updated FROM changed`;
 
 // Params: enrollment, step, attempt, due_at, outcome, attempts to give back, whether due_at is a new schedule.
 // Under an enrollment that ended meanwhile the step is cancelled instead of orphaned as pending.
@@ -301,8 +336,24 @@ const REQUEUE_SQL = `
   WHERE e.id = s.enrollment_id AND ${OWNED}
   RETURNING s.status`;
 
-// A reserved step carries sent_at while it is still sending, so concurrent sends count against the cap.
-const RESERVE_SQL = `UPDATE marketing.steps s SET sent_at = $4::timestamptz WHERE ${OWNED}`;
+// Params: enrollment, step, attempt, now, cap lock key, project, profile, channel. A reserved step
+// carries sent_at and its ledger row while it is still sending, so concurrent sends count against
+// every cap. One statement, so an uncapped send costs no interactive transaction; the cap lock is
+// held until it commits, so a sender counting under that lock sees this row or waits for it.
+const RESERVE_SQL = `
+  WITH cap_lock AS (
+    SELECT pg_advisory_xact_lock(hashtextextended($5, 0))
+  ), reserved AS (
+    UPDATE marketing.steps s SET sent_at = $4::timestamptz
+    WHERE ${OWNED} AND EXISTS (SELECT 1 FROM cap_lock)
+    RETURNING ${STEP_REF} AS ref
+  ), recorded AS (
+    INSERT INTO marketing.send_ledger (source_ref, project_id, profile_id, channel, sent_at)
+    SELECT ref, $6, $7, $8, $4::timestamptz FROM reserved
+    ON CONFLICT (source_ref) DO UPDATE SET sent_at = EXCLUDED.sent_at
+    RETURNING 1
+  )
+  SELECT count(*)::int AS updated FROM reserved`;
 
 const PROFILE_OF_SQL = `
   SELECT project_id AS "projectId", profile_id AS "profileId"
@@ -327,17 +378,6 @@ const UNFINISHED_COMPLETIONS_SQL = `
 const DELETE_INVALID_TOKENS_SQL = `
   DELETE FROM marketing.devices
   WHERE project_id = $1 AND profile_id = $2 AND token = ANY($3::text[])`;
-
-const CAP_LOCK_SQL = 'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))';
-
-// Params: project, profile, channel, window start, enrollment, step.
-const CAP_COUNT_SQL = `
-  SELECT count(*)::int AS n FROM marketing.enrollments e
-  JOIN marketing.steps s ON s.enrollment_id = e.id
-  WHERE e.project_id = $1 AND e.profile_id = $2
-    AND e.rule_snapshot->'steps'->s.step_index->>'channel' = $3
-    AND s.status IN ('sent', 'sending') AND s.sent_at > $4::timestamptz
-    AND NOT (s.enrollment_id = $5::uuid AND s.step_index = $6::int)`;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -429,7 +469,7 @@ export async function runTick(deps: TickDeps): Promise<TickResult> {
     warnLagGateClosed(deps, state, lagState, tickStart);
     return result;
   }
-  await sql.$executeRawUnsafe(CANCEL_ORPHANED_SQL, tickStart.toISOString());
+  await sql.$queryRawUnsafe(CANCEL_ORPHANED_SQL, tickStart.toISOString());
   if (tickStart.getTime() - state.lastSweepAt >= HEAL_SWEEP_INTERVAL_MS) {
     state.lastSweepAt = tickStart.getTime();
     const unfinished = await sql.$queryRawUnsafe<{ id: string }[]>(
@@ -762,6 +802,7 @@ async function processClaim(
 
 function createStepWriter(deps: TickDeps, claim: Claim) {
   const owned = [claim.enrollment_id, claim.step_index, claim.attempt];
+  const stepRef = ledgerRef.step(claim.enrollment_id, claim.step_index);
 
   async function mark(
     status: 'sent' | 'skipped' | 'failed',
@@ -770,13 +811,14 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
     const sentAt = status === 'sent' ? deps.now().toISOString() : null;
     for (const delay of [...MARK_RETRY_DELAYS_MS, null]) {
       try {
-        return await deps.sql.$executeRawUnsafe(
+        const [row] = await deps.sql.$queryRawUnsafe<{ updated: number }[]>(
           MARK_SQL,
           ...owned,
           status,
           outcomeJson(reason),
           sentAt
         );
+        return row?.updated ?? 0;
       } catch (error) {
         if (delay === null) {
           throw error;
@@ -809,20 +851,43 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
     giveBackAttempt: boolean,
     reschedule = false
   ): Promise<Outcome> {
-    const [row] = await underProfileLock(deps.sql, claim.enrollment_id, (tx) =>
-      tx.$queryRawUnsafe<{ status: string }[]>(
-        REQUEUE_SQL,
-        ...owned,
-        dueAt.toISOString(),
-        outcomeJson(reason),
-        giveBackAttempt ? 1 : 0,
-        reschedule
-      )
+    const [row] = await underProfileLock(
+      deps.sql,
+      claim.enrollment_id,
+      async (tx) => {
+        const rows = await tx.$queryRawUnsafe<{ status: string }[]>(
+          REQUEUE_SQL,
+          ...owned,
+          dueAt.toISOString(),
+          outcomeJson(reason),
+          giveBackAttempt ? 1 : 0,
+          reschedule
+        );
+        if (rows.length > 0) {
+          await deleteLedger(tx, [stepRef]);
+        }
+        return rows;
+      }
     );
     if (!row) {
       return 'lost';
     }
     return row.status === 'pending' ? 'postponed' : 'skipped';
+  }
+
+  async function skipForCap(tx: Queryable): Promise<Outcome> {
+    const [row] = await tx.$queryRawUnsafe<{ updated: number }[]>(
+      MARK_SQL,
+      ...owned,
+      'skipped',
+      outcomeJson('cap'),
+      null
+    );
+    if (!row?.updated) {
+      return 'lost';
+    }
+    await tx.$executeRawUnsafe(COMPLETE_IF_DONE_SQL, claim.enrollment_id);
+    return 'skipped';
   }
 
   return {
@@ -864,61 +929,63 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
       if (extended) {
         return true;
       }
-      const cancelled = await deps.sql.$executeRawUnsafe(
+      const [cancelled] = await deps.sql.$queryRawUnsafe<{ updated: number }[]>(
         CANCEL_IF_INACTIVE_SQL,
         ...owned
       );
-      return cancelled ? 'skipped' : 'lost';
+      return cancelled?.updated ? 'skipped' : 'lost';
     },
-    // Reserves a cap slot, or marks the step skipped when the cap is used up.
-    reserveUnderCap(args: {
+    // Writes the step's ledger row, or marks the step skipped when the cap is used up. Runs for
+    // uncapped projects too: a campaign's cap, or a cap added later, must see every journey send.
+    reserve(args: {
       projectId: string;
       profileId: string;
       channel: string;
-      caps: { max: number; periodSeconds: number };
+      cap: EffectiveCap | null;
       now: Date;
     }): Promise<Outcome | true> {
-      const { projectId, profileId, channel, caps, now } = args;
+      const { projectId, profileId, channel, cap, now } = args;
+      const lock = {
+        projectId,
+        profileId,
+        channel,
+        scope: cap?.scope ?? 'channel',
+      } as const;
+      const reserveAndRecord = async (
+        db: Queryable
+      ): Promise<Outcome | true> => {
+        const [row] = await db.$queryRawUnsafe<{ updated: number }[]>(
+          RESERVE_SQL,
+          ...owned,
+          now.toISOString(),
+          capLockKey(lock),
+          projectId,
+          profileId,
+          channel
+        );
+        return row?.updated ? true : 'lost';
+      };
+      // An uncapped send must not wait behind a consumer batch holding the engine's profile lock;
+      // only a cap skip, which may complete the enrollment, needs it.
+      if (!cap) {
+        return reserveAndRecord(deps.sql);
+      }
       return underProfileLock(
         deps.sql,
         claim.enrollment_id,
         async (tx): Promise<Outcome | true> => {
-          await tx.$executeRawUnsafe(
-            CAP_LOCK_SQL,
-            JSON.stringify([projectId, profileId, channel])
-          );
-          const [row] = await tx.$queryRawUnsafe<{ n: number }[]>(
-            CAP_COUNT_SQL,
+          await lockCap(tx, lock);
+          const counts = await countRecentSends(tx, {
             projectId,
-            profileId,
-            channel,
-            new Date(now.getTime() - caps.periodSeconds * 1000).toISOString(),
-            claim.enrollment_id,
-            claim.step_index
-          );
-          if (!capAllows(row?.n ?? 0, caps)) {
-            const skipped = await tx.$executeRawUnsafe(
-              MARK_SQL,
-              ...owned,
-              'skipped',
-              outcomeJson('cap'),
-              null
-            );
-            if (!skipped) {
-              return 'lost';
-            }
-            await tx.$executeRawUnsafe(
-              COMPLETE_IF_DONE_SQL,
-              claim.enrollment_id
-            );
-            return 'skipped';
+            profileIds: [profileId],
+            channel: cap.scope === 'all' ? null : channel,
+            since: new Date(now.getTime() - cap.periodSeconds * 1000),
+            excludeRefs: [stepRef],
+          });
+          if (!capAllows(counts.get(profileId) ?? 0, cap)) {
+            return await skipForCap(tx);
           }
-          const reserved = await tx.$executeRawUnsafe(
-            RESERVE_SQL,
-            ...owned,
-            now.toISOString()
-          );
-          return reserved ? true : 'lost';
+          return await reserveAndRecord(tx);
         }
       );
     },
@@ -1095,18 +1162,15 @@ async function deliver(
     return await step.finish('skipped', 'invalid_channel_config');
   }
 
-  const caps = zCaps.parse(context.caps ?? null);
-  if (caps) {
-    const reserved = await step.reserveUnderCap({
-      projectId: context.project_id,
-      profileId: context.profile_id,
-      channel: stepDef.channel,
-      caps,
-      now,
-    });
-    if (reserved !== true) {
-      return reserved;
-    }
+  const reserved = await step.reserve({
+    projectId: context.project_id,
+    profileId: context.profile_id,
+    channel: stepDef.channel,
+    cap: effectiveCap(null, zCaps.parse(context.caps ?? null)),
+    now,
+  });
+  if (reserved !== true) {
+    return reserved;
   }
 
   const message = render(stepDef, context, goal, {

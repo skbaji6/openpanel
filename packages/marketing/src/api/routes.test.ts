@@ -919,6 +919,24 @@ describe('dashboard routes', () => {
     expect([badZone.status, badTime.status]).toEqual([400, 400]);
   });
 
+  it('settings caps take an optional scope of channel or all', async () => {
+    const settings = {
+      caps: { max: 2, periodSeconds: 86_400, scope: 'all' },
+      quietHours: null,
+    };
+    expect(
+      (await dashboard('PUT', '/marketing/settings', settings)).status
+    ).toBe(200);
+    expect(
+      await (await dashboard('GET', '/marketing/settings')).json()
+    ).toEqual(settings);
+    const badScope = await dashboard('PUT', '/marketing/settings', {
+      ...settings,
+      caps: { ...settings.caps, scope: 'person' },
+    });
+    expect(badScope.status).toBe(400);
+  });
+
   it('results counts match seeded steps', async () => {
     const ruleId = await insertRule('proj-a');
     const idle = await insertRule('proj-a');

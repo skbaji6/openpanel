@@ -89,6 +89,7 @@ const zSettings = z.strictObject({
     .strictObject({
       max: z.number().int().min(0).max(MAX_CAP),
       periodSeconds: z.number().int().positive().max(MAX_DELAY_SECONDS),
+      scope: z.enum(['channel', 'all']).optional(),
     })
     .nullable(),
   quietHours: z

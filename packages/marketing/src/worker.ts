@@ -4,6 +4,7 @@ import type { SourceResolver } from './audience/resolver';
 import { loadConfig, type MarketingConfig } from './config';
 import { purgeDeadTokens } from './engine/dead-tokens';
 import type { createEngine, Sql } from './engine/engine';
+import { purgeSendHistory } from './engine/ledger';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
 
@@ -229,6 +230,9 @@ export async function startWorker(
       ),
       every(PURGE_INTERVAL_MS, 'purge events', secrets, () =>
         engine.purgeOldEvents(cfg.retentionDays)
+      ),
+      every(PURGE_INTERVAL_MS, 'purge send history', secrets, () =>
+        purgeSendHistory(sql)
       )
     );
 

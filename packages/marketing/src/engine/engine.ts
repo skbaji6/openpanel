@@ -200,6 +200,35 @@ export const PURGE_CHUNK_SQL = `
           AND e.status = 'active' AND e.trigger_time <= ev.event_time)
     LIMIT $2::int)`;
 
+export type PurgeOptions = typeof PURGE_DEFAULTS;
+
+// Params of chunkSql: cutoff, chunk size. Returns the rows deleted before the work ran out or the budget did.
+export async function deleteInChunks(
+  db: Queryable,
+  chunkSql: string,
+  cutoff: Date,
+  options: Partial<PurgeOptions> = {},
+  now: () => Date = () => new Date()
+): Promise<number> {
+  const { chunkSize, pauseMs, budgetMs } = { ...PURGE_DEFAULTS, ...options };
+  const started = now().getTime();
+  let total = 0;
+  for (;;) {
+    const deleted = await db.$executeRawUnsafe(
+      chunkSql,
+      cutoff.toISOString(),
+      chunkSize
+    );
+    total += deleted;
+    const done = deleted < chunkSize;
+    const outOfBudget = now().getTime() - started >= budgetMs;
+    if (done || outOfBudget) {
+      return total;
+    }
+    await Bun.sleep(pauseMs);
+  }
+}
+
 // Batches hold it shared while they read rules and enroll; stopping a rule takes it exclusively first,
 // so no batch that saw the rule active commits after the stop. Always taken before profile locks.
 export async function lockRules(
@@ -467,31 +496,12 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
     handleEvent: (event: NormalizedEvent) => handleEvents([event]),
     evaluateEnrollment: (enrollmentId: string) =>
       evaluate(deps.sql, enrollmentId),
-    async purgeOldEvents(
+    purgeOldEvents(
       retentionDays: number,
-      options: Partial<typeof PURGE_DEFAULTS> = {}
+      options: Partial<PurgeOptions> = {}
     ): Promise<number> {
-      const { chunkSize, pauseMs, budgetMs } = {
-        ...PURGE_DEFAULTS,
-        ...options,
-      };
-      const started = now().getTime();
-      const cutoff = new Date(started - retentionDays * MS_PER_DAY);
-      let total = 0;
-      for (;;) {
-        const deleted = await deps.sql.$executeRawUnsafe(
-          PURGE_CHUNK_SQL,
-          cutoff.toISOString(),
-          chunkSize
-        );
-        total += deleted;
-        const done = deleted < chunkSize;
-        const outOfBudget = now().getTime() - started >= budgetMs;
-        if (done || outOfBudget) {
-          return total;
-        }
-        await Bun.sleep(pauseMs);
-      }
+      const cutoff = new Date(now().getTime() - retentionDays * MS_PER_DAY);
+      return deleteInChunks(deps.sql, PURGE_CHUNK_SQL, cutoff, options, now);
     },
     async interestNames(projectId?: string): Promise<Set<string>> {
       const rows = await deps.sql.$queryRawUnsafe<{ name: string }[]>(

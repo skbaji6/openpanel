@@ -27,6 +27,7 @@ import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine, lockProfiles } from './engine';
+import { ledgerRef, lockCap, recordLedger } from './ledger';
 import {
   CLAIM_SQL,
   createTickState,
@@ -117,7 +118,7 @@ function tick(cfg: MarketingConfig = CFG, overrides: Partial<TickDeps> = {}) {
 
 // Rejects the first `failures` calls of one client method (only those with this query text, if given).
 function flakySql(
-  method: '$executeRawUnsafe' | '$transaction',
+  method: '$executeRawUnsafe' | '$queryRawUnsafe' | '$transaction',
   query: string | null,
   failures: number
 ): typeof sql {
@@ -240,6 +241,20 @@ async function enroll(opts: {
       step.leaseUntil?.toISOString() ?? null,
       step.sentAt?.toISOString() ?? null
     );
+    // Seeded history counts toward caps only through the ledger, as the 0015 backfill makes it.
+    const isSendHistory = ['sent', 'sending'].includes(step.status ?? '');
+    const channel = opts.definition.steps[index]?.channel;
+    if (isSendHistory && step.sentAt && channel) {
+      await recordLedger(sql, [
+        {
+          sourceRef: ledgerRef.step(id, index),
+          projectId: PROJECT,
+          profileId: opts.profileId ?? PROFILE,
+          channel,
+          sentAt: step.sentAt,
+        },
+      ]);
+    }
   }
   return id;
 }
@@ -313,6 +328,27 @@ function steps(enrollmentId: string): Promise<StepRow[]> {
     enrollmentId
   );
 }
+
+async function ledgerRefs(): Promise<string[]> {
+  const rows = await sql.$queryRawUnsafe<{ source_ref: string }[]>(
+    'SELECT source_ref FROM marketing.send_ledger ORDER BY source_ref'
+  );
+  return rows.map((row) => row.source_ref);
+}
+
+async function addDevice(token = 't1') {
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.devices (token, project_id, profile_id, platform) VALUES ($1, $2, $3, 'ios')`,
+    token,
+    PROJECT,
+    PROFILE
+  );
+}
+
+const PUSH_RULE = rule({
+  name: 'push',
+  steps: [{ delaySeconds: HOUR, channel: 'push', template: { body: 'one' } }],
+});
 
 async function enrollmentStatus(enrollmentId: string): Promise<string> {
   const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
@@ -686,6 +722,159 @@ describe('runTick', () => {
     expect(await tick()).toEqual({ ...ZERO, sent: 1 });
   });
 
+  it('a journey push step reserving under cap writes a ledger row', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY }, null);
+    await addDevice();
+    const { enrollmentId } = await enrollOne(PUSH_RULE);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect(await ledgerRefs()).toEqual([ledgerRef.step(enrollmentId, 0)]);
+  });
+
+  it('a journey step on a project without caps still writes its ledger row with the sent time', async () => {
+    const { enrollmentId } = await enrollOne();
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    const rows = await sql.$queryRawUnsafe<
+      {
+        source_ref: string;
+        project_id: string;
+        profile_id: string;
+        channel: string;
+        sent_at: Date;
+      }[]
+    >(
+      'SELECT source_ref, project_id, profile_id, channel, sent_at FROM marketing.send_ledger'
+    );
+    expect(rows).toEqual([
+      {
+        source_ref: ledgerRef.step(enrollmentId, 0),
+        project_id: PROJECT,
+        profile_id: PROFILE,
+        channel: 'email',
+        sent_at: NOW,
+      },
+    ]);
+  });
+
+  it('a campaign ledger row counts against a journey cap of 1 per day on push', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY }, null);
+    await addDevice();
+    await recordLedger(sql, [
+      {
+        sourceRef: ledgerRef.campaign(randomUUID(), PROFILE),
+        projectId: PROJECT,
+        profileId: PROFILE,
+        channel: 'push',
+        sentAt: new Date(NOW.getTime() - 20 * HOUR * 1000),
+      },
+    ]);
+    const { enrollmentId } = await enrollOne(PUSH_RULE);
+    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
+    expect((await steps(enrollmentId))[0]?.outcome).toEqual({ reason: 'cap' });
+    expect(await ledgerRefs()).toHaveLength(1);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a ledger row exactly one period old does not count', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY }, null);
+    await addDevice();
+    await recordLedger(sql, [
+      {
+        sourceRef: ledgerRef.campaign(randomUUID(), PROFILE),
+        projectId: PROJECT,
+        profileId: PROFILE,
+        channel: 'push',
+        sentAt: new Date(NOW.getTime() - DAY * 1000),
+      },
+    ]);
+    await enrollOne(PUSH_RULE);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+  });
+
+  it('scope all counts an email send against a push step', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY, scope: 'all' }, null);
+    await addDevice();
+    await enrollOne(rule({ name: 'email earlier' }), [
+      {
+        dueAt: DUE,
+        status: 'sent',
+        sentAt: new Date(NOW.getTime() - HOUR * 1000),
+      },
+    ]);
+    const { enrollmentId } = await enrollOne(PUSH_RULE);
+    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
+    expect((await steps(enrollmentId))[0]?.outcome).toEqual({ reason: 'cap' });
+  });
+
+  it('scope channel (the default) does not count an email send against a push step', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY }, null);
+    await addDevice();
+    await enrollOne(rule({ name: 'email earlier' }), [
+      {
+        dueAt: DUE,
+        status: 'sent',
+        sentAt: new Date(NOW.getTime() - HOUR * 1000),
+      },
+    ]);
+    await enrollOne(PUSH_RULE);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+  });
+
+  it('a requeued step deletes its ledger row', async () => {
+    respond = async () => ({ ok: false, retryable: true, reason: 'try later' });
+    const { enrollmentId } = await enrollOne();
+    expect(await tick()).toEqual({ ...ZERO, postponed: 1 });
+    expect((await steps(enrollmentId))[0]?.status).toBe('pending');
+    expect(await ledgerRefs()).toEqual([]);
+  });
+
+  it('a failed step deletes its ledger row', async () => {
+    respond = async () => ({ ok: false, retryable: false, reason: 'rejected' });
+    const { enrollmentId } = await enrollOne();
+    expect(await tick()).toEqual({ ...ZERO, failed: 1 });
+    expect((await steps(enrollmentId))[0]?.status).toBe('failed');
+    expect(await ledgerRefs()).toEqual([]);
+  });
+
+  it('an uncapped journey send takes the cap lock, so a sender counting under it sees the send or is seen by it', async () => {
+    await enrollOne();
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let locked: () => void = () => undefined;
+    const isLocked = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+    const holder = sql.$transaction(
+      async (tx) => {
+        await lockCap(tx, {
+          projectId: PROJECT,
+          profileId: PROFILE,
+          channel: 'email',
+          scope: 'channel',
+        });
+        locked();
+        await released;
+      },
+      { timeout: 20_000 }
+    );
+    await isLocked;
+    const running = tick();
+    await Bun.sleep(500);
+    expect(await ledgerRefs()).toEqual([]);
+    expect(calls).toHaveLength(0);
+    release();
+    await holder;
+    expect(await running).toEqual({ ...ZERO, sent: 1 });
+    expect(await ledgerRefs()).toHaveLength(1);
+  });
+
+  it('a skipped step never writes a ledger row', async () => {
+    await enrollOne(PUSH_RULE);
+    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
+    expect(await ledgerRefs()).toEqual([]);
+  });
+
   it('two concurrent runTick calls send a due step exactly once', async () => {
     const { enrollmentId } = await enrollOne();
     respond = async () => {
@@ -976,7 +1165,7 @@ describe('runTick', () => {
 
   it('REGRESSION e1: a failed sent mark is retried in-process and the step is never requeued', async () => {
     const { enrollmentId } = await enrollOne();
-    const flaky = flakySql('$executeRawUnsafe', MARK_SQL, 1);
+    const flaky = flakySql('$queryRawUnsafe', MARK_SQL, 1);
     expect(await tick(CFG, { sql: flaky })).toEqual({ ...ZERO, sent: 1 });
     clock = new Date(NOW.getTime() + 10 * MINUTE_MS);
     await setConsumerState(0, clock);
@@ -987,7 +1176,7 @@ describe('runTick', () => {
 
   it('REGRESSION e1: when every sent mark attempt fails the step stays sending and is not requeued', async () => {
     const { enrollmentId } = await enrollOne();
-    const broken = flakySql('$executeRawUnsafe', MARK_SQL, 3);
+    const broken = flakySql('$queryRawUnsafe', MARK_SQL, 3);
     expect(await tick(CFG, { sql: broken })).toEqual(ZERO);
     const [step] = await steps(enrollmentId);
     expect(step?.status).toBe('sending');
@@ -1102,6 +1291,7 @@ describe('runTick', () => {
       expect(step?.sent_at).toBeNull();
       expect(step?.lease_until).toBeNull();
     }
+    expect(await ledgerRefs()).toEqual([]);
     expect(calls).toHaveLength(0);
   });
 
