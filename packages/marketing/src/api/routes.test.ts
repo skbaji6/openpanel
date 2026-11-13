@@ -898,6 +898,44 @@ describe('dashboard routes', () => {
     });
   });
 
+  it('PUT channels/sms stores the config encrypted and GET masks authKey but shows baseUrl', async () => {
+    const config = {
+      authKey: 'msg91-secret-key-123',
+      baseUrl: 'http://127.0.0.1:9',
+    };
+    const put = await dashboard('PUT', '/marketing/channels/sms', { config });
+    expect(put.status).toBe(200);
+    expect(JSON.stringify(await put.json())).not.toContain(config.authKey);
+    const [row] = await sql.$queryRawUnsafe<{ config_encrypted: string }[]>(
+      "SELECT config_encrypted FROM marketing.channel_configs WHERE channel = 'sms'"
+    );
+    expect(row?.config_encrypted).not.toContain(config.authKey);
+    expect(
+      JSON.parse(
+        decryptCredential(cfg.encryptionKey, row?.config_encrypted ?? '')
+      )
+    ).toEqual(config);
+    const get = await dashboard('GET', '/marketing/channels/sms');
+    expect(await get.json()).toEqual({
+      channel: 'sms',
+      configured: true,
+      config: { authKey: MASK, baseUrl: config.baseUrl },
+    });
+    const bad = await dashboard('PUT', '/marketing/channels/sms', {
+      config: { authKey: 'msg91-secret-key-123', baseUrl: 'http://evil.test' },
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('PUT channels/whatsapp answers 409 until its adapter is registered, never 500', async () => {
+    const put = await dashboard('PUT', '/marketing/channels/whatsapp', {
+      config: { authKey: 'msg91-secret-key-123' },
+    });
+    expect(put.status).toBe(409);
+    const get = await dashboard('GET', '/marketing/channels/whatsapp');
+    expect(get.status).toBe(200);
+  });
+
   it('settings validate caps, quiet hours and timezone', async () => {
     const settings = {
       caps: { max: 2, periodSeconds: 86_400 },

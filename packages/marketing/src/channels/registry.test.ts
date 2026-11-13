@@ -31,7 +31,16 @@ describe('registerDefaultAdapters', () => {
     ).toBe(false);
   });
 
+  it('registers the sms batch adapter by default', () => {
+    registerDefaultAdapters({ webhookAllowHosts: [] });
+    expect(getBatchAdapter('sms').id).toBe('sms');
+    expect(
+      configSchemaFor('sms').safeParse({ authKey: 'key-0123456789' }).success
+    ).toBe(true);
+  });
+
   it("getBatchAdapter('sms') throws until registered", () => {
+    unregisterBatchAdapter('sms');
     expect(() => getBatchAdapter('sms')).toThrow();
     registerBatchAdapter({
       id: 'sms',

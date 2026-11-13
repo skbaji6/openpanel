@@ -5,7 +5,7 @@ import {
   hashPassword,
 } from '@openpanel/shared/server';
 import { z } from 'zod';
-import { getAdapter } from '../channels/registry';
+import { configSchemaFor } from '../channels/registry';
 import type { MarketingConfig } from '../config';
 import {
   lockProfiles,
@@ -30,6 +30,7 @@ const PUBLIC_CONFIG_FIELDS: Record<string, string[]> = {
   email: ['host', 'port', 'secure', 'user', 'from'],
   webhook: ['url'],
   push: [],
+  sms: ['baseUrl'],
 };
 const MAX_NAME_LENGTH = 200;
 const MAX_FILTERS = 50;
@@ -199,6 +200,15 @@ function ruleIdParam(params: string[]): string {
     throw new HttpError(404, 'not_found');
   }
   return id;
+}
+
+// A channel whose adapter is not registered (whatsapp until it ships) is a clean 409, not a 500.
+function channelConfigSchema(channel: string) {
+  try {
+    return configSchemaFor(channel);
+  } catch {
+    throw new HttpError(409, 'channel_unavailable');
+  }
 }
 
 function publicFields(channel: string): Set<string> {
@@ -489,7 +499,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'GET',
-      pattern: /^\/marketing\/channels\/(email|webhook|push)$/,
+      pattern: /^\/marketing\/channels\/(email|webhook|push|sms|whatsapp)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const channel = ctx.params[0] ?? '';
@@ -503,7 +513,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
     },
     {
       method: 'PUT',
-      pattern: /^\/marketing\/channels\/(email|webhook|push)$/,
+      pattern: /^\/marketing\/channels\/(email|webhook|push|sms|whatsapp)$/,
       auth: 'dashboard',
       async handle(ctx) {
         const channel = ctx.params[0] ?? '';
@@ -513,7 +523,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
         );
         const stored =
           (await storedChannelConfig(ctx.projectId, channel)) ?? {};
-        const parsed = getAdapter(channel).configSchema.safeParse(
+        const parsed = channelConfigSchema(channel).safeParse(
           restoreMaskedSecrets(channel, config, stored)
         );
         if (!(parsed.success && isRecord(parsed.data))) {

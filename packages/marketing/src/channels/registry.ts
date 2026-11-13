@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 import { type BatchChannelAdapter, perRecipientBatch } from './batch';
 import { createEmailAdapter } from './email';
+import { createMsg91SmsAdapter } from './msg91-sms';
 import { createPushAdapter } from './push';
 import type { CampaignChannel } from './settings';
 import type { ChannelAdapter } from './types';
@@ -32,6 +33,7 @@ export function registerDefaultAdapters(options: {
   );
   registerAdapter(createEmailAdapter());
   registerAdapter(createPushAdapter());
+  registerBatchAdapter(createMsg91SmsAdapter());
 }
 
 export function registerBatchAdapter<C>(adapter: BatchChannelAdapter<C>): void {
