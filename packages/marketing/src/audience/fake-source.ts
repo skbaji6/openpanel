@@ -28,7 +28,7 @@ export interface FakeMember {
   suppressed?: boolean;
   // Forces a channel unreachable with this reason, e.g. unverified_email.
   unreachable?: Partial<Record<LookupChannel, string>>;
-  traits?: Record<string, string>;
+  traits?: Record<string, Scalar>;
   devices?: { token: string; platform: string }[];
   consent?: { whatsapp?: boolean; sms_promotional?: boolean };
 }
@@ -208,6 +208,7 @@ export function createFakeSource(opts: FakeSourceOptions) {
     a.id < b.id ? -1 : Number(a.id > b.id)
   );
   const visible = sorted.filter((member) => member.suppressed !== true);
+  const byId = new Map(sorted.map((member) => [member.id, member]));
   const calls: FakeCall[] = [];
   const now = opts.now ?? (() => performance.now());
   let timeMs = 0;
@@ -329,14 +330,11 @@ export function createFakeSource(opts: FakeSourceOptions) {
         };
       }),
     lookup: (ids, channel) =>
-      run({ method: 'lookup' }, (): LookupEntry[] => {
+      run({ method: 'lookup' }, async (): Promise<LookupEntry[]> => {
         checkLimit('ids', ids.length, MAX_LOOKUP_IDS);
+        await waitForPage();
         return [...new Set(ids)].map((id) =>
-          entryFor(
-            id,
-            sorted.find((m) => m.id === id),
-            channel
-          )
+          entryFor(id, byId.get(id), channel)
         );
       }),
     resolve: (rawInputs) =>

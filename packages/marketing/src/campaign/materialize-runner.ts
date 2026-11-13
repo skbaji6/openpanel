@@ -27,7 +27,7 @@ const MAX_LEASE_RENEWALS = 30;
 const LEASE_RENEW_CAP_MS = MAX_LEASE_RENEWALS * LEASE_RENEW_MS;
 const RETRY_MS = 30_000;
 // Bad credentials stay bad until an operator fixes them, so the campaign asks the source less often.
-const AUTH_RETRY_MS = 300_000;
+export const AUTH_RETRY_MS = 300_000;
 const MAX_ATTEMPTS = 5;
 const LOG_PREFIX = 'marketing materialisation:';
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
@@ -61,7 +61,7 @@ const SET_COUNTERS = `INSERT INTO marketing.campaign_counters (campaign_id, queu
   FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid
   ON CONFLICT (campaign_id) DO UPDATE SET queued = EXCLUDED.queued,
     skipped = marketing.campaign_counters.skipped + EXCLUDED.skipped, updated_at = EXCLUDED.updated_at`;
-const SOURCE_OK = `UPDATE marketing.audience_sources SET status = 'ok', status_at = $2
+export const SOURCE_OK = `UPDATE marketing.audience_sources SET status = 'ok', status_at = $2
   WHERE project_id = $1 AND status IS DISTINCT FROM 'ok'`;
 // Fenced on the token: a run that stopped hands the campaign straight to the next claimer.
 const RELEASE_LEASE = `UPDATE marketing.campaigns SET materialize_lease_token = NULL, materialize_lease_until = NULL
@@ -79,7 +79,7 @@ const RETRY_LATER = `UPDATE marketing.campaigns SET materialize_retry_at = $3, m
 const MARK_FAILED = `UPDATE marketing.campaigns SET materialize_state = 'failed', materialize_error = $3,
     materialize_lease_token = NULL, materialize_lease_until = NULL, updated_at = $4
   WHERE id = $1::uuid AND materialize_lease_token = $2::uuid`;
-const SOURCE_AUTH_FAILED = `UPDATE marketing.audience_sources SET status = 'source_auth_failed', status_at = $2
+export const SOURCE_AUTH_FAILED = `UPDATE marketing.audience_sources SET status = 'source_auth_failed', status_at = $2
   WHERE project_id = $1 AND status IS DISTINCT FROM 'source_auth_failed'`;
 
 // A snapshot copy reads only the plugin's own tables, so it runs without an http source.

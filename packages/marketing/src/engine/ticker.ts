@@ -149,7 +149,7 @@ interface StepContext {
   lookup_skip?: string | null;
 }
 
-const zCaps = z
+export const zCaps = z
   .object({
     max: z.number().int().nonnegative(),
     periodSeconds: z.number().int().positive(),
@@ -994,14 +994,14 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
 
 type StepWriter = ReturnType<typeof createStepWriter>;
 
-function loadConfig(
-  adapter: ChannelAdapter<unknown>,
+export function loadChannelConfig(
+  schema: z.ZodType<unknown>,
   encrypted: string,
   encryptionKey: string
 ): { ok: true; config: unknown; secrets: string[] } | { ok: false } {
   try {
     const raw = decryptCredential(encryptionKey, encrypted);
-    const parsed = adapter.configSchema.safeParse(JSON.parse(raw));
+    const parsed = schema.safeParse(JSON.parse(raw));
     return parsed.success
       ? {
           ok: true,
@@ -1043,7 +1043,7 @@ function render(
     : { subject: heading, body, meta };
 }
 
-function lookupSkipReason(entry: LookupEntry): string | null {
+export function lookupSkipReason(entry: LookupEntry): string | null {
   if (entry.status === 'ok') {
     return null;
   }
@@ -1153,8 +1153,8 @@ async function deliver(
   if (!context.config_encrypted) {
     return await step.finish('skipped', 'channel_not_configured');
   }
-  const loaded = loadConfig(
-    adapter,
+  const loaded = loadChannelConfig(
+    adapter.configSchema,
     context.config_encrypted,
     deps.cfg.encryptionKey
   );
@@ -1228,7 +1228,7 @@ function recipientOf(context: StepContext): Recipient {
   };
 }
 
-function entryValues(entry: LookupEntry): string[] {
+export function entryValues(entry: LookupEntry): string[] {
   const values = recipientValues({
     profileId: entry.id,
     ...(entry.email ? { email: entry.email } : {}),

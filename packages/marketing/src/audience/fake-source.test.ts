@@ -317,6 +317,22 @@ describe('fake audience source lookup and suppression', () => {
     expect(none).toEqual({ id: 'a', status: 'ok', traits: { plan: 'pro' } });
   });
 
+  it('waits pageDelayMs on every lookup call and returns typed traits', async () => {
+    const waits: number[] = [];
+    const slow = createFakeSource({
+      members: [{ id: 'n', values: {}, traits: { age: 30, vip: true } }],
+      pageDelayMs: 250,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    await slow.lookup(['n'], 'none');
+    const [entry] = await slow.lookup(['n', 'missing'], 'none');
+    expect(waits).toEqual([250, 250]);
+    expect(slow.sourceTimeMs()).toBeGreaterThanOrEqual(500);
+    expect(entry?.traits).toEqual({ age: 30, vip: true });
+  });
+
   it('uses the unreachable reason vocabulary', async () => {
     const [noPhone] = await source.lookup(['c'], 'whatsapp');
     expect(noPhone?.reason).toBe('no_valid_phone');
