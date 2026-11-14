@@ -175,6 +175,31 @@ async function holdProfileLock() {
   };
 }
 
+const LOCK_WAIT_LIMIT_MS = 10_000;
+const CONCURRENCY_SENDS = 30;
+const INDEX_PLAN_ROWS = 20_000;
+const INDEX_PLAN_TIMEOUT_MS = 180_000;
+const LOCK_POLL_MS = 10;
+
+// Resolves once a session of this database is blocked on an advisory lock: the tick reached the lock and waits.
+async function waitForAdvisoryLockWaiter(): Promise<void> {
+  const deadline = Date.now() + LOCK_WAIT_LIMIT_MS;
+  while (Date.now() < deadline) {
+    const [waiting] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      `SELECT count(*)::int AS n FROM pg_locks
+       WHERE locktype = 'advisory' AND NOT granted
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`
+    );
+    if ((waiting?.n ?? 0) > 0) {
+      return;
+    }
+    await Bun.sleep(LOCK_POLL_MS);
+  }
+  throw new Error(
+    `no session waited on an advisory lock within ${LOCK_WAIT_LIMIT_MS} ms`
+  );
+}
+
 function rule(overrides: Partial<RuleDefinition> = {}): RuleDefinition {
   return {
     name: 'test rule',
@@ -896,14 +921,19 @@ describe('runTick', () => {
       { timeout: 20_000 }
     );
     await isLocked;
-    const running = tick();
-    await Bun.sleep(500);
-    expect(await ledgerRefs()).toEqual([]);
-    expect(calls).toHaveLength(0);
-    release();
-    await holder;
-    expect(await running).toEqual({ ...ZERO, sent: 1 });
-    expect(await ledgerRefs()).toHaveLength(1);
+    try {
+      const running = tick();
+      await waitForAdvisoryLockWaiter();
+      expect(await ledgerRefs()).toEqual([]);
+      expect(calls).toHaveLength(0);
+      release();
+      await holder;
+      expect(await running).toEqual({ ...ZERO, sent: 1 });
+      expect(await ledgerRefs()).toHaveLength(1);
+    } finally {
+      release();
+      await holder;
+    }
   });
 
   it('a skipped step never writes a ledger row', async () => {
@@ -1082,35 +1112,22 @@ describe('runTick', () => {
 
   it('the ticker waits for the profile lock held by the engine and proceeds after release', async () => {
     const { enrollmentId } = await enrollOne();
-    let release: () => void = () => undefined;
-    const released = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let locked: () => void = () => undefined;
-    const isLocked = new Promise<void>((resolve) => {
-      locked = resolve;
-    });
-    const holder = sql.$transaction(
-      async (tx) => {
-        await lockProfiles(tx, [{ projectId: PROJECT, profileId: PROFILE }]);
-        locked();
-        await released;
-      },
-      { timeout: 20_000 }
-    );
-    await isLocked;
+    const lock = await holdProfileLock();
     let done = false;
-    const running = tick().then((result) => {
-      done = true;
-      return result;
-    });
-    await Bun.sleep(500);
-    expect(done).toBe(false);
-    // The sent mark does not wait for the lock; completing the enrollment does.
-    expect((await steps(enrollmentId))[0]?.status).toBe('sent');
-    expect(await enrollmentStatus(enrollmentId)).toBe('active');
-    release();
-    await holder;
+    let running: Promise<TickResult> | undefined;
+    try {
+      running = tick().then((result) => {
+        done = true;
+        return result;
+      });
+      await waitForAdvisoryLockWaiter();
+      expect(done).toBe(false);
+      // The sent mark does not wait for the lock; completing the enrollment does.
+      expect((await steps(enrollmentId))[0]?.status).toBe('sent');
+      expect(await enrollmentStatus(enrollmentId)).toBe('active');
+    } finally {
+      await lock.release();
+    }
     expect(await running).toEqual({ ...ZERO, sent: 1 });
     expect((await steps(enrollmentId))[0]?.status).toBe('sent');
     expect(await enrollmentStatus(enrollmentId)).toBe('completed');
@@ -1154,7 +1171,7 @@ describe('runTick', () => {
       ],
     });
     const ruleId = await insertRule(definition);
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < CONCURRENCY_SENDS; i++) {
       await enroll({
         ruleId,
         definition,
@@ -1162,18 +1179,32 @@ describe('runTick', () => {
         steps: [{ dueAt: DUE }],
       });
     }
+    const sendConcurrency = 4;
     let inFlight = 0;
     let maxInFlight = 0;
+    let started = 0;
+    let waiting: (() => void)[] = [];
+    // Each send holds until the cap is full (or every send has started), so overlap never depends on timing.
     respond = async () => {
       inFlight++;
+      started++;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      await Bun.sleep(30);
+      if (inFlight >= sendConcurrency || started === CONCURRENCY_SENDS) {
+        for (const wake of waiting) {
+          wake();
+        }
+        waiting = [];
+      } else {
+        await new Promise<void>((resolve) => {
+          waiting.push(resolve);
+        });
+      }
       inFlight--;
       return { ok: true };
     };
-    const cfg = { ...CFG, sendConcurrency: 4 };
-    expect(await tick(cfg)).toEqual({ ...ZERO, sent: 30 });
-    expect(maxInFlight).toBe(4);
+    const cfg = { ...CFG, sendConcurrency };
+    expect(await tick(cfg)).toEqual({ ...ZERO, sent: CONCURRENCY_SENDS });
+    expect(maxInFlight).toBe(sendConcurrency);
   });
 
   it('SECURITY an adapter error whose message contains the channel secret is logged redacted', async () => {
@@ -1293,14 +1324,18 @@ describe('runTick', () => {
     respond = async () => ({ ok: false, retryable: true, reason: '421' });
     const lock = await holdProfileLock();
     let done = false;
-    const running = tick().then((result) => {
-      done = true;
-      return result;
-    });
-    await Bun.sleep(500);
-    expect(done).toBe(false);
-    expect((await steps(enrollmentId))[0]?.status).toBe('sending');
-    await lock.release();
+    let running: Promise<TickResult> | undefined;
+    try {
+      running = tick().then((result) => {
+        done = true;
+        return result;
+      });
+      await waitForAdvisoryLockWaiter();
+      expect(done).toBe(false);
+      expect((await steps(enrollmentId))[0]?.status).toBe('sending');
+    } finally {
+      await lock.release();
+    }
     expect(await running).toEqual({ ...ZERO, postponed: 1 });
     expect((await steps(enrollmentId))[0]?.status).toBe('pending');
   });
@@ -1461,36 +1496,41 @@ describe('runTick', () => {
     expect(logger.warn.mock.calls[1]?.join(' ')).toContain('state 60 s old');
   });
 
-  it('the claim query uses the pending and lease indexes', async () => {
-    const definition = rule();
-    const ruleId = await insertRule(definition);
-    await sql.$executeRawUnsafe(
-      `WITH e AS (
+  it(
+    'the claim query uses the pending and lease indexes',
+    async () => {
+      const definition = rule();
+      const ruleId = await insertRule(definition);
+      await sql.$executeRawUnsafe(
+        `WITH e AS (
          INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
          SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, 'p' || g, 'active', $4::timestamptz
-         FROM generate_series(1, 20000) g
+         FROM generate_series(1, $5::int) g
          RETURNING id)
        INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
-       SELECT id, 0, $4::timestamptz + random() * interval '30 days', 'pending' FROM e`,
-      PROJECT,
-      ruleId,
-      JSON.stringify(definition),
-      NOW.toISOString()
-    );
-    await sql.$executeRawUnsafe(
-      'ANALYZE marketing.steps, marketing.enrollments, marketing.rules'
-    );
-    const plan = await sql.$transaction(async (tx) => {
-      const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
-        `EXPLAIN ${CLAIM_SQL}`,
+       SELECT id, 0, $4::timestamptz + (row_number() OVER () % 720) * interval '1 hour', 'pending' FROM e`,
+        PROJECT,
+        ruleId,
+        JSON.stringify(definition),
         NOW.toISOString(),
-        DUE.toISOString(),
-        CFG.claimBatch,
-        NOW.toISOString()
+        INDEX_PLAN_ROWS
       );
-      return rows.map((row) => Object.values(row).join(' ')).join('\n');
-    });
-    expect(plan).toContain('steps_pending_due_idx');
-    expect(plan).toContain('steps_sending_lease_idx');
-  });
+      await sql.$executeRawUnsafe(
+        'ANALYZE marketing.steps, marketing.enrollments, marketing.rules'
+      );
+      const plan = await sql.$transaction(async (tx) => {
+        const rows = await tx.$queryRawUnsafe<Record<string, string>[]>(
+          `EXPLAIN ${CLAIM_SQL}`,
+          NOW.toISOString(),
+          DUE.toISOString(),
+          CFG.claimBatch,
+          NOW.toISOString()
+        );
+        return rows.map((row) => Object.values(row).join(' ')).join('\n');
+      });
+      expect(plan).toContain('steps_pending_due_idx');
+      expect(plan).toContain('steps_sending_lease_idx');
+    },
+    INDEX_PLAN_TIMEOUT_MS
+  );
 });

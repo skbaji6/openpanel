@@ -175,6 +175,25 @@ describe('template registry', () => {
     expect(whatsapp.code).toBe('invalid_body');
   });
 
+  it("odd slot names like '{{0}}', '0', 'body_01' and '1var' are rejected", async () => {
+    const attempts = [
+      { ...SMS, slot: '{{0}}' },
+      { ...SMS, slot: '1var' },
+      { ...WHATSAPP, slot: '{{0}}' },
+      { ...WHATSAPP, slot: '0' },
+      { ...WHATSAPP, slot: 'body_01' },
+    ];
+    for (const { slot, ...template } of attempts) {
+      const error = await rejection(
+        registry.create(CTX, {
+          ...template,
+          variables: [{ slot, value: 'x' }],
+        })
+      );
+      expect([slot, error.code]).toEqual([slot, 'invalid_body']);
+    }
+  });
+
   it('a value with {{event.x}} is rejected', async () => {
     const error = await rejection(
       registry.create(CTX, {

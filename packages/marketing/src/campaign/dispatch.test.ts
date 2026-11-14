@@ -50,9 +50,18 @@ import {
   createTemplateRegistry,
   type TemplateInput,
 } from '../templates/registry';
-import { type DispatchDeps, runDispatchCycle } from './dispatch';
+import {
+  type DispatchDeps,
+  runDispatchCycle,
+  SEND_DEADLINE_MS,
+} from './dispatch';
+import { hookedSql, isMarkSendingResult } from './dispatch-harness';
 import { createChannelBackoff, createRateBucket } from './pacing';
-import { reapExpiredLeases, SENDING_LEASE_MS } from './recipients';
+import {
+  CAP_LOCK_CHUNK,
+  reapExpiredLeases,
+  SENDING_LEASE_MS,
+} from './recipients';
 import { createCampaignService } from './service';
 
 const ENCRYPTION_KEY = 'a'.repeat(64);
@@ -1010,5 +1019,122 @@ describe('runDispatchCycle', () => {
       'unreachable:no_live_token'
     );
     expect(sent.map((s) => s.to.profileId)).toEqual(['p-00001']);
+  });
+  it('a stored sms template that does not parse fails the campaign with template_not_found', async () => {
+    const members = [phoneMember('s1')];
+    const batches = fakeBatch('sms');
+    const id = await setup({
+      channel: 'sms',
+      members,
+      template: { body: 'not a registry reference' },
+      templateVersion: 1,
+    });
+
+    await runDispatchCycle(depsFor(createFakeSource({ members })));
+
+    expect(batches).toHaveLength(0);
+    const state = await campaign(id);
+    expect([state.state, state.state_reason]).toEqual([
+      'failed',
+      'template_not_found',
+    ]);
+  });
+
+  it('a stored frequency cap that does not parse fails the campaign with invalid_frequency_cap', async () => {
+    const members = pushMembers(2);
+    const sent = fakeChannel('push');
+    const id = await setup({ channel: 'push', members });
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET frequency_cap = '{"max": "lots"}'::jsonb WHERE id = $1::uuid`,
+      id
+    );
+
+    await runDispatchCycle(depsFor(createFakeSource({ members })));
+
+    expect(sent).toHaveLength(0);
+    const state = await campaign(id);
+    expect([state.state, state.state_reason]).toEqual([
+      'failed',
+      'invalid_frequency_cap',
+    ]);
+  });
+
+  it('a capped batch paused between lock chunks delivers the rows already marked sending and releases the rest', async () => {
+    const total = 250;
+    const members = pushMembers(total);
+    const sent = fakeChannel('push');
+    let campaignId = '';
+    let paused = false;
+    // The pause commits right after the first chunk's markSending transaction, before the second chunk starts.
+    const pauseAfterFirstChunk = hookedSql({
+      afterTransaction: async (result) => {
+        if (paused || !isMarkSendingResult(result)) {
+          return;
+        }
+        paused = true;
+        await sql.$executeRawUnsafe(
+          "UPDATE marketing.campaigns SET state = 'paused' WHERE id = $1::uuid",
+          campaignId
+        );
+      },
+    });
+    campaignId = await setup({
+      channel: 'push',
+      members,
+      frequencyCap: { max: 5, periodSeconds: 86_400 },
+    });
+
+    await runDispatchCycle(
+      depsFor(createFakeSource({ members }), { sql: pauseAfterFirstChunk })
+    );
+
+    const firstChunk = members
+      .map((member) => member.id)
+      .sort()
+      .slice(0, CAP_LOCK_CHUNK);
+    expect(sent.map((s) => s.to.profileId).sort()).toEqual(firstChunk);
+    expect(await statuses(campaignId)).toEqual({
+      sent: CAP_LOCK_CHUNK,
+      pending: total - CAP_LOCK_CHUNK,
+    });
+  });
+
+  it('the abort signal fires once the send deadline has passed, and not before', async () => {
+    const members = pushMembers(2);
+    const aborted: boolean[] = [];
+    registerBatchAdapter({
+      id: 'push',
+      configSchema: zFakeConfig,
+      maxBatch: 100,
+      async sendBatch(items, _config, opts) {
+        // One macrotask: a timer due now has fired by then.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        aborted.push(opts.signal?.aborted === true);
+        return items.map((item) => ({
+          profileId: item.profileId,
+          outcome: 'sent' as const,
+        }));
+      },
+    });
+    let marks = 0;
+    // The second batch's clock reaches its deadline right after markSending, before the timer is armed.
+    const jumpOnSecondMark = hookedSql({
+      afterTransaction: (result) => {
+        if (isMarkSendingResult(result)) {
+          marks += 1;
+          if (marks === 2) {
+            advance(SEND_DEADLINE_MS);
+          }
+        }
+      },
+    });
+    // A rate of 0.1 per second claims one recipient per cycle.
+    await setup({ channel: 'push', members, settings: { ratePerSecond: 0.1 } });
+
+    await runUntilIdle(
+      depsFor(createFakeSource({ members }), { sql: jumpOnSecondMark })
+    );
+
+    expect(aborted).toEqual([false, true]);
   });
 });

@@ -254,4 +254,41 @@ describe('runScheduleTick', () => {
       template_version: null,
     });
   });
+  it('a bad campaign and a healthy one in one batch: the bad one fails and the healthy one still starts', async () => {
+    const bad = await insertCampaign({
+      channel: 'sms',
+      template: { templateId: 'not-a-uuid' },
+      sendAt: minutesAgo(2),
+    });
+    const healthy = await insertCampaign({
+      projectId: 'p2',
+      sendAt: minutesAgo(1),
+    });
+    expect(await tick()).toEqual({ started: 1, missed: 0 });
+    expect(await campaign(bad)).toMatchObject({
+      state: 'failed',
+      state_reason: 'template_unavailable',
+    });
+    expect((await campaign(healthy))?.state).toBe('running');
+  });
+
+  it('a queued start-now sms campaign gets its template pinned when it starts', async () => {
+    const running = await insertCampaign({ state: 'running' });
+    const template = await templates.create(CTX, SMS_TEMPLATE);
+    await templates.update(CTX, template.templateId, SMS_TEMPLATE, 1);
+    const queued = await insertCampaign({
+      channel: 'sms',
+      template: { templateId: template.templateId },
+      sendKind: 'now',
+    });
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET state = 'completed' WHERE id = $1::uuid`,
+      running
+    );
+    expect(await tick()).toEqual({ started: 1, missed: 0 });
+    expect(await campaign(queued)).toMatchObject({
+      state: 'running',
+      template_version: 2,
+    });
+  });
 });

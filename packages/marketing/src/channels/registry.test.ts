@@ -68,8 +68,11 @@ describe('registerDefaultAdapters', () => {
       maxBatch: 1,
       sendBatch: () => Promise.resolve([]),
     });
-    expect(getBatchAdapter('sms').id).toBe('sms');
-    unregisterBatchAdapter('sms');
+    try {
+      expect(getBatchAdapter('sms').id).toBe('sms');
+    } finally {
+      unregisterBatchAdapter('sms');
+    }
   });
 
   it("configSchemaFor('push') is the push config schema", () => {

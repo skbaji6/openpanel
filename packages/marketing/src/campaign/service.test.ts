@@ -880,6 +880,27 @@ describe('email quota gate', () => {
     expect(started.state).toBe('running');
   });
 
+  it('a schedule with a valid future send time over the remaining quota is quota_spread_required', async () => {
+    const { campaigns, draft } = await emailDraft(QUOTA);
+    await campaigns.update(
+      CTX,
+      draft.id,
+      { sendAtLocal: '2026-11-10T09:00' },
+      1
+    );
+    await campaigns.countPreview(CTX, draft.id);
+    const error = await caught(campaigns.schedule(CTX, draft.id, {}));
+    expect([error.status, error.code, error.details]).toEqual([
+      409,
+      'quota_spread_required',
+      { count: MEMBERS, remainingToday: QUOTA, daysNeeded: EXPECTED_DAYS },
+    ]);
+    const scheduled = await campaigns.schedule(CTX, draft.id, {
+      confirm: { count: MEMBERS, channel: 'email', spreadOverDays: true },
+    });
+    expect(scheduled.state).toBe('scheduled');
+  });
+
   it('a start within the remaining quota needs no spreadOverDays', async () => {
     const { campaigns, draft } = await emailDraft(MEMBERS);
     expect((await campaigns.start(CTX, draft.id, {})).state).toBe('running');
