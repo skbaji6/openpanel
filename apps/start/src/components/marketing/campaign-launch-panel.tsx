@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   describeMarketingError,
@@ -23,7 +23,9 @@ import {
   labelEstimateIssue,
   launchAction,
   launchSteps,
+  PREVIEW_TTL_MS,
   previewIsFresh,
+  startConfirmation,
   testSendIdProblem,
   testSendIsPending,
 } from './campaign-launch';
@@ -46,7 +48,8 @@ import { showConfirm, useOnPushModal } from '@/modals';
 
 export const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
 const RECOUNT_NOTE =
-  'The number of students changed or the count was out of date, so it was counted again. Check the new count and start again.';
+  'The number of students changed or the count is out of date. Counting again…';
+const RECOUNTED_NOTE = 'Counted again. Check the new number and start again.';
 
 export const campaignPath = (campaign: CampaignRow, action: string) =>
   `campaigns/${encodeURIComponent(campaign.id)}/${action}`;
@@ -98,11 +101,13 @@ function AdminOnlyNote() {
 function CountStep({
   campaign,
   fresh,
+  freshnessUnknown,
   counting,
   onCount,
 }: {
   campaign: CampaignRow;
   fresh: boolean;
+  freshnessUnknown: boolean;
   counting: boolean;
   onCount: () => void;
 }) {
@@ -131,7 +136,13 @@ function CountStep({
           <dd>{new Date(preview.countedAt).toLocaleString()}</dd>
         </dl>
       )}
-      {preview && !fresh && (
+      {freshnessUnknown && (
+        <p className="text-destructive text-sm">
+          The audience could not be loaded, so the age of this count cannot be
+          checked. Reload the page, or count again.
+        </p>
+      )}
+      {preview && !(fresh || freshnessUnknown) && (
         <p className="text-destructive text-sm">
           This count is out of date. Count again before starting.
         </p>
@@ -317,9 +328,13 @@ function TestStep({
 function LaunchStep({
   campaign,
   onRecount,
+  fresh,
+  counting,
 }: {
   campaign: CampaignRow;
   onRecount: () => void;
+  fresh: boolean;
+  counting: boolean;
 }) {
   const marketingFetch = useMarketingFetch();
   const storeCampaign = useStoreCampaign();
@@ -342,7 +357,7 @@ function LaunchStep({
     showConfirm({ title, text, onConfirm: () => send(confirm) });
   };
 
-  const handleError = (error: unknown, sent: Confirmation | undefined) => {
+  const handleError = (error: unknown, sent: Confirmation) => {
     const decision =
       error instanceof MarketingApiError ? confirmFromError(error, sent) : null;
     if (!decision) {
@@ -370,7 +385,7 @@ function LaunchStep({
     );
   };
 
-  async function send(confirm?: Confirmation) {
+  async function send(confirm: Confirmation) {
     if (inFlight.current) {
       return;
     }
@@ -381,7 +396,7 @@ function LaunchStep({
     try {
       saved = await marketingFetch<CampaignRow>(
         campaignPath(campaign, action.path),
-        { method: 'POST', body: JSON.stringify(confirm ? { confirm } : {}) }
+        { method: 'POST', body: JSON.stringify({ confirm }) }
       );
     } catch (error) {
       failure = error;
@@ -399,26 +414,35 @@ function LaunchStep({
     handleError(failure, confirm);
   }
 
+  const begin = () => {
+    const plan = startConfirmation(campaign, fresh);
+    if (!plan || inFlight.current || dialogOpen.current) {
+      return;
+    }
+    ask(plan.title, plan.text, plan.confirm);
+  };
+
   return (
-    <Step number={4} title={action.path === 'start' ? 'Start' : 'Schedule'}>
+    <Step number={4} title={action.title}>
       <p className="text-muted-foreground text-xs">
-        Runs the checks again on the server. Large audiences ask you to confirm
-        the number of students first.
+        Asks you to confirm the counted number of students, then runs the checks
+        again on the server.
       </p>
       <div>
         <Button
-          disabled={dialogShown}
+          disabled={dialogShown || counting || !fresh}
           loading={pending}
-          onClick={() => {
-            if (!(inFlight.current || dialogOpen.current)) {
-              send();
-            }
-          }}
+          onClick={begin}
           type="button"
         >
           {action.label}
         </Button>
       </div>
+      {!fresh && (
+        <p className="text-muted-foreground text-xs">
+          Count the audience first
+        </p>
+      )}
     </Step>
   );
 }
@@ -433,6 +457,20 @@ export function CampaignLaunchPanel({ campaign }: { campaign: CampaignRow }) {
     audiences.data?.audiences.find((row) => row.id === campaign.audienceId)
       ?.version ?? null;
   const fresh = previewIsFresh(campaign, Date.now(), audienceVersion);
+  const freshnessUnknown =
+    Boolean(audiences.error) && campaign.countPreview !== null;
+  const [, setExpiredAt] = useState(0);
+  const countedAt = campaign.countPreview?.countedAt;
+
+  // Re-render when the preview ages out, so the tick and the estimate go away on time.
+  useEffect(() => {
+    if (!(fresh && countedAt)) {
+      return;
+    }
+    const remaining = Date.parse(countedAt) + PREVIEW_TTL_MS - Date.now();
+    const timer = setTimeout(() => setExpiredAt(Date.now()), remaining + 1);
+    return () => clearTimeout(timer);
+  }, [fresh, countedAt]);
   const campaignKey = queryKey('campaigns', campaign.id);
 
   const count = useMutation({
@@ -501,6 +539,7 @@ export function CampaignLaunchPanel({ campaign }: { campaign: CampaignRow }) {
         campaign={campaign}
         counting={count.isPending}
         fresh={fresh}
+        freshnessUnknown={freshnessUnknown}
         onCount={() => count.mutate()}
       />
       <EstimateStep
@@ -515,9 +554,18 @@ export function CampaignLaunchPanel({ campaign }: { campaign: CampaignRow }) {
         testSends={testSends.data}
       />
       {isAdmin ? (
-        <LaunchStep campaign={campaign} onRecount={() => count.mutate()} />
+        <LaunchStep
+          campaign={campaign}
+          counting={count.isPending}
+          fresh={fresh}
+          onRecount={() =>
+            count.mutate(undefined, {
+              onSuccess: () => toast.info(RECOUNTED_NOTE),
+            })
+          }
+        />
       ) : (
-        <Step number={4} title={launchAction(campaign).label}>
+        <Step number={4} title={launchAction(campaign).title}>
           <AdminOnlyNote />
         </Step>
       )}

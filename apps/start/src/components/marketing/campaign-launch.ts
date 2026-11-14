@@ -9,6 +9,7 @@ import {
   MAX_ID_LENGTH,
   type TestSendRow,
 } from './campaign-contract';
+import { CHANNEL_LABELS } from './campaign-form';
 import { ERROR_LABELS } from './error-labels';
 import { labelSettingsIssue } from './reason-labels';
 
@@ -191,7 +192,7 @@ export function testSendIdProblem(input: string): string | null {
   if (id === '') {
     return ID_PROBLEM_EMPTY;
   }
-  if (looksLikeContacts(id) || id.startsWith('+')) {
+  if (looksLikeContacts(id)) {
     return ID_PROBLEM_CONTACT;
   }
   return id.length > MAX_ID_LENGTH ? ID_PROBLEM_LONG : null;
@@ -201,12 +202,37 @@ export function testSendIdProblem(input: string): string | null {
 export function launchAction(row: CampaignRow): {
   path: 'start' | 'schedule';
   label: string;
+  title: string;
 } {
   if (!row.sendAtLocal) {
-    return { path: 'start', label: 'Start now' };
+    return { path: 'start', label: 'Start now', title: 'Start' };
   }
   return {
     path: 'schedule',
     label: `Schedule for ${row.sendAtLocal.replace('T', ' ')} (${row.timezone})`,
+    title: 'Schedule',
+  };
+}
+
+// Every start names the count on screen, so the server refuses it (confirmation_mismatch) when that count is no longer true.
+export function startConfirmation(
+  row: CampaignRow,
+  fresh: boolean
+): { title: string; text: string; confirm: Confirmation } | null {
+  const preview = row.countPreview;
+  if (!(preview && fresh)) {
+    return null;
+  }
+  const action = launchAction(row);
+  const channelName = CHANNEL_LABELS[row.channel];
+  const audience = `${preview.count} students by ${channelName}`;
+  const title =
+    action.path === 'start'
+      ? `Send to ${audience}?`
+      : `${action.label} to ${audience}?`;
+  return {
+    title,
+    text: `${preview.count} students will get this campaign by ${channelName}. Messages that went out cannot be recalled.`,
+    confirm: { count: preview.count, channel: row.channel },
   };
 }

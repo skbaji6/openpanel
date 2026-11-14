@@ -141,6 +141,10 @@ describe('reason labels', () => {
     }
     expect(labelTestSendReason('rate_limited')).not.toContain('retry');
     expect(labelTestSendReason('channel_error')).not.toContain('retry');
+    for (const code of ['deadline', 'breaker', 'retry']) {
+      expect(labelTestSendReason(code), code).toContain('not sent');
+      expect(labelTestSendReason(code), code).toContain('not be retried');
+    }
     expect(labelTestSendReason('no_phone')).toBe('No phone number on file');
   });
 });

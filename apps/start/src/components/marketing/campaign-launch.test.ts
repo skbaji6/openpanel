@@ -15,6 +15,7 @@ import {
   launchSteps,
   PREVIEW_TTL_MS,
   previewIsFresh,
+  startConfirmation,
   testSendIdProblem,
   testSendIsPending,
 } from './campaign-launch';
@@ -317,6 +318,7 @@ describe('launchAction', () => {
     expect(launchAction(campaign())).toEqual({
       path: 'start',
       label: 'Start now',
+      title: 'Start',
     });
   });
 
@@ -325,7 +327,59 @@ describe('launchAction', () => {
       {
         path: 'schedule',
         label: 'Schedule for 2026-11-20 09:30 (Asia/Kolkata)',
+        title: 'Schedule',
       }
     );
+  });
+});
+
+describe('confirmFromError malformed spread', () => {
+  test('quota_spread_required with malformed details is not handled', () => {
+    expect(
+      confirmFromError(
+        apiError('quota_spread_required', {
+          count: 50,
+          remainingToday: 'some',
+          daysNeeded: 2,
+        }),
+        { count: 50, channel: 'email' }
+      )
+    ).toBeNull();
+    expect(
+      confirmFromError(apiError('quota_spread_required', null), undefined)
+    ).toBeNull();
+  });
+});
+
+describe('startConfirmation', () => {
+  test('below the threshold it still confirms the count shown', () => {
+    const row = campaign({
+      confirmThreshold: 100,
+      countPreview: preview({ count: 50 }),
+    });
+    const result = startConfirmation(row, true);
+    expect(result?.confirm).toEqual({ count: 50, channel: 'email' });
+    expect(result?.title).toBe('Send to 50 students by Email?');
+    expect(result?.text).toContain('50');
+  });
+
+  test('no start without a fresh shown count', () => {
+    expect(startConfirmation(campaign(), false)).toBeNull();
+    expect(
+      startConfirmation(campaign({ countPreview: null }), true)
+    ).toBeNull();
+  });
+
+  test('a schedule names the time in the title', () => {
+    const row = campaign({
+      channel: 'sms',
+      sendAtLocal: '2026-11-20T09:30',
+      countPreview: preview({ count: 7 }),
+    });
+    expect(startConfirmation(row, true)).toMatchObject({
+      title:
+        'Schedule for 2026-11-20 09:30 (Asia/Kolkata) to 7 students by SMS?',
+      confirm: { count: 7, channel: 'sms' },
+    });
   });
 });

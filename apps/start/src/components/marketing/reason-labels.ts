@@ -87,6 +87,10 @@ const TEST_SEND_REASONS: Record<string, string> = {
   uncertain: 'Sending was interrupted; it may or may not have arrived',
   rate_limited: 'The channel was busy; not sent',
   channel_error: 'Channel provider error; not sent',
+  deadline: 'Did not go out in time; not sent and will not be retried',
+  breaker:
+    'Held back while the provider is failing; not sent and will not be retried',
+  retry: 'The provider asked to try later; not sent and will not be retried',
 };
 
 const PROVIDER_PREFIXES = ['msg91 ', 'fcm ', 'smtp ', 'http '];
