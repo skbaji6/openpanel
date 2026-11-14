@@ -316,6 +316,19 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 - History retention and API-key list/revoke endpoints are not built in; the README has the SQL recipes.
 - Full list: the spec's "Known limitations / follow-ups".
 
+### Measured performance
+
+Measured on 2026-11-14 with `bun scripts/load-campaign.ts --mode <mode>` (20,000 recipients, 2 dispatch loops, the real dispatch lane against a fake audience source and a fake provider). Machine: developer laptop, Windows 11, 4-core Intel i5-1135G7, 15.7 GB RAM, Postgres and Redis on the same machine. Re-measure on the target host before relying on these numbers.
+
+| Mode | Result | Target |
+|---|---|---|
+| `noop` (no-op adapter, instant source) | 20,000 sent in 24.7 s, 808.7 sends/s, 0 duplicates, 0 missing | 1,000 sends/s: not met on this laptop |
+| `isolation` (200 due journey steps, idle then during the campaign) | idle median 1,848 ms, during median 1,577 ms, campaign 442.3 sends/s | during at most 2x idle: met |
+| `slow-api` (2 s per lookup) | finished in 66.8 s, 0 duplicates, 0 missing, 0 uncertain | finishes, no duplicates: met |
+| `fcm` (150 ms latency, 600 tokens/s, one token each) | finished in 311.0 s, 64.3 sends/s, 0 duplicates, 0 missing | within 600 s: met |
+
+Journey latency is measured from `due_at` to `sent_at` with the journey ticker running every second, so it includes up to one tick of waiting.
+
 ## 15. Rules for changing the code
 
 This is a fork. Never edit OpenPanel's existing files for the plugin; see [`../AGENTS.md`](../AGENTS.md) and [`../TOUCHPOINTS.md`](../TOUCHPOINTS.md).
