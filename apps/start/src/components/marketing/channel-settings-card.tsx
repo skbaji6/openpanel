@@ -12,13 +12,15 @@ import type {
   ChannelSettingsResponse,
 } from './campaign-contract';
 import {
+  type ChannelStatus,
+  channelStatus,
+  rateHelp,
   type SettingsForm,
   settingsFieldsFor,
   settingsProblems,
   toSettingsBody,
   toSettingsForm,
 } from './channel-settings';
-import { labelSettingsIssue } from './reason-labels';
 import { useMarketingRole } from './use-marketing-role';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import {
@@ -31,13 +33,6 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 
 const VERSION_CONFLICT = 'version_conflict';
-
-function statusLine(loaded: ChannelSettingsResponse): string {
-  if (loaded.issues.length === 0) {
-    return 'Ready';
-  }
-  return loaded.issues.map(labelSettingsIssue).join('. ');
-}
 
 function SettingsFields({
   channel,
@@ -74,9 +69,9 @@ function SettingsFields({
           expectedVersion: loaded.version,
         }),
       }),
-    onSuccess() {
+    onSuccess(saved) {
+      client.setQueryData(queryKey('channels', channel, 'settings'), saved);
       toast.success('Sending settings saved');
-      refetch();
     },
     onError(error) {
       if (
@@ -114,7 +109,7 @@ function SettingsFields({
         )}
         {has('ratePerSecond') && (
           <InputWithLabel
-            hint="Messages per second your MSG91 account allows. Required"
+            hint={rateHelp(channel)}
             label="Rate per second"
             min={0}
             onChange={(event) => set('ratePerSecond', event.target.value)}
@@ -234,9 +229,11 @@ function SettingsFields({
         )}
       </fieldset>
       <IntegrationCardFooter className="justify-between">
-        <p className="text-muted-foreground text-xs">
-          {isAdmin ? '' : 'Only owners and admins can do this'}
-        </p>
+        {!isAdmin && (
+          <p className="text-muted-foreground text-xs">
+            Only owners and admins can do this
+          </p>
+        )}
         {isAdmin && (
           <Button
             disabled={problems.length > 0}
@@ -251,12 +248,25 @@ function SettingsFields({
   );
 }
 
+function StatusLine({ status }: { status: ChannelStatus }) {
+  return (
+    <p className="px-4 pt-4 text-sm" role="status">
+      <Badge variant={status.ready ? 'success' : 'outline'}>
+        {status.ready ? 'Ready' : 'Needs attention'}
+      </Badge>{' '}
+      {status.ready ? '' : status.lines.join('. ')}
+    </p>
+  );
+}
+
 export function ChannelSettingsCard({
   channel,
   title,
+  credentialsConfigured,
 }: {
   channel: CampaignChannel;
   title: string;
+  credentialsConfigured: boolean | null;
 }) {
   const marketingFetch = useMarketingFetch();
   const queryKey = useMarketingQueryKey();
@@ -273,14 +283,13 @@ export function ChannelSettingsCard({
         <h2 className="title">Sending settings</h2>
       </IntegrationCardHeader>
       {settings.data && (
-        <p className="px-4 pt-4 text-sm" role="status">
-          <Badge
-            variant={settings.data.issues.length === 0 ? 'success' : 'outline'}
-          >
-            {settings.data.issues.length === 0 ? 'Ready' : 'Needs attention'}
-          </Badge>{' '}
-          {settings.data.issues.length === 0 ? '' : statusLine(settings.data)}
-        </p>
+        <StatusLine
+          status={channelStatus({
+            isAdmin,
+            credentialsConfigured,
+            issues: settings.data.issues,
+          })}
+        />
       )}
       {settings.error && (
         <p className="p-4 text-destructive text-sm">

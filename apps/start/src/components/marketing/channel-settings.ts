@@ -1,4 +1,5 @@
 import type { CampaignChannel, ChannelSettings } from './campaign-contract';
+import { labelSettingsIssue } from './reason-labels';
 
 export type CredentialKind =
   | 'text'
@@ -226,37 +227,105 @@ export function toSettingsBody(form: SettingsForm): ChannelSettings {
   };
 }
 
+const MAX_CONCURRENCY = 200;
+const MAX_RATE_PER_SECOND = 10_000;
+const MAX_PRICE = 1000;
+const MAX_DAILY_QUOTA = 10_000_000;
+
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function settingsProblems(
   form: SettingsForm,
   channel: CampaignChannel
 ): string[] {
   const problems: string[] = [];
   const concurrency = Number(form.concurrency);
-  if (!(Number.isInteger(concurrency) && concurrency >= 1)) {
-    problems.push('Concurrency must be a whole number of at least 1');
+  if (
+    !(
+      Number.isInteger(concurrency) &&
+      concurrency >= 1 &&
+      concurrency <= MAX_CONCURRENCY
+    )
+  ) {
+    problems.push(
+      `Concurrency must be a whole number from 1 to ${MAX_CONCURRENCY}`
+    );
   }
   const rate = numberOrNull(form.ratePerSecond);
-  if (rate !== null && !(rate > 0)) {
-    problems.push('Rate must be more than 0');
+  if (rate !== null && !(rate > 0 && rate <= MAX_RATE_PER_SECOND)) {
+    problems.push(
+      `Rate must be more than 0 and at most ${MAX_RATE_PER_SECOND}`
+    );
   }
   if (form.quietEnabled && form.quietStart === form.quietEnd) {
     problems.push('Quiet hours start and end must differ');
   }
+  if (form.quietEnabled && !isTimeZone(form.quietTimezone)) {
+    problems.push('Quiet hours time zone is not a known time zone');
+  }
   const amount = numberOrNull(form.priceAmount);
-  if (amount !== null && !(amount >= 0)) {
-    problems.push('Price must be 0 or more');
+  if (amount !== null && !(amount >= 0 && amount <= MAX_PRICE)) {
+    problems.push(`Price must be from 0 to ${MAX_PRICE}`);
   }
   if (amount !== null && !CURRENCY.test(form.priceCurrency.trim())) {
     problems.push('Currency is three capital letters, for example INR');
   }
-  const quota = numberOrNull(form.dailyQuota);
-  const quotaApplies = settingsFieldsFor(channel).includes('dailyQuota');
-  if (
-    quotaApplies &&
-    quota !== null &&
-    !(Number.isInteger(quota) && quota >= 1)
-  ) {
-    problems.push('Daily quota must be a whole number of at least 1');
+  if (settingsFieldsFor(channel).includes('dailyQuota')) {
+    const quota = numberOrNull(form.dailyQuota);
+    if (
+      quota !== null &&
+      !(Number.isInteger(quota) && quota >= 1 && quota <= MAX_DAILY_QUOTA)
+    ) {
+      problems.push(
+        `Daily quota must be a whole number from 1 to ${MAX_DAILY_QUOTA}`
+      );
+    }
+    if (!isTimeZone(form.quotaTimezone)) {
+      problems.push('Quota time zone is not a known time zone');
+    }
   }
   return problems;
+}
+
+export function rateHelp(channel: CampaignChannel): string {
+  if (channel === 'sms' || channel === 'whatsapp') {
+    return 'Messages per second your MSG91 account allows. Required';
+  }
+  if (channel === 'email') {
+    return 'Messages per second your mail provider allows. Required';
+  }
+  return 'Optional ceiling in messages per second. Leave empty for no limit';
+}
+
+export interface ChannelStatus {
+  ready: boolean;
+  lines: string[];
+}
+
+// credentialsConfigured is null when unknown (non-admins never fetch credentials).
+export function channelStatus(input: {
+  isAdmin: boolean;
+  credentialsConfigured: boolean | null;
+  issues: string[];
+}): ChannelStatus {
+  const labelled = input.issues.map(labelSettingsIssue);
+  if (input.credentialsConfigured === false) {
+    return { ready: false, lines: ['Credentials not set up', ...labelled] };
+  }
+  if (!(input.isAdmin && input.credentialsConfigured === true)) {
+    return {
+      ready: false,
+      lines: labelled.length > 0 ? labelled : ['Sending settings complete'],
+    };
+  }
+  return labelled.length > 0
+    ? { ready: false, lines: labelled }
+    : { ready: true, lines: ['Ready'] };
 }

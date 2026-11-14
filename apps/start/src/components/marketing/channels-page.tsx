@@ -286,7 +286,11 @@ function ChannelCard({ channel }: { channel: CampaignChannel }) {
           />
         )}
       </section>
-      <ChannelSettingsCard channel={channel} title={CHANNEL_TITLES[channel]} />
+      <ChannelSettingsCard
+        channel={channel}
+        credentialsConfigured={config.data?.configured ?? null}
+        title={CHANNEL_TITLES[channel]}
+      />
     </div>
   );
 }
