@@ -360,6 +360,48 @@ describe('msg91 whatsapp adapter', () => {
     expect(fake.requests).toHaveLength(0);
   });
 
+  it('a phone is sent as digits only, with country code 91 added to a ten digit number', async () => {
+    await run([
+      item(1, { phone: '98765 43210' }),
+      item(2, { phone: '+91 (98765) 43-211' }),
+    ]);
+    const body = fake.requests[0]?.body as WaBody;
+    expect(
+      body.payload.template.to_and_components.map((entry) => entry.to)
+    ).toEqual([['919876543210'], ['919876543211']]);
+  });
+
+  it('a phone with fewer than eleven digits after normalising is failed no_phone without a call', async () => {
+    const results = await run([item(1, { phone: '+1 555 0100' })]);
+    expect(results).toEqual([
+      { profileId: 'p1', outcome: 'failed', reason: 'no_phone' },
+    ]);
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('a configured default country code is added to a ten digit number', async () => {
+    await createMsg91WhatsAppAdapter().sendBatch(
+      [item(1, { phone: '2025550100' })],
+      { ...config(), defaultCountryCode: '1' },
+      { concurrency: CONCURRENCY }
+    );
+    const body = fake.requests[0]?.body as WaBody;
+    expect(body.payload.template.to_and_components[0]?.to).toEqual([
+      '12025550100',
+    ]);
+  });
+
+  it('a default country code must be one to four digits', () => {
+    const parses = (defaultCountryCode: string) =>
+      zMsg91WhatsAppConfig.safeParse({
+        authKey: AUTH_KEY,
+        integratedNumber: INTEGRATED,
+        defaultCountryCode,
+      }).success;
+    expect(parses('1')).toBe(true);
+    expect(parses('91a')).toBe(false);
+  });
+
   it('a non-provider message throws before any call', async () => {
     const bad: BatchItem = {
       ...item(1),

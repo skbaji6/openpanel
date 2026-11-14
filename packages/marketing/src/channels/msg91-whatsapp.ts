@@ -12,6 +12,8 @@ import {
   phoneSecrets,
   providerReason,
   sendMsg91Groups,
+  withMsg91Phone,
+  zMsg91CountryCode,
 } from './msg91-http';
 
 export const MSG91_WHATSAPP_BASE_URL = 'https://api.msg91.com';
@@ -26,6 +28,7 @@ export const msg91WhatsAppConfigSchema = (allowHosts: readonly string[] = []) =>
     authKey: z.string().min(8).max(128),
     integratedNumber: z.string().regex(/^[0-9]{8,15}$/),
     baseUrl: msg91BaseUrl(allowHosts).optional(),
+    defaultCountryCode: zMsg91CountryCode,
   });
 export const zMsg91WhatsAppConfig = msg91WhatsAppConfigSchema();
 export type Msg91WhatsAppConfig = z.infer<typeof zMsg91WhatsAppConfig>;
@@ -137,11 +140,11 @@ export function createMsg91WhatsAppAdapter(
         if (!('kind' in item.message)) {
           throw new Error('the whatsapp adapter only sends provider messages');
         }
-        slotsOf.set(item, item.message.variables);
         const ref = zWhatsAppProviderRef.parse(
           item.message.version.providerRef
         );
-        if (!item.to.phone) {
+        const sendable = withMsg91Phone(item, config.defaultCountryCode);
+        if (!sendable) {
           results.push({
             profileId: item.profileId,
             outcome: 'failed',
@@ -149,6 +152,7 @@ export function createMsg91WhatsAppAdapter(
           });
           continue;
         }
+        slotsOf.set(sendable, item.message.variables);
         const integratedNumber =
           ref.integratedNumber ?? config.integratedNumber;
         const key = [
@@ -158,7 +162,7 @@ export function createMsg91WhatsAppAdapter(
           integratedNumber,
         ].join('|');
         const group = groups.get(key) ?? { ref, integratedNumber, items: [] };
-        group.items.push(item);
+        group.items.push(sendable);
         groups.set(key, group);
       }
       const secrets = [

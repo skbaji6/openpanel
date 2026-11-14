@@ -5,6 +5,8 @@ import {
   MSG91_SMS_BASE_URL,
   msg91BaseUrl,
   sendMsg91Groups,
+  withMsg91Phone,
+  zMsg91CountryCode,
 } from './msg91-http';
 
 export const MSG91_SMS_MAX_RECIPIENTS = 100;
@@ -16,6 +18,7 @@ export const msg91SmsConfigSchema = (allowHosts: readonly string[] = []) =>
   z.strictObject({
     authKey: z.string().min(8).max(128),
     baseUrl: msg91BaseUrl(allowHosts).optional(),
+    defaultCountryCode: zMsg91CountryCode,
   });
 export const zMsg91SmsConfig = msg91SmsConfigSchema();
 export type Msg91SmsConfig = z.infer<typeof zMsg91SmsConfig>;
@@ -62,7 +65,8 @@ export function createMsg91SmsAdapter(
           throw new Error('the sms adapter only sends provider messages');
         }
         const ref = zSmsProviderRef.parse(item.message.version.providerRef);
-        if (!item.to.phone) {
+        const sendable = withMsg91Phone(item, config.defaultCountryCode);
+        if (!sendable) {
           results.push({
             profileId: item.profileId,
             outcome: 'failed',
@@ -72,7 +76,7 @@ export function createMsg91SmsAdapter(
         }
         const key = `${ref.flowId}|${ref.senderId ?? ''}`;
         const group = groups.get(key) ?? { ref, items: [] };
-        group.items.push(item);
+        group.items.push(sendable);
         groups.set(key, group);
       }
       const url = `${config.baseUrl ?? MSG91_SMS_BASE_URL}${FLOW_PATH}`;

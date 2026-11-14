@@ -274,7 +274,7 @@ A campaign can start only when its channel has a stored credential; `sms`, `what
 | `GET /marketing/channels/{channel}/settings` | none | `{ channel, settings, version, configured, issues }` |
 | `PUT /marketing/channels/{channel}/settings` | `{ settings, expectedVersion }` | the same, with the new `version`; a stale `expectedVersion` is `version_conflict` |
 
-Credentials: `sms` is `{ authKey, baseUrl? }`; `whatsapp` is `{ authKey, integratedNumber, baseUrl? }` (`baseUrl` is an `https` origin on a `*.msg91.com` host, default `https://control.msg91.com` for SMS and `https://api.msg91.com` for WhatsApp; leave it out unless MSG91 gives you another host. Any other host is rejected on save and at send time unless it is listed in `MARKETING_WEBHOOK_ALLOW_HOSTS`, which is how a local fake is reached). `email`, `push` and `webhook` are as in section 6.
+Credentials: `sms` is `{ authKey, baseUrl?, defaultCountryCode? }`; `whatsapp` is `{ authKey, integratedNumber, baseUrl?, defaultCountryCode? }`. Before sending, a recipient's phone is reduced to its digits, a ten digit number gets `defaultCountryCode` (one to four digits, default `91`) in front, and a number with fewer than eleven digits is never sent: the recipient fails with `no_phone`. (`baseUrl` is an `https` origin on a `*.msg91.com` host, default `https://control.msg91.com` for SMS and `https://api.msg91.com` for WhatsApp; leave it out unless MSG91 gives you another host. Any other host is rejected on save and at send time unless it is listed in `MARKETING_WEBHOOK_ALLOW_HOSTS`, which is how a local fake is reached). `email`, `push` and `webhook` are as in section 6.
 
 Settings keys (one row per project and channel; `GET` returns the defaults until you save):
 

@@ -4,6 +4,13 @@ import { retryAfterMs } from './retry-after';
 import { SEND_TIMEOUT_MS } from './timeouts';
 
 export const MSG91_SMS_BASE_URL = 'https://control.msg91.com';
+export const DEFAULT_COUNTRY_CODE = '91';
+const NATIONAL_NUMBER_DIGITS = 10;
+const MIN_INTERNATIONAL_DIGITS = 11;
+export const zMsg91CountryCode = z
+  .string()
+  .regex(/^[0-9]{1,4}$/)
+  .optional();
 
 const HTTP_OK_MIN = 200;
 const HTTP_REDIRECT_MIN = 300;
@@ -170,6 +177,22 @@ function requestIdOf(
 }
 
 export const digitsOf = (phone: string) => phone.replace(/\D/g, '');
+
+// MSG91 takes digits with the country code; a shorter number cannot be one and is never sent.
+export function withMsg91Phone(
+  item: BatchItem,
+  countryCode = DEFAULT_COUNTRY_CODE
+): BatchItem | null {
+  const digits = digitsOf(item.to.phone ?? '');
+  const phone =
+    digits.length === NATIONAL_NUMBER_DIGITS
+      ? `${countryCode}${digits}`
+      : digits;
+  if (phone.length < MIN_INTERNATIONAL_DIGITS) {
+    return null;
+  }
+  return { ...item, to: { ...item.to, phone } };
+}
 
 // A provider may echo a phone in either form, so both count as secrets.
 export const phoneSecrets = (phone: string | undefined): string[] =>

@@ -31,8 +31,8 @@ const PUBLIC_CONFIG_FIELDS: Record<string, string[]> = {
   email: ['host', 'port', 'secure', 'user', 'from'],
   webhook: ['url'],
   push: [],
-  sms: ['baseUrl'],
-  whatsapp: ['integratedNumber', 'baseUrl'],
+  sms: ['baseUrl', 'defaultCountryCode'],
+  whatsapp: ['integratedNumber', 'baseUrl', 'defaultCountryCode'],
 };
 const MAX_NAME_LENGTH = 200;
 const MAX_FILTERS = 50;
