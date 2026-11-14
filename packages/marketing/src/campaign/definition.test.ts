@@ -26,6 +26,10 @@ describe('push campaign template', () => {
     ['an http image', { imageUrl: 'http://x' }],
     ['an image with a variable', { imageUrl: 'https://x.test/{{name}}.png' }],
     ['a javascript link', { link: 'javascript:alert(1)' }],
+    [
+      'an image url with credentials',
+      { imageUrl: 'https://user:pw@cdn.example.test/a.png' },
+    ],
     ['a data link', { link: 'data:text/html,hi' }],
     ['a link that is not a URL', { link: 'not a url' }],
     ['a link with a variable', { link: 'sia://c/{{id}}' }],

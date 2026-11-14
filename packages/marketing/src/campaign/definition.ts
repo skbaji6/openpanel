@@ -87,12 +87,18 @@ const noVariables = (value: string) => !value.includes('{{');
 
 const zImageUrl = z
   .string()
+  .trim()
   .max(MAX_URL_LENGTH)
   .refine((value) => parsedUrl(value)?.protocol === 'https:', 'must be https')
+  .refine((value) => {
+    const url = parsedUrl(value);
+    return !(url?.username || url?.password);
+  }, 'must not contain a user name or password')
   .refine(noVariables, 'must not contain variables');
 // App deep links such as sia://course/12 are allowed; only schemes that run code or read files are not.
 const zLink = z
   .string()
+  .trim()
   .max(MAX_URL_LENGTH)
   .refine((value) => {
     const url = parsedUrl(value);
