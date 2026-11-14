@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
+import { beforeAll, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { truncateMarketingTables } from '../db/test-helpers';
@@ -290,5 +290,33 @@ describe('runScheduleTick', () => {
       state: 'running',
       template_version: 2,
     });
+  });
+  it('a campaign whose template pin throws stays scheduled and a healthy one in the same batch still starts', async () => {
+    const broken = await insertCampaign({ sendAt: minutesAgo(2) });
+    const healthy = await insertCampaign({
+      projectId: 'p2',
+      sendAt: minutesAgo(1),
+    });
+    const logged = spyOn(console, 'error').mockImplementation(() => undefined);
+    let result: Awaited<ReturnType<typeof runScheduleTick>>;
+    let line = '';
+    try {
+      result = await runScheduleTick({
+        sql,
+        now: () => now,
+        pinTemplate: (tx, projectId, channel, template) =>
+          projectId === 'p1'
+            ? Promise.reject(new Error('registry exploded'))
+            : pinTemplate(tx, projectId, channel, template),
+      });
+      line = logged.mock.calls.flat().map(String).join(' ');
+    } finally {
+      logged.mockRestore();
+    }
+    expect(result).toEqual({ started: 1, missed: 0 });
+    expect((await campaign(broken))?.state).toBe('scheduled');
+    expect((await campaign(healthy))?.state).toBe('running');
+    expect(line).toContain(broken);
+    expect(line).toContain('registry exploded');
   });
 });

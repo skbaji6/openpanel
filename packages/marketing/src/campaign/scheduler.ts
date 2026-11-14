@@ -1,8 +1,10 @@
 import type { Queryable, Sql } from '../engine/engine';
+import { redactSecrets } from '../redact';
 import { failCampaignIn, isOneActiveViolation } from './service';
 import { fromStates } from './state';
 
 const DEFAULT_BATCH = 20;
+const LOG_PREFIX = 'marketing scheduler:';
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 
 // Late once a whole minute past the ifLate window, so ifLate 0 still allows a claim within the due minute.
@@ -94,10 +96,16 @@ export async function runScheduleTick(
         }
         await tx.$executeRawUnsafe('RELEASE SAVEPOINT claim_due');
       } catch (error) {
-        if (!isOneActiveViolation(error)) {
-          throw error;
-        }
         await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT claim_due');
+        // One broken campaign must not block the rest of the batch; it stays scheduled for the next tick.
+        if (!isOneActiveViolation(error)) {
+          console.error(
+            LOG_PREFIX,
+            campaign.id,
+            'starting:',
+            redactSecrets(error, [])
+          );
+        }
       }
     }
     return { started, missed };
