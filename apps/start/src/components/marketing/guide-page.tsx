@@ -162,6 +162,236 @@ export function GuidePage() {
         </p>
       </Section>
 
+      <Section title="Campaigns step by step">
+        <p className="text-muted-foreground">
+          A campaign sends one message to an audience, over one channel, now or
+          at a set time. Journeys react to what a person does; campaigns go to a
+          group you choose.
+        </p>
+        <ol className="col list-decimal gap-2 pl-5">
+          <li>
+            <strong>Set up the channel.</strong> On the Channels tab, connect
+            the audience source, save the channel's credentials, then its
+            sending settings (concurrency, rate per second, quiet hours, price).
+            SMS and WhatsApp need a rate per second. Email is built, but its
+            provider configuration is not set up yet; use SMS or push.
+          </li>
+          <li>
+            <strong>Register a template</strong> (SMS and WhatsApp) on the
+            Templates tab, then enable it. Only enabled templates can be picked
+            in a campaign.
+          </li>
+          <li>
+            <strong>Make an audience</strong> on the Audiences tab. Count it and
+            preview it before you use it.
+          </li>
+          <li>
+            <strong>Draft the campaign</strong> on the Campaigns tab: name,
+            channel, audience, message, and when to send. Save it.
+          </li>
+          <li>
+            <strong>Check and send.</strong> Press Count students. Then read the
+            estimate, and send a test to one student. The count must be less
+            than 15 minutes old to start.
+          </li>
+          <li>
+            <strong>Start now</strong> (or Schedule for a set time). It always
+            asks you to confirm the counted number of students and the channel,
+            then runs the checks again on the server. If the number changed in
+            the meantime you are asked to count again.
+          </li>
+        </ol>
+        <p className="text-muted-foreground">
+          One campaign per project runs at a time; others wait their turn. A
+          draft cannot be cancelled, only edited or deleted. Cancel is for a
+          campaign that is scheduled or has started. Only owners and admins can
+          start, schedule, pause, resume, cancel, delete or send tests; members
+          can draft and look.
+        </p>
+      </Section>
+
+      <Section title="Audiences">
+        <dl className="col gap-3">
+          <div>
+            <dt className="font-medium">Who is in, and who is left out</dt>
+            <dd className="text-muted-foreground">
+              Add conditions on the fields your audience API offers, such as
+              semester or university, and combine them with all or any. You can
+              also add students by id (paste a list) and leave students out by
+              list or by filter. Leaving out always wins.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Dynamic or snapshot</dt>
+            <dd className="text-muted-foreground">
+              A dynamic audience is worked out again each time a campaign using
+              it starts. A snapshot audience is frozen with Freeze now: the
+              students at that moment stay, and any later edit makes it stale
+              until you freeze again.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Check it</dt>
+            <dd className="text-muted-foreground">
+              Count shows how many students it holds, Preview lists some by id
+              and masked name, and "Why is this student in or out?" explains one
+              student. The source is asked each time; nothing is stored.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">In use</dt>
+            <dd className="text-muted-foreground">
+              An audience used by a campaign that has not finished cannot be
+              changed or deleted. Make another audience, or wait for the
+              campaign to end.
+            </dd>
+          </div>
+        </dl>
+      </Section>
+
+      <Section title="Templates">
+        <p className="text-muted-foreground">
+          SMS and WhatsApp messages go out as a template your provider has
+          approved. Here you record the provider's reference (the SMS flow ID,
+          or the WhatsApp template name, namespace and language), the approved
+          text, and what fills each variable (for example{' '}
+          <code>{'{{profile.first_name}}'}</code>). A student without that value
+          is skipped with "A variable had no value for this student". Editing a
+          template makes a new version; a campaign keeps the version it started
+          with, and turning a template off only stops new campaigns from using
+          it. Push and webhook messages are written in the campaign itself.
+        </p>
+      </Section>
+
+      <Section title="Push messages">
+        <p className="text-muted-foreground">
+          A push message has a title, a text, and optionally an image and a
+          link. The image must be an https address. Neither takes variables. The
+          link reaches the app as <code>data.link</code>: the mobile app must
+          read it and decide what to open, or it does nothing.
+        </p>
+      </Section>
+
+      <Section title="What each state means">
+        <dl className="col gap-2">
+          <div>
+            <dt className="font-medium">Draft</dt>
+            <dd className="text-muted-foreground">
+              Saved, not sent. You can edit or delete it.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Scheduled</dt>
+            <dd className="text-muted-foreground">
+              Waiting for its send time, or for another campaign in the project
+              to finish. Unschedule turns it back into a draft.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Sending</dt>
+            <dd className="text-muted-foreground">
+              Building the recipient list, then sending. Pause stops sending
+              until you resume; nothing is lost.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Paused</dt>
+            <dd className="text-muted-foreground">
+              Stopped by you. It keeps its place, so no other campaign in the
+              project starts until it is resumed and finishes, or cancelled.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Completed</dt>
+            <dd className="text-muted-foreground">
+              Every student was sent, skipped or failed. "To send" is the number
+              of students, and Sent, Failed, Skipped and Uncertain add up to it.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Cancelled, Failed, Missed</dt>
+            <dd className="text-muted-foreground">
+              Cancelled means you stopped it; messages already sent cannot be
+              recalled. Failed means it could not go on (the reason is shown).
+              Missed means the system was not running within the allowed
+              lateness of the planned time, so nothing was sent; make a new
+              campaign.
+            </dd>
+          </div>
+        </dl>
+      </Section>
+
+      <Section title="When a campaign is waiting">
+        <p className="text-muted-foreground">
+          A sending campaign can stop to wait, and says why. It carries on by
+          itself when the reason goes away.
+        </p>
+        <ul className="col list-disc gap-1 pl-5 text-muted-foreground">
+          <li>Waiting: the audience API is not answering</li>
+          <li>Waiting: the audience API refused our credentials</li>
+          <li>Waiting: the audience API returned an error</li>
+          <li>Waiting: the channel provider refused our credentials</li>
+          <li>Waiting: the channel provider cannot be reached</li>
+          <li>Waiting: the channel is not set up</li>
+          <li>Waiting: today's daily quota is used up</li>
+          <li>Waiting: quiet hours are on</li>
+          <li>Waiting: the provider asked us to slow down</li>
+          <li>Waiting: sending hit an unexpected error and will retry</li>
+        </ul>
+        <p className="text-muted-foreground">
+          Fix credentials on the Channels tab. Several failures in a row fail
+          the campaign instead of waiting for ever.
+        </p>
+      </Section>
+
+      <Section title="Uncertain">
+        <p className="text-muted-foreground">
+          Uncertain means sending was interrupted and the provider may or may
+          not have received the message. It is never retried by itself. Retry
+          uncertain sends those messages again, so a student the provider had
+          already accepted gets a second message. Check with the provider first
+          if that matters.
+        </p>
+      </Section>
+
+      <Section title="Test sends">
+        <p className="text-muted-foreground">
+          Send test sends the campaign's message to one student, by id. It is
+          queued, goes out once and is never retried, and is limited to 10 per
+          campaign per hour. Quiet hours and limits do not apply to a test.
+        </p>
+      </Section>
+
+      <Section title="Quiet hours and limits for a campaign">
+        <dl className="col gap-3">
+          <div>
+            <dt className="font-medium">Quiet hours for this campaign</dt>
+            <dd className="text-muted-foreground">
+              "Use the channel's quiet hours" follows the setting on the
+              Channels tab. "No quiet hours" turns them off for this campaign.
+              "Other quiet hours" sets its own window. Messages due inside the
+              window wait until it ends.
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Limit per student</dt>
+            <dd className="text-muted-foreground">
+              At most N messages in a period. It counts every message that
+              student got on that channel, from any campaign or journey, not
+              only this one. Students at the limit are skipped with "Limit per
+              student reached".
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">Campaign key</dt>
+            <dd className="text-muted-foreground">
+              Related campaigns can share a key so a student who already
+              received one is skipped in the next.
+            </dd>
+          </div>
+        </dl>
+      </Section>
+
       <Section title="Connect your backend">
         <p className="text-muted-foreground">
           Your backend sends contacts, push tokens and item lists to the

@@ -275,6 +275,19 @@ Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --n
 - Migrations 0011 (`marketing.audiences`, `marketing.audience_ids`, `marketing.audience_snapshot_ids`) and 0012 (`marketing.campaigns` with the unique index `campaigns_one_active_per_project`, `marketing.campaign_recipients`, `marketing.materialize_exclusions`, `marketing.campaign_counters`, `marketing.campaign_test_sends`) only create new tables and indexes, so they are fast and change nothing for journeys. New optional variable: `MARKETING_CONFIRM_THRESHOLD` (default 5000). Each replica now also runs the campaign scheduler and materialiser every `MARKETING_TICK_MS`; with no campaigns they do one cheap query each. Campaign materialisation uses the audience source alongside journeys, so set `MARKETING_SOURCE_CONCURRENCY` to at least 2 (the default 4 is fine). Migration 0013 adds a partial index on `marketing.campaign_recipients (campaign_id)` for unfinished rows; it is built at startup and is fast on an empty or small table.
 - Migration 0006 builds an index on `marketing.events (event_time)` inside the startup migration. It locks writes to `marketing.events` while it builds, so on a large table expect the first start to take longer.
 
+## Trying it locally
+
+`bun scripts/dev-stack.ts` (from `packages/marketing`, needs `DATABASE_URL`) starts the reference audience API over a demo schema with 50 students and a fake MSG91, prints the values to enter in the dashboard and exits on Ctrl+C. It sends nothing real, and there is no push fake yet. Start the worker with `MARKETING_WEBHOOK_ALLOW_HOSTS=127.0.0.1`, since plain http to the fake is only allowed for listed hosts.
+
+The browser check, skipped unless `MARKETING_E2E=1` (it needs the worker and the dev stack running):
+
+```bash
+cd apps/start
+MARKETING_E2E=1 MARKETING_E2E_MSG91_URL=<fake MSG91 base URL from dev-stack> bunx playwright test e2e/marketing-campaigns.spec.ts
+```
+
+Operators: step-by-step campaign instructions are in `docs/GUIDE.md`, "Campaigns step by step".
+
 ## End-to-end check
 
 `scripts/e2e.ts` proves the whole path on a running stack: it creates an active rule through the worker's dashboard API (trigger `add_to_cart`, goal `purchase`, one webhook step at +10 s), points the project's webhook channel at a local receiver, sends `add_to_cart` for a fresh profile through `POST $API_URL/track`, and expects exactly one delivery whose `x-marketing-signature` verifies against the channel secret. Then it sends `add_to_cart` and, a second later, `purchase` for another profile and expects no delivery. It prints `PASS delivered once`, `PASS signature verifies` and `PASS cancelled by goal`, and exits non-zero on any failure.
