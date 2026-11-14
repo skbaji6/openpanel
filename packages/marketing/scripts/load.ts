@@ -52,6 +52,7 @@ const CFG: MarketingConfig = {
   retentionDays: 30,
   claimBatch: 200,
   sendConcurrency: 10,
+  campaignConcurrency: 2,
   dbPool: 10,
   sourceConcurrency: 4,
   lookupWindowMs: 2000,

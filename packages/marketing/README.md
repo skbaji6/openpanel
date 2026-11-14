@@ -23,7 +23,8 @@ New here? Start with the [setup and integration guide](docs/GUIDE.md). This READ
 | `MARKETING_EVENT_RETENTION_DAYS` | 30 | Event retention |
 | `MARKETING_CLAIM_BATCH` | 200 | Steps claimed per tick |
 | `MARKETING_SEND_CONCURRENCY` | 10 | Concurrent sends |
-| `MARKETING_DB_POOL` | 15 | Prisma pool size per replica, against the marketing database (`MARKETING_DATABASE_URL`, the intended topology; it falls back to core's `DATABASE_URL`, and then counts against core's `max_connections`); must be at least `MARKETING_SEND_CONCURRENCY` + 3 |
+| `MARKETING_CAMPAIGN_CONCURRENCY` | 2 | Campaign send loops per replica (1 to 32); each holds a database connection while it dispatches a batch |
+| `MARKETING_DB_POOL` | 15 | Prisma pool size per replica, against the marketing database (`MARKETING_DATABASE_URL`, the intended topology; it falls back to core's `DATABASE_URL`, and then counts against core's `max_connections`); must be at least `MARKETING_SEND_CONCURRENCY` + `MARKETING_CAMPAIGN_CONCURRENCY` + 3 |
 | `MARKETING_SOURCE_CONCURRENCY` | 4 | Audience API calls in flight per project, across all replicas (Redis semaphore). Campaign materialisation may use at most this minus one, so journeys always keep a slot; set it to at least 2 (see "Lane priority") |
 | `MARKETING_CONFIRM_THRESHOLD` | 5000 | A campaign whose count preview is above this needs an explicit confirmation naming the count and channel. Copied onto each campaign when it is created, so a change applies to new campaigns only |
 | `MARKETING_LOOKUP_WINDOW_MS` | 2000 | How long the engine waits to fill a lookup batch (up to 500 ids) before calling `/members/lookup` |
@@ -249,6 +250,7 @@ Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --n
 
 ### Plugin upgrade notes
 
+- **Campaign sending (config now fails at startup).** Each replica now runs `MARKETING_CAMPAIGN_CONCURRENCY` campaign send loops (new optional variable, default 2), a reaper for expired recipient leases and the test-send job, every `MARKETING_TICK_MS`. `MARKETING_DB_POOL` must now be at least `MARKETING_SEND_CONCURRENCY` + `MARKETING_CAMPAIGN_CONCURRENCY` + 3, or the worker refuses to start. The defaults (10 + 2 + 3 = 15) still boot; a pool of 13 or 14 that booted before must be raised. Like the journey ticker, campaign sends and test sends only run when the signed unsubscribe link is configured.
 - Migration 0005 adds `marketing.enrollments.end_reason`. Journeys that ended before it have no end reason, so after the upgrade they count as not converted: "Completed after send" and conversion start low and only count journeys that end afterwards.
 - **Failure texts are redacted.** Recipient values (email, device tokens, longer attribute values) are replaced by `[redacted]` in stored and logged send-failure reasons, for stored projects too.
 - **Lease rule (config now fails at startup).** `MARKETING_LEASE_SECONDS` must exceed `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. With the default 2,000 ms window that is more than 33, so configs of 32 or 33 s that used to boot are now rejected; raise it (the default 120 is fine).

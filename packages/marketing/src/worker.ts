@@ -119,15 +119,21 @@ export async function startWorker(
     { migrate },
     { createEngine: buildEngine },
     { createTickState, runTick },
-    { registerDefaultAdapters },
+    { closeBatchAdapters, registerDefaultAdapters },
     { getRedisCache },
     { createBatchHandler, startConsumer },
     { createRedisInterestSet },
     { createLagReporter, LAG_REPORT_INTERVAL_MS },
     { createSourceResolver },
     { runScheduleTick },
-    { pinTemplate },
+    { createChannelReady, pinTemplate },
     { runMaterializeTick },
+    { createAudienceStore },
+    { createCampaignService },
+    { createTemplateRegistry },
+    { createChannelBackoff, createRateBucket },
+    { runReapTick, startDispatchLane },
+    { runTestSendTick },
   ] = await Promise.all([
     import('./db/client'),
     import('./db/migrate'),
@@ -142,7 +148,14 @@ export async function startWorker(
     import('./campaign/scheduler'),
     import('./campaign/channel-ready'),
     import('./campaign/materialize-runner'),
+    import('./audience/store'),
+    import('./campaign/service'),
+    import('./templates/registry'),
+    import('./campaign/pacing'),
+    import('./campaign/dispatch-lane'),
+    import('./campaign/test-sends'),
   ]);
+  const now = () => new Date();
   const secrets = secretsOf(cfg);
   const started: Stoppable[] = [];
   const stopAll = createStopAll(started, secrets);
@@ -151,11 +164,24 @@ export async function startWorker(
     started.push({ stop: () => sql.$disconnect() });
     await migrate();
     registerDefaultAdapters({ webhookAllowHosts: cfg.webhookAllowHosts });
+    // Pooled SMTP connections close only after every sending job above them has stopped.
+    started.push({ stop: async () => closeBatchAdapters() });
     const engine = buildEngine({ sql });
 
     const redis = getRedisCache();
     started.push({ stop: async () => redis.disconnect() });
     const sources = createSourceResolver({ sql, cfg, redis });
+    const sourceFor = (projectId: string) => sources.forProject(projectId);
+    const templates = createTemplateRegistry({ sql, now });
+    const campaigns = createCampaignService({
+      sql,
+      cfg,
+      audiences: createAudienceStore({ sql, source: sourceFor, now }),
+      source: sourceFor,
+      now,
+      channelReady: createChannelReady({ sql, registry: templates }),
+      pinTemplate,
+    });
     const interest = createRedisInterestSet(redis, { engine, sql });
     // The consumer must not start before the first refresh, or it drops everything.
     await interest.refresh();
@@ -204,12 +230,39 @@ export async function startWorker(
           })
         )
       );
+      const dispatchDeps = {
+        sql,
+        redis,
+        cfg,
+        sources,
+        registry: templates,
+        campaigns,
+        bucket: createRateBucket(redis, {}),
+        backoff: createChannelBackoff(redis),
+        renderUnsubscribeUrl,
+        now,
+        sleep: (ms: number) => Bun.sleep(ms),
+      };
+      started.push(
+        startDispatchLane({
+          ...dispatchDeps,
+          concurrency: cfg.campaignConcurrency,
+          idleMs: cfg.tickMs,
+          secrets,
+        }),
+        every(cfg.tickMs, 'test sends', secrets, () =>
+          runTestSendTick(dispatchDeps)
+        )
+      );
     } else {
       console.warn(LOG_PREFIX, 'no unsubscribe link renderer; sending is off');
     }
 
-    // Not gated on the unsubscribe renderer: neither job sends anything.
+    // Not gated on the unsubscribe renderer: none of these jobs sends anything.
     started.push(
+      every(cfg.tickMs, 'reap campaign leases', secrets, () =>
+        runReapTick({ sql, campaigns, now })
+      ),
       every(cfg.tickMs, 'campaign schedules', secrets, () =>
         runScheduleTick({ sql, now: () => new Date(), pinTemplate })
       ),

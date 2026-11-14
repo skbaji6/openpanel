@@ -99,14 +99,14 @@ describe('loadConfig', () => {
     expect(config.kafka.sasl).toBeUndefined();
   });
 
-  it('MARKETING_DB_POOL=13 yields connection_limit=13 and replaces an existing connection_limit param', () => {
+  it('MARKETING_DB_POOL=16 yields connection_limit=16 and replaces an existing connection_limit param', () => {
     const config = loadConfig({
       ...required,
       DATABASE_URL: `${required.DATABASE_URL}?connection_limit=50&schema=public`,
-      MARKETING_DB_POOL: '13',
+      MARKETING_DB_POOL: '16',
     });
     const url = new URL(config.databaseUrl);
-    expect(url.searchParams.getAll('connection_limit')).toEqual(['13']);
+    expect(url.searchParams.getAll('connection_limit')).toEqual(['16']);
     expect(url.searchParams.get('schema')).toBe('public');
   });
 
@@ -144,17 +144,52 @@ describe('loadConfig', () => {
     expect(attempt).not.toThrow(/hunter2/);
   });
 
-  it('MARKETING_DB_POOL must leave room for every concurrent send plus 3', () => {
-    expect(() => loadConfig({ ...required, MARKETING_DB_POOL: '12' })).toThrow(
-      /MARKETING_DB_POOL: must be at least MARKETING_SEND_CONCURRENCY \+ 3 \(13\)/
-    );
-    expect(
+  it('MARKETING_DB_POOL must leave room for every concurrent send and campaign loop plus 3', () => {
+    expect(() =>
       loadConfig({
         ...required,
         MARKETING_DB_POOL: '6',
         MARKETING_SEND_CONCURRENCY: '3',
+      })
+    ).toThrow(
+      /MARKETING_DB_POOL: must be at least MARKETING_SEND_CONCURRENCY \+ MARKETING_CAMPAIGN_CONCURRENCY \+ 3 \(8\)/
+    );
+    expect(
+      loadConfig({
+        ...required,
+        MARKETING_DB_POOL: '8',
+        MARKETING_SEND_CONCURRENCY: '3',
       }).dbPool
-    ).toBe(6);
+    ).toBe(8);
+  });
+
+  it('a pool of 14 with defaults is rejected and 15 boots', () => {
+    expect(() => loadConfig({ ...required, MARKETING_DB_POOL: '14' })).toThrow(
+      /MARKETING_DB_POOL: must be at least .* \(15\)/
+    );
+    expect(loadConfig({ ...required, MARKETING_DB_POOL: '15' }).dbPool).toBe(
+      15
+    );
+  });
+
+  it('MARKETING_CAMPAIGN_CONCURRENCY defaults to 2, rejects 0 and 33', () => {
+    expect(loadConfig(required).campaignConcurrency).toBe(2);
+    expect(
+      loadConfig({
+        ...required,
+        MARKETING_CAMPAIGN_CONCURRENCY: '32',
+        MARKETING_DB_POOL: '45',
+      }).campaignConcurrency
+    ).toBe(32);
+    for (const value of ['0', '33']) {
+      expect(() =>
+        loadConfig({
+          ...required,
+          MARKETING_CAMPAIGN_CONCURRENCY: value,
+          MARKETING_DB_POOL: '100',
+        })
+      ).toThrow(/MARKETING_CAMPAIGN_CONCURRENCY/);
+    }
   });
 
   it('MARKETING_LEASE_SECONDS must exceed the lookup window plus the send timeout plus mark retries', () => {

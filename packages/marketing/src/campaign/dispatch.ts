@@ -81,10 +81,11 @@ const SOURCE_RETRY_MS = 30_000;
 const MAX_DISPATCH_FAILURES = 5;
 // The last send may start here and still finish, at its own timeout, before the reaper can take the batch.
 // Every adapter bounds a send by SEND_TIMEOUT_MS.
-const SEND_DEADLINE_MS = SENDING_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS;
+export const SEND_DEADLINE_MS =
+  SENDING_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS;
 const LOG_PREFIX = 'marketing dispatch:';
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
-const PROVIDER_CHANNELS = new Set<CampaignChannel>(['sms', 'whatsapp']);
+export const PROVIDER_CHANNELS = new Set<CampaignChannel>(['sms', 'whatsapp']);
 const RETURNED_OUTCOMES = new Set<DeliveryOutcome['outcome']>([
   'retry',
   'rate_limited',
@@ -113,7 +114,7 @@ const LOOKUP_OK_SQL = `UPDATE marketing.campaigns SET dispatch_failures = 0, dis
 const PROTOCOL_FAILURE_SQL = `UPDATE marketing.campaigns SET dispatch_failures = dispatch_failures + 1,
     dispatch_error = 'source_error', dispatch_retry_at = $2::timestamptz
   WHERE id = $1::uuid RETURNING dispatch_failures`;
-const CONFIG_SQL =
+export const CONFIG_SQL =
   'SELECT config_encrypted FROM marketing.channel_configs WHERE project_id = $1 AND channel = $2';
 const CAPS_SQL =
   'SELECT caps FROM marketing.project_settings WHERE project_id = $1';
@@ -151,7 +152,7 @@ export interface DispatchResult {
   released: number;
 }
 
-interface DueCampaign {
+export interface DueCampaign {
   id: string;
   project_id: string;
   channel: CampaignChannel;
@@ -161,7 +162,7 @@ interface DueCampaign {
   frequency_cap: unknown;
 }
 
-interface Prepared {
+export interface Prepared {
   settings: ChannelSettings;
   adapter: BatchChannelAdapter<unknown>;
   config: unknown;
@@ -172,7 +173,7 @@ interface Prepared {
   limit: number;
 }
 
-interface Claim {
+export interface Claim {
   token: string;
   profileIds: string[];
   leaseUntil: Date;
@@ -218,7 +219,7 @@ async function retryLater(
   );
 }
 
-function loadAdapterConfig(
+export function loadAdapterConfig(
   deps: DispatchDeps,
   channel: CampaignChannel,
   encrypted: string | undefined
@@ -409,7 +410,7 @@ async function handleSourceError(
   throw error;
 }
 
-function lookupChannelOf(channel: CampaignChannel): LookupChannel {
+export function lookupChannelOf(channel: CampaignChannel): LookupChannel {
   return channel === 'webhook' ? 'none' : channel;
 }
 
@@ -481,7 +482,7 @@ interface Sorted {
   failed: { profileId: string; reason: string }[];
 }
 
-async function sortEntries(
+export async function sortEntries(
   deps: DispatchDeps,
   campaign: DueCampaign,
   prepared: Prepared,
@@ -560,7 +561,7 @@ async function sortEntries(
   return sorted;
 }
 
-async function sendWithDeadline(
+export async function sendWithDeadline(
   deps: DispatchDeps,
   prepared: Prepared,
   items: BatchItem[],

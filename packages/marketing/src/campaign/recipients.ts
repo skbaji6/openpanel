@@ -188,7 +188,8 @@ const REAP_SQL = `
     RETURNING r.campaign_id, r.status
   ), ${bumpCounters('$1::timestamptz')}
   SELECT count(*) FILTER (WHERE status <> 'uncertain')::int AS released,
-    count(*) FILTER (WHERE status = 'uncertain')::int AS uncertain
+    count(*) FILTER (WHERE status = 'uncertain')::int AS uncertain,
+    COALESCE(array_agg(DISTINCT campaign_id::text), '{}') AS campaign_ids
   FROM changed`;
 
 // Two items for one person would update the row once with an arbitrary item; the first one wins.
@@ -423,9 +424,13 @@ export async function releaseLeased(
 export async function reapExpiredLeases(
   sql: Sql,
   now: Date
-): Promise<{ released: number; uncertain: number }> {
+): Promise<{ released: number; uncertain: number; campaignIds: string[] }> {
   const [row] = await sql.$queryRawUnsafe<
-    { released: number; uncertain: number }[]
+    { released: number; uncertain: number; campaign_ids: string[] }[]
   >(REAP_SQL, now.toISOString());
-  return { released: row?.released ?? 0, uncertain: row?.uncertain ?? 0 };
+  return {
+    released: row?.released ?? 0,
+    uncertain: row?.uncertain ?? 0,
+    campaignIds: row?.campaign_ids ?? [],
+  };
 }

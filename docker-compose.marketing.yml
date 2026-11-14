@@ -46,7 +46,8 @@ services:
       MARKETING_EVENT_RETENTION_DAYS: ${MARKETING_EVENT_RETENTION_DAYS:-30}
       MARKETING_CLAIM_BATCH: ${MARKETING_CLAIM_BATCH:-200}
       MARKETING_SEND_CONCURRENCY: ${MARKETING_SEND_CONCURRENCY:-10}
-      # Connections per replica; the database is shared with op-api and op-worker.
+      MARKETING_CAMPAIGN_CONCURRENCY: ${MARKETING_CAMPAIGN_CONCURRENCY:-2}
+      # Connections per replica, at least SEND + CAMPAIGN concurrency + 3; the database is shared with op-api and op-worker.
       MARKETING_DB_POOL: ${MARKETING_DB_POOL:-15}
       MARKETING_WEBHOOK_ALLOW_HOSTS: ${MARKETING_WEBHOOK_ALLOW_HOSTS:-}
       MARKETING_KAFKA_GROUP: ${MARKETING_KAFKA_GROUP:-marketing}

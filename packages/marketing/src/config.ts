@@ -4,8 +4,9 @@ import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from './channels/timeouts';
 const SASL_MECHANISMS = ['plain', 'scram-sha-256', 'scram-sha-512'] as const;
 const TRUE_VALUES = new Set(['true', '1']);
 const FALSE_VALUES = new Set(['false', '0']);
-// Connections a replica needs besides one per concurrent send: consumer batch, tick sweep/claim, HTTP.
+// Connections a replica needs besides one per concurrent send and campaign loop: consumer batch, tick sweep/claim, HTTP.
 const DB_POOL_HEADROOM = 3;
+const MAX_CAMPAIGN_CONCURRENCY = 32;
 // A lease must outlast the lookup batch window, the adapter's send timeout and the ticker's mark retries.
 // A slower lookup is caught by the ticker's remaining-lease check instead.
 const minLeaseSeconds = (lookupWindowMs: number) =>
@@ -73,6 +74,10 @@ const rawSchema = z
     MARKETING_EVENT_RETENTION_DAYS: positiveInt(30),
     MARKETING_CLAIM_BATCH: positiveInt(200),
     MARKETING_SEND_CONCURRENCY: positiveInt(10),
+    MARKETING_CAMPAIGN_CONCURRENCY: z.preprocess(
+      blankToUndefined,
+      z.coerce.number().int().min(1).max(MAX_CAMPAIGN_CONCURRENCY).default(2)
+    ),
     MARKETING_DB_POOL: positiveInt(15),
     MARKETING_SOURCE_CONCURRENCY: positiveInt(4),
     MARKETING_LOOKUP_WINDOW_MS: positiveInt(2000),
@@ -126,13 +131,14 @@ const rawSchema = z
     if (!(publicUrl && WEB_PROTOCOLS.has(publicUrl.protocol))) {
       issue('MARKETING_PUBLIC_URL', 'must be an http(s) URL');
     }
-    if (
-      raw.MARKETING_DB_POOL <
-      raw.MARKETING_SEND_CONCURRENCY + DB_POOL_HEADROOM
-    ) {
+    const minPool =
+      raw.MARKETING_SEND_CONCURRENCY +
+      raw.MARKETING_CAMPAIGN_CONCURRENCY +
+      DB_POOL_HEADROOM;
+    if (raw.MARKETING_DB_POOL < minPool) {
       issue(
         'MARKETING_DB_POOL',
-        `must be at least MARKETING_SEND_CONCURRENCY + ${DB_POOL_HEADROOM} (${raw.MARKETING_SEND_CONCURRENCY + DB_POOL_HEADROOM})`
+        `must be at least MARKETING_SEND_CONCURRENCY + MARKETING_CAMPAIGN_CONCURRENCY + ${DB_POOL_HEADROOM} (${minPool})`
       );
     }
     const minLease = minLeaseSeconds(raw.MARKETING_LOOKUP_WINDOW_MS);
@@ -183,6 +189,7 @@ export interface MarketingConfig {
   retentionDays: number;
   claimBatch: number;
   sendConcurrency: number;
+  campaignConcurrency: number;
   dbPool: number;
   sourceConcurrency: number;
   lookupWindowMs: number;
@@ -241,6 +248,7 @@ export function loadConfig(
     retentionDays: raw.MARKETING_EVENT_RETENTION_DAYS,
     claimBatch: raw.MARKETING_CLAIM_BATCH,
     sendConcurrency: raw.MARKETING_SEND_CONCURRENCY,
+    campaignConcurrency: raw.MARKETING_CAMPAIGN_CONCURRENCY,
     dbPool: raw.MARKETING_DB_POOL,
     sourceConcurrency: raw.MARKETING_SOURCE_CONCURRENCY,
     lookupWindowMs: raw.MARKETING_LOOKUP_WINDOW_MS,

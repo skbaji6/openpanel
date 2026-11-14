@@ -628,7 +628,7 @@ describe('campaign recipients', () => {
     await insertRecipients(id, ['a']);
     const token = await toSending(id);
     const reaped = await reapExpiredLeases(sql, at(SENDING_LEASE_MS + 1));
-    expect(reaped).toEqual({ released: 0, uncertain: 1 });
+    expect(reaped).toEqual({ released: 0, uncertain: 1, campaignIds: [id] });
     const result = await outcomes(
       id,
       token,
@@ -698,7 +698,7 @@ describe('campaign recipients', () => {
     const reapAt = at(LEASE_MS + 1);
     const freshClaim = await claim(id, 1, at(LEASE_MS));
     const result = await reapExpiredLeases(sql, reapAt);
-    expect(result).toEqual({ released: 1, uncertain: 1 });
+    expect(result).toEqual({ released: 1, uncertain: 1, campaignIds: [id] });
     const leased = await row(id, leasedId);
     expect([leased.status, leased.lease_token]).toEqual(['pending', null]);
     const sending = await row(id, sendingId);
@@ -713,6 +713,7 @@ describe('campaign recipients', () => {
     expect(await reapExpiredLeases(sql, reapAt)).toEqual({
       released: 0,
       uncertain: 0,
+      campaignIds: [],
     });
   });
 
