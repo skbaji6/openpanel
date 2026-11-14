@@ -23,8 +23,26 @@ const ALLOWED_ROUTES: {
   { pattern: /^rules\/[^/]+$/, methods: { PATCH: 'admin', DELETE: 'admin' } },
   { pattern: /^starter-rules$/, methods: { GET: 'member' } },
   {
-    pattern: /^channels\/(email|webhook|push)$/,
+    pattern: /^channels\/(email|webhook|push|sms|whatsapp)$/,
     methods: { GET: 'admin', PUT: 'admin' },
+  },
+  {
+    pattern: /^channels\/(push|whatsapp|sms|email|webhook)\/settings$/,
+    methods: { GET: 'member', PUT: 'admin' },
+  },
+  { pattern: /^templates$/, methods: { GET: 'member', POST: 'admin' } },
+  {
+    pattern: /^templates\/[^/]+$/,
+    methods: { GET: 'member', PUT: 'admin' },
+  },
+  {
+    pattern: /^templates\/[^/]+\/versions\/[0-9]+$/,
+    methods: { GET: 'member' },
+  },
+  { pattern: /^templates\/[^/]+\/preview$/, methods: { POST: 'member' } },
+  {
+    pattern: /^templates\/[^/]+\/(enable|disable)$/,
+    methods: { POST: 'admin' },
   },
   { pattern: /^audience-source$/, methods: { GET: 'admin', PUT: 'admin' } },
   { pattern: /^audience-source\/test$/, methods: { POST: 'admin' } },
@@ -64,6 +82,15 @@ const ALLOWED_ROUTES: {
   {
     pattern: /^campaigns\/[^/]+\/count-preview$/,
     methods: { POST: 'member' },
+  },
+  {
+    pattern: /^campaigns\/[^/]+\/(recipients|skip-reasons|test-sends)$/,
+    methods: { GET: 'member' },
+  },
+  { pattern: /^campaigns\/[^/]+\/estimate$/, methods: { POST: 'member' } },
+  {
+    pattern: /^campaigns\/[^/]+\/retry-uncertain$/,
+    methods: { POST: 'admin' },
   },
   {
     pattern:

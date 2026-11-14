@@ -423,6 +423,81 @@ describe('marketing proxy', () => {
     expect(marketingCalls()).toHaveLength(0);
   });
 
+  const SETTINGS_CHANNELS = ['push', 'whatsapp', 'sms', 'email', 'webhook'];
+  const TEMPLATE_MEMBER_ROUTES: [string, string][] = [
+    ['GET', 'templates'],
+    ['GET', 'templates/t1'],
+    ['GET', 'templates/t1/versions/3'],
+    ['POST', 'templates/t1/preview'],
+    ['GET', 'campaigns/c1/recipients'],
+    ['GET', 'campaigns/c1/skip-reasons'],
+    ['POST', 'campaigns/c1/estimate'],
+    ['GET', 'campaigns/c1/test-sends'],
+    ...SETTINGS_CHANNELS.map((channel): [string, string] => [
+      'GET',
+      `channels/${channel}/settings`,
+    ]),
+  ];
+  const TEMPLATE_ADMIN_ROUTES: [string, string][] = [
+    ['POST', 'templates'],
+    ['PUT', 'templates/t1'],
+    ['POST', 'templates/t1/enable'],
+    ['POST', 'templates/t1/disable'],
+    ['POST', 'campaigns/c1/retry-uncertain'],
+    ...SETTINGS_CHANNELS.map((channel): [string, string] => [
+      'PUT',
+      `channels/${channel}/settings`,
+    ]),
+    ...['sms', 'whatsapp'].flatMap((channel): [string, string][] => [
+      ['GET', `channels/${channel}`],
+      ['PUT', `channels/${channel}`],
+    ]),
+  ];
+
+  test('a member may list, read and preview templates and read channel settings', async () => {
+    const { proxy, marketingCalls } = setup({ role: 'member' });
+    for (const [method, path] of TEMPLATE_MEMBER_ROUTES) {
+      expect((await proxy.handle(send(path, method))).status).toBe(200);
+    }
+    expect(marketingCalls()).toHaveLength(TEMPLATE_MEMBER_ROUTES.length);
+  });
+
+  test('a member gets 403 on changing templates or channel settings, sms credentials and retry-uncertain', async () => {
+    const { proxy, marketingCalls } = setup({ role: 'member' });
+    for (const [method, path] of TEMPLATE_ADMIN_ROUTES) {
+      expect((await proxy.handle(send(path, method))).status).toBe(403);
+    }
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
+  test('an admin may use every template, settings and retry-uncertain route', async () => {
+    const { proxy, marketingCalls } = setup({ role: 'admin' });
+    const routes = [...TEMPLATE_MEMBER_ROUTES, ...TEMPLATE_ADMIN_ROUTES];
+    for (const [method, path] of routes) {
+      expect((await proxy.handle(send(path, method))).status).toBe(200);
+    }
+    expect(marketingCalls()).toHaveLength(routes.length);
+  });
+
+  test('a no-access user gets 403 on every new route', async () => {
+    const { proxy, marketingCalls } = setup({ projectStatus: 404 });
+    for (const [method, path] of [
+      ...TEMPLATE_MEMBER_ROUTES,
+      ...TEMPLATE_ADMIN_ROUTES,
+    ]) {
+      expect((await proxy.handle(send(path, method))).status).toBe(403);
+    }
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
+  test('templates/x/delete is 404', async () => {
+    const { proxy, marketingCalls } = setup();
+    expect(
+      (await proxy.handle(send('templates/x/delete', 'POST'))).status
+    ).toBe(404);
+    expect(marketingCalls()).toHaveLength(0);
+  });
+
   test('the proxy never logs a request body', async () => {
     const canary = '+15551230000';
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map(
