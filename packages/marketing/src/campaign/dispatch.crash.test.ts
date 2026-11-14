@@ -367,8 +367,15 @@ describe('crashes', () => {
       try {
         const everyLoopHung = () =>
           abandoned.length >= REPLICAS * LOOPS_PER_REPLICA;
+        // A pacing rest is a time on the fake clock: nothing ends it but the test.
+        const restMs = async () => {
+          const until = (await campaignSnapshot(id)).dispatch_retry_at;
+          return until ? until.getTime() - clock.now().getTime() : 0;
+        };
         const claimedOrStuck = async () =>
-          everyLoopHung() || !(await statuses(id)).pending;
+          everyLoopHung() ||
+          !(await statuses(id)).pending ||
+          (await restMs()) > 0;
         // Crashed batches hold leased or sending rows until their leases end; the reaper alone settles them.
         // Only then may the dead cycles finish: the reaper cleared their tokens, so their own release matches nothing.
         while (true) {
@@ -380,6 +387,11 @@ describe('crashes', () => {
           const open = await statuses(id);
           if (!(open.pending || open.leased || open.sending)) {
             break;
+          }
+          const rest = await restMs();
+          if (rest > 0 && open.pending && !everyLoopHung()) {
+            clock.advance(rest);
+            continue;
           }
           crashesOn = crashesOn && Boolean(open.pending);
           clock.advance(CLAIM_LEASE_MS + SECOND_MS);

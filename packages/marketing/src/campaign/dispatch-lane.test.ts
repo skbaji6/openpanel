@@ -31,7 +31,7 @@ import { createTemplateRegistry } from '../templates/registry';
 import type { DispatchDeps } from './dispatch';
 import { runReapTick, startDispatchLane } from './dispatch-lane';
 import { createChannelBackoff, createRateBucket } from './pacing';
-import { SENDING_LEASE_MS } from './recipients';
+import { CHANNEL_ERROR_BACKOFF_MS, SENDING_LEASE_MS } from './recipients';
 import { createCampaignService } from './service';
 
 const ENCRYPTION_KEY = 'a'.repeat(64);
@@ -308,6 +308,9 @@ describe('startDispatchLane', () => {
             },
             invalidate: () => undefined,
           },
+          // A campaign that could not be prepared waits out the channel backoff: skip past it.
+          now: () =>
+            new Date(Date.now() + (calls > 0 ? CHANNEL_ERROR_BACKOFF_MS : 0)),
         }),
         concurrency: 1,
         idleMs: IDLE_MS,
