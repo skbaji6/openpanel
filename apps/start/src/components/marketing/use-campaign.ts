@@ -5,6 +5,8 @@ import {
   useMarketingQueryKey,
 } from './api';
 import type { AudienceRow, CampaignRow } from './campaign-contract';
+import { shouldPoll } from './campaign-status';
+import { CAMPAIGN_POLL_MS } from './polling';
 
 const NOT_FOUND = 404;
 
@@ -24,6 +26,10 @@ export function useCampaign(campaignId: string) {
         `campaigns/${encodeURIComponent(campaignId)}`
       ),
     retry: false,
+    refetchInterval: (query) =>
+      query.state.data && shouldPoll(query.state.data)
+        ? CAMPAIGN_POLL_MS
+        : false,
   });
 }
 

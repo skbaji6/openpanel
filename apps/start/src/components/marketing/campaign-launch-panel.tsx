@@ -44,14 +44,14 @@ import {
 import { useAppParams } from '@/hooks/use-app-params';
 import { showConfirm, useOnPushModal } from '@/modals';
 
-const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
+export const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
 const RECOUNT_NOTE =
   'The number of students changed or the count was out of date, so it was counted again. Check the new count and start again.';
 
-const campaignPath = (campaign: CampaignRow, action: string) =>
+export const campaignPath = (campaign: CampaignRow, action: string) =>
   `campaigns/${encodeURIComponent(campaign.id)}/${action}`;
 
-function useStoreCampaign() {
+export function useStoreCampaign() {
   const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
   return (saved: CampaignRow) => {

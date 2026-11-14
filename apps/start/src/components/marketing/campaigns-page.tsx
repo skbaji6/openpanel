@@ -1,7 +1,7 @@
 import { getRouteApi } from '@tanstack/react-router';
 import { MegaphoneIcon } from 'lucide-react';
 import { describeMarketingError } from './api';
-import { CampaignSummary } from './campaign-detail';
+import { CampaignDetail } from './campaign-detail';
 import { CampaignEditor } from './campaign-editor';
 import { CampaignList } from './campaign-list';
 import { campaignLoadErrorTitle, useCampaign } from './use-campaign';
@@ -38,7 +38,7 @@ function OpenCampaign({
     );
   }
   if (campaign.data.state !== 'draft') {
-    return <CampaignSummary campaignId={campaignId} onClose={onClose} />;
+    return <CampaignDetail campaignId={campaignId} onClose={onClose} />;
   }
   return (
     <CampaignEditor onClose={onClose} onSaved={onSaved} row={campaign.data} />
