@@ -272,7 +272,7 @@ function EditorForm({
       </fieldset>
       {row && (
         <AudienceList
-          disabled={locked}
+          disabled={locked || uploading}
           list="include"
           onBusyChange={setUploading('include')}
           row={row}
@@ -280,7 +280,7 @@ function EditorForm({
       )}
       {row && (
         <AudienceList
-          disabled={locked}
+          disabled={locked || uploading}
           list="exclude"
           onBusyChange={setUploading('exclude')}
           row={row}

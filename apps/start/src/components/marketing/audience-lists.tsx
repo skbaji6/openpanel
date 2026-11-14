@@ -31,6 +31,8 @@ const CONFLICT_TEXT =
   'Someone else changed this audience. It was reloaded; check the list and try again.';
 const CONTACTS_AS_IDS =
   "These look like phone numbers or emails. Choose 'Phone numbers or emails' so they are matched to students and never stored.";
+const CONTACTS_REPASTE =
+  'The pasted contacts were cleared after matching; paste them again once the list has room.';
 const RESOLVE_FAILED_SUFFIX =
   'The pasted contacts were cleared; paste them again to retry.';
 const KIND_HINTS: Record<PasteKind | 'none', string> = {
@@ -133,11 +135,6 @@ export function AudienceList({
   };
 
   const addIds = async (ids: string[], base: Outcome) => {
-    const capacity = listCapacityProblem(size, ids.length);
-    if (capacity) {
-      setOutcome({ ...base, error: capacity });
-      return;
-    }
     let sent = 0;
     try {
       await addIdsInChunks({
@@ -179,11 +176,17 @@ export function AudienceList({
       return;
     }
     setText('');
-    await addIds(resolved.ids, {
+    const outcome = {
       matched: resolved.ids.length,
       notFoundLines: resolved.unmatchedLines,
       tooLongLines,
-    });
+    };
+    const capacity = listCapacityProblem(size, resolved.ids.length);
+    if (capacity) {
+      setOutcome({ ...outcome, error: `${capacity} ${CONTACTS_REPASTE}` });
+      return;
+    }
+    await addIds(resolved.ids, outcome);
   };
 
   const addPastedIds = async () => {
@@ -192,6 +195,12 @@ export function AudienceList({
       return;
     }
     const { ids, tooLongLines } = parseIdLines(text);
+    // Refused pastes stay in the box so the operator can trim them.
+    const capacity = listCapacityProblem(size, ids.length);
+    if (capacity) {
+      setOutcome({ tooLongLines, error: capacity });
+      return;
+    }
     setText('');
     await addIds(ids, { tooLongLines });
   };

@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query';
 import { useId, useState } from 'react';
+import { toast } from 'sonner';
 import { describeMarketingError, useMarketingFetch } from './api';
 import {
   describeCount,
@@ -17,6 +18,9 @@ import {
 import { isVersionConflict, useAudienceRow } from './use-audience-row';
 import { InputWithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
+
+const FREEZE_CONFLICT_TEXT =
+  'Someone else changed this audience while it was freezing. It was reloaded; check it and freeze again.';
 
 type Member = AudiencePreview['members'][number];
 
@@ -229,9 +233,11 @@ function FreezeCheck({ path, row }: { path: string; row: AudienceRow }) {
     mutationFn: () =>
       marketingFetch<AudienceRow>(`${path}/freeze`, { method: 'POST' }),
     onSuccess: cache.store,
+    // A toast, because the reload remounts this section and would hide an inline message.
     onError: (error) => {
       if (isVersionConflict(error)) {
         cache.reload(row.id);
+        toast.error(FREEZE_CONFLICT_TEXT);
       }
     },
   });
@@ -273,14 +279,7 @@ function FreezeCheck({ path, row }: { path: string; row: AudienceRow }) {
           Freeze now
         </Button>
       </div>
-      {freezeConflict ? (
-        <p className="text-destructive text-sm" role="alert">
-          Someone else changed this audience while it was freezing. It was
-          reloaded; check it and freeze again.
-        </p>
-      ) : (
-        <ErrorText error={freeze.error} />
-      )}
+      {!freezeConflict && <ErrorText error={freeze.error} />}
     </div>
   );
 }
