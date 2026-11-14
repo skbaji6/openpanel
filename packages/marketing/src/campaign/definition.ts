@@ -14,7 +14,7 @@ const MAX_PERIOD_SECONDS = 31_536_000;
 const DEFAULT_CAMPAIGN_TIMEZONE = 'Asia/Kolkata';
 const LOCAL_MINUTE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
-const JOURNEY_TEMPLATE_CHANNELS = ['push', 'email', 'webhook'] as const;
+const JOURNEY_TEMPLATE_CHANNELS = ['email', 'webhook'] as const;
 const REGISTRY_TEMPLATE_CHANNELS = ['sms', 'whatsapp'] as const;
 
 const zTimeZone = z.string().refine(isTimeZone, 'unknown timezone');
@@ -66,10 +66,56 @@ const commonFields = {
   frequencyCap: zFrequencyCap.optional(),
 };
 
+const MAX_URL_LENGTH = 2000;
+const UNSAFE_LINK_SCHEMES = new Set([
+  'javascript:',
+  'data:',
+  'file:',
+  'vbscript:',
+]);
+
+function parsedUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+// Both are fixed operator content, so a variable would be a typo that ships literally.
+const noVariables = (value: string) => !value.includes('{{');
+
+const zImageUrl = z
+  .string()
+  .max(MAX_URL_LENGTH)
+  .refine((value) => parsedUrl(value)?.protocol === 'https:', 'must be https')
+  .refine(noVariables, 'must not contain variables');
+// App deep links such as sia://course/12 are allowed; only schemes that run code or read files are not.
+const zLink = z
+  .string()
+  .max(MAX_URL_LENGTH)
+  .refine((value) => {
+    const url = parsedUrl(value);
+    return url !== null && !UNSAFE_LINK_SCHEMES.has(url.protocol);
+  }, 'must be a URL with a safe scheme')
+  .refine(noVariables, 'must not contain variables');
+
+export const zPushTemplate = z.strictObject({
+  subject: zStep.shape.template.shape.subject,
+  body: zStep.shape.template.shape.body,
+  imageUrl: zImageUrl.optional(),
+  link: zLink.optional(),
+});
+
+const pushShape = {
+  ...commonFields,
+  channel: z.literal('push'),
+  template: zPushTemplate,
+};
 const journeyShape = {
   ...commonFields,
   channel: z.enum(JOURNEY_TEMPLATE_CHANNELS),
-  template: zStep.shape.template,
+  template: zStep.shape.template.strict(),
 };
 export const zRegistryTemplate = z.strictObject({
   templateId: z.string().min(1).max(MAX_TEMPLATE_ID),
@@ -92,6 +138,7 @@ const KEYED_SKIP_ISSUE = {
 
 // No cross-field rules here: the service checks the merged draft with zCampaignFields, which answers invalid_campaign.
 export const zCampaignDraft = z.discriminatedUnion('channel', [
+  z.strictObject(pushShape),
   z.strictObject(journeyShape),
   z.strictObject(registryShape),
 ]);
@@ -99,6 +146,7 @@ export const zCampaignDraft = z.discriminatedUnion('channel', [
 // The service re-checks a merged draft with this one: it drops fields a client may not set (confirmThreshold).
 export const zCampaignFields = z
   .discriminatedUnion('channel', [
+    z.object(pushShape),
     z.object(journeyShape),
     z.object(registryShape),
   ])
@@ -111,6 +159,7 @@ export const zCampaignPatch = z
     timezone: zTimeZone,
     ifLateMinutes: zIfLateMinutes,
     channel: z.enum([
+      'push',
       ...JOURNEY_TEMPLATE_CHANNELS,
       ...REGISTRY_TEMPLATE_CHANNELS,
     ]),

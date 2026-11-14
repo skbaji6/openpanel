@@ -108,6 +108,34 @@ describe('push adapter', () => {
     });
   });
 
+  it('sends imageUrl and data.link only when the message has them', async () => {
+    const { sender, calls } = fakeSender();
+    const adapter = createPushAdapter({ sendMulticast: sender });
+    await adapter.send(
+      {
+        ...message,
+        imageUrl: 'https://cdn.example.test/a.png',
+        data: { link: 'sia://course/12' },
+      },
+      recipient(['t1']),
+      config,
+      opts
+    );
+    await adapter.send(message, recipient(['t1']), config, opts);
+    expect(calls[0]?.[1]).toEqual({
+      tokens: ['t1'],
+      notification: {
+        title: 'Still thinking?',
+        body: 'Your cart is waiting',
+        imageUrl: 'https://cdn.example.test/a.png',
+      },
+      data: { link: 'sia://course/12' },
+    });
+    const plain = calls[1]?.[1];
+    expect(plain && 'data' in plain).toBe(false);
+    expect(plain?.notification && 'imageUrl' in plain.notification).toBe(false);
+  });
+
   it('empty deviceTokens returns non-retryable failure', async () => {
     const { sender, calls } = fakeSender();
     const adapter = createPushAdapter({ sendMulticast: sender });

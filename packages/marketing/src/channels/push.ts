@@ -63,7 +63,8 @@ export type PushConfig = z.infer<typeof configSchema>;
 
 export interface PushMulticast {
   tokens: string[];
-  notification: { title?: string; body: string };
+  notification: { title?: string; body: string; imageUrl?: string };
+  data?: Record<string, string>;
 }
 
 export type MulticastSender = (
@@ -227,7 +228,7 @@ async function sendAll(
   sendMulticast: MulticastSender,
   config: PushConfig,
   tokens: string[],
-  notification: PushMulticast['notification'],
+  content: Pick<PushMulticast, 'notification' | 'data'>,
   progress: MulticastProgress,
   signal: AbortSignal
 ): Promise<SendResult> {
@@ -238,7 +239,7 @@ async function sendAll(
     try {
       const { responses } = await sendMulticast(config.serviceAccountJson, {
         tokens: batch,
-        notification,
+        ...content,
       });
       progress.record(batch, responses);
     } catch (error) {
@@ -271,10 +272,14 @@ export function createPushAdapter(
           reason: 'no device tokens',
         });
       }
-      const notification =
-        msg.title === undefined
-          ? { body: msg.body }
-          : { title: msg.title, body: msg.body };
+      const content: Pick<PushMulticast, 'notification' | 'data'> = {
+        notification: {
+          ...(msg.title === undefined ? {} : { title: msg.title }),
+          body: msg.body,
+          ...(msg.imageUrl === undefined ? {} : { imageUrl: msg.imageUrl }),
+        },
+        ...(msg.data === undefined ? {} : { data: msg.data }),
+      };
       const progress = new MulticastProgress();
       return withSendTimeout(
         timeoutMs,
@@ -283,7 +288,7 @@ export function createPushAdapter(
             sendMulticast,
             config,
             to.deviceTokens,
-            notification,
+            content,
             progress,
             signal
           ),

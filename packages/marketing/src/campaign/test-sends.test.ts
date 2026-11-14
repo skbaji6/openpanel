@@ -273,6 +273,29 @@ describe('runTestSendTick', () => {
     expect(row.sent_at?.toISOString()).toBe(START.toISOString());
   });
 
+  it('a test send carries the push image and link', async () => {
+    const sent = fakeBatch('push');
+    const campaignId = await setupCampaign({
+      channel: 'push',
+      template: {
+        subject: 'Hi',
+        body: 'Text',
+        imageUrl: 'https://cdn.example.test/a.png',
+        link: 'sia://course/12',
+      },
+    });
+    await requestTestSend(campaignId, 'p1');
+
+    await runTestSendTick(
+      depsFor(createFakeSource({ members: [member('p1')] }))
+    );
+
+    expect(sent[0]?.message).toMatchObject({
+      imageUrl: 'https://cdn.example.test/a.png',
+      data: { link: 'sia://course/12' },
+    });
+  });
+
   it('a test send during quiet hours is still sent', async () => {
     const sent = fakeBatch('push');
     const campaignId = await setupCampaign({

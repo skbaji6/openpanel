@@ -505,6 +505,29 @@ describe('runDispatchCycle', () => {
     expect(await statuses(id)).toEqual({ sent: 1200 });
   });
 
+  it('a push campaign delivers its image and link to the adapter', async () => {
+    const members = pushMembers(1);
+    const sent = fakeChannel('push');
+    await setup({
+      channel: 'push',
+      members,
+      template: {
+        subject: 'Hi',
+        body: 'Text',
+        imageUrl: 'https://cdn.example.test/a.png',
+        link: 'sia://course/12',
+      },
+    });
+
+    await runUntilIdle(depsFor(createFakeSource({ members })));
+
+    expect(sent[0]?.message).toMatchObject({
+      title: 'Hi',
+      imageUrl: 'https://cdn.example.test/a.png',
+      data: { link: 'sia://course/12' },
+    });
+  });
+
   it('not_found, suppressed, unreachable:no_valid_phone and an opted_out id are skipped with those reasons', async () => {
     const { templateId } = await providerTemplate('sms');
     const members = [

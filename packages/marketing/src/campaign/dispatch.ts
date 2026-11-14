@@ -51,6 +51,7 @@ import type {
 } from '../templates/registry';
 import {
   zFrequencyCap,
+  zPushTemplate,
   zQuietHoursOverride,
   zRegistryTemplate,
 } from './definition';
@@ -464,6 +465,17 @@ function consentMissing(
   return promotionalSms && entry.consent?.sms_promotional !== true;
 }
 
+function pushExtras(template: {
+  body: string;
+  imageUrl?: string;
+  link?: string;
+}): Pick<RenderedMessage, 'imageUrl' | 'data'> {
+  return {
+    ...(template.imageUrl === undefined ? {} : { imageUrl: template.imageUrl }),
+    ...(template.link === undefined ? {} : { data: { link: template.link } }),
+  };
+}
+
 function render(
   campaign: DueCampaign,
   version: TemplateVersion | null,
@@ -483,7 +495,10 @@ function render(
           }
         : { ok: false, reason: variables.reason };
     }
-    const template = zStep.shape.template.parse(campaign.template);
+    const template =
+      campaign.channel === 'push'
+        ? zPushTemplate.parse(campaign.template)
+        : zStep.shape.template.parse(campaign.template);
     const vars = {
       profile: traits,
       event: {},
@@ -502,7 +517,7 @@ function render(
       ok: true,
       message:
         campaign.channel === 'push'
-          ? { title: heading, body, meta }
+          ? { title: heading, body, meta, ...pushExtras(template) }
           : { subject: heading, body, meta },
     };
   } catch {
