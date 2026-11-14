@@ -31,6 +31,9 @@ export const REAP_BATCH = 1000;
 export const CAP_LOCK_CHUNK = 100;
 
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
+// Adapter reasons for items never put on the wire (past the batch deadline, or held back after a failed probe):
+// they spend no attempt.
+const UNSTARTED_REASONS = "'deadline', 'breaker'";
 const ALIVE_STATES = new Set(['running', 'paused']);
 const ONE_MILLISECOND = "interval '1 millisecond'";
 const CAMPAIGN_REF = `'campaign:' || changed.campaign_id::text || ':' || changed.profile_id`;
@@ -109,9 +112,11 @@ const MARK_SENDING_SQL = `
 const MARK_OUTCOMES_SQL = `
   WITH decided AS (
     SELECT r.profile_id, i.outcome, NULLIF(i.reason, '') AS reason, NULLIF(i.provider_ref, '') AS provider_ref,
+      (i.outcome = 'retry' AND i.reason IN (${UNSTARTED_REASONS})) AS unstarted,
       CASE
         WHEN i.outcome IN ('sent', 'failed', 'uncertain') THEN i.outcome
-        WHEN i.outcome = 'retry' AND r.attempt >= ${MAX_SEND_ATTEMPTS} THEN 'failed'
+        WHEN i.outcome = 'retry' AND i.reason NOT IN (${UNSTARTED_REASONS})
+          AND r.attempt >= ${MAX_SEND_ATTEMPTS} THEN 'failed'
         WHEN NOT $10::boolean THEN 'skipped'
         ELSE 'pending'
       END AS status,
@@ -134,7 +139,7 @@ const MARK_OUTCOMES_SQL = `
         WHEN d.status = 'skipped' THEN $11
         WHEN d.outcome IN ('rate_limited', 'channel_error') THEN d.outcome
       END,
-      attempt = CASE WHEN d.status = 'pending' AND d.outcome IN ('rate_limited', 'channel_error')
+      attempt = CASE WHEN d.status = 'pending' AND (d.outcome IN ('rate_limited', 'channel_error') OR d.unstarted)
         THEN GREATEST(r.attempt - 1, 0) ELSE r.attempt END,
       due_at = CASE WHEN d.status = 'pending'
         THEN GREATEST($9::timestamptz, $8::timestamptz + d.backoff_ms * ${ONE_MILLISECOND}) ELSE r.due_at END,

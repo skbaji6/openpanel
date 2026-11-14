@@ -39,7 +39,7 @@ export const zQuietHoursOverride = z
   )
   .nullable();
 
-const zFrequencyCap = z
+export const zFrequencyCap = z
   .strictObject({
     max: z.number().int().min(1).max(MAX_FREQUENCY),
     periodSeconds: z
@@ -71,12 +71,13 @@ const journeyShape = {
   channel: z.enum(JOURNEY_TEMPLATE_CHANNELS),
   template: zStep.shape.template,
 };
+export const zRegistryTemplate = z.strictObject({
+  templateId: z.string().min(1).max(MAX_TEMPLATE_ID),
+});
 const registryShape = {
   ...commonFields,
   channel: z.enum(REGISTRY_TEMPLATE_CHANNELS),
-  template: z.strictObject({
-    templateId: z.string().min(1).max(MAX_TEMPLATE_ID),
-  }),
+  template: zRegistryTemplate,
 };
 
 // Skipping earlier recipients is keyed on campaignKey, so without one it would silently skip no one.

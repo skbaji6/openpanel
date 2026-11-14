@@ -89,8 +89,20 @@ const sleep = async (ms: number) => {
   sleeps.push(ms);
   advance(ms);
 };
-const realSleep = (ms: number) =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+// The real backoff runs on the Redis clock; this one runs on the test clock.
+function testClockBackoff(): DispatchDeps['backoff'] {
+  const ends = new Map<string, number>();
+  return {
+    async set(projectId, channel, ms) {
+      const key = `${projectId}:${channel}`;
+      ends.set(key, Math.max(ends.get(key) ?? 0, now.getTime() + ms));
+    },
+    async until(projectId, channel) {
+      const end = ends.get(`${projectId}:${channel}`) ?? 0;
+      return end > now.getTime() ? end : null;
+    },
+  };
+}
 const pad = (n: number) => String(n).padStart(5, '0');
 
 function resolverOf(source: AudienceSource | null): SourceResolver {
@@ -464,7 +476,18 @@ describe('runDispatchCycle', () => {
       settings: { requireConsent: true },
     });
 
-    await runUntilIdle(depsFor(createFakeSource({ members })));
+    const fake = createFakeSource({ members });
+    // A source may return devices for any channel; only push may send them on.
+    const withDevices: AudienceSource = {
+      ...fake,
+      lookup: async (ids, channel) =>
+        (await fake.lookup(ids, channel)).map((entry) => ({
+          ...entry,
+          devices: [{ token: 'stray-token', platform: 'ios' }],
+        })),
+    };
+
+    await runUntilIdle(depsFor(withDevices));
 
     const rows = await recipients(id);
     expect(rows.get('yes')?.status).toBe('sent');
@@ -472,6 +495,7 @@ describe('runDispatchCycle', () => {
     expect(rows.get('missing')?.reason).toBe('consent');
     expect(batches.flat().map((item) => item.profileId)).toEqual(['yes']);
     expect((batches[0]?.[0]?.message as ProviderMessage).kind).toBe('provider');
+    expect(batches[0]?.[0]?.to.deviceTokens).toEqual([]);
   });
 
   it('sms service-category templates ignore sms_promotional', async () => {
@@ -646,9 +670,7 @@ describe('runDispatchCycle', () => {
   });
 
   it('a 429 from the adapter backs off the channel for Retry-After and leaves rows pending, then completes', async () => {
-    // The channel backoff runs on the Redis clock, so this test's clock starts at real time.
-    now = new Date();
-    const retryAfterMs = 1000;
+    const retryAfterMs = 45_000;
     const members = pushMembers(3);
     const batches = fakeBatch('push', (item, batch) =>
       batch === 1
@@ -656,22 +678,26 @@ describe('runDispatchCycle', () => {
         : { profileId: item.profileId, outcome: 'sent' }
     );
     const id = await setup({ channel: 'push', members });
-    const deps = depsFor(createFakeSource({ members }));
+    const backoff = testClockBackoff();
+    const deps = depsFor(createFakeSource({ members }), { backoff });
+    const startedAt = now.getTime();
 
-    const beforeBackoff = Date.now();
     await runDispatchCycle(deps);
     expect(await statuses(id)).toEqual({ pending: 3 });
     expect((await recipients(id)).get('p-00000')?.reason).toBe('rate_limited');
+    expect(await backoff.until(project, 'push')).toBe(startedAt + retryAfterMs);
 
-    advance(SOURCE_RETRY_MS + SECOND_MS);
+    // Another batch's 429 extends the backoff past the rows' own due time.
+    advance(retryAfterMs);
+    await backoff.set(project, 'push', retryAfterMs);
     const backedOff = await runDispatchCycle(deps);
     expect(backedOff).toMatchObject({ campaignId: id, claimed: 0 });
     expect(batches).toHaveLength(1);
-    const retryAt = (await campaign(id)).dispatch_retry_at?.getTime() ?? 0;
-    expect(retryAt).toBeGreaterThan(beforeBackoff);
-    expect(retryAt).toBeLessThanOrEqual(Date.now() + retryAfterMs);
+    expect((await campaign(id)).dispatch_retry_at?.getTime()).toBe(
+      at(retryAfterMs).getTime()
+    );
 
-    await realSleep(retryAfterMs + 100);
+    advance(retryAfterMs);
     await runUntilIdle(deps);
 
     expect(batches).toHaveLength(2);
@@ -902,8 +928,9 @@ describe('runDispatchCycle', () => {
   });
 
   it('a batch past its deadline stops starting sends and returns the rest to pending', async () => {
+    // The deadline is 30 s after markSending (61 s lease − 30 s send timeout − 1 s margin): sends start at 0, 12 and 24 s.
     const members = pushMembers(5);
-    const sendMs = 25_000;
+    const sendMs = 12_000;
     const sent = fakeChannel('push', () => {
       advance(sendMs);
       return { ok: true };
@@ -918,6 +945,11 @@ describe('runDispatchCycle', () => {
 
     expect(sent).toHaveLength(3);
     expect(await statuses(id)).toEqual({ sent: 3, pending: 2 });
+    const unstarted = await sql.$queryRawUnsafe<{ attempt: number }[]>(
+      `SELECT attempt FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid AND status = 'pending'`,
+      id
+    );
+    expect(unstarted.map((row) => row.attempt)).toEqual([0, 0]);
   });
 
   it('the rate bucket at 10 per second paces 30 sms recipients over about 2 s through the injected sleep', async () => {

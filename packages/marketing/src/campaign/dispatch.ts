@@ -26,7 +26,7 @@ import {
   effectiveQuietHours,
   getChannelSettings,
 } from '../channels/settings';
-import { LEASE_MARGIN_MS } from '../channels/timeouts';
+import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from '../channels/timeouts';
 import type { RenderedMessage } from '../channels/types';
 import type { MarketingConfig } from '../config';
 import { filterLiveTokens, recordDeadTokens } from '../engine/dead-tokens';
@@ -47,7 +47,11 @@ import type {
   createTemplateRegistry,
   TemplateVersion,
 } from '../templates/registry';
-import { zQuietHoursOverride } from './definition';
+import {
+  zFrequencyCap,
+  zQuietHoursOverride,
+  zRegistryTemplate,
+} from './definition';
 import {
   AUTH_RETRY_MS,
   SOURCE_AUTH_FAILED,
@@ -75,8 +79,9 @@ import type { createCampaignService } from './service';
 
 const SOURCE_RETRY_MS = 30_000;
 const MAX_DISPATCH_FAILURES = 5;
-// Stops starting sends this long before the sending lease ends, so the reaper never takes a batch still in flight.
-const SEND_DEADLINE_MS = SENDING_LEASE_MS - LEASE_MARGIN_MS;
+// The last send may start here and still finish, at its own timeout, before the reaper can take the batch.
+// Every adapter bounds a send by SEND_TIMEOUT_MS.
+const SEND_DEADLINE_MS = SENDING_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS;
 const LOG_PREFIX = 'marketing dispatch:';
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 const PROVIDER_CHANNELS = new Set<CampaignChannel>(['sms', 'whatsapp']);
@@ -244,12 +249,14 @@ async function pinnedVersion(
   if (!PROVIDER_CHANNELS.has(campaign.channel)) {
     return null;
   }
-  const templateId = (campaign.template as { templateId?: unknown } | null)
-    ?.templateId;
+  const template = zRegistryTemplate.safeParse(campaign.template);
+  if (!template.success) {
+    return 'missing';
+  }
   try {
     return await deps.registry.getVersion(
       campaign.project_id,
-      String(templateId),
+      template.data.templateId,
       campaign.template_version ?? 0
     );
   } catch {
@@ -260,18 +267,19 @@ async function pinnedVersion(
 async function projectCap(
   deps: DispatchDeps,
   campaign: DueCampaign
-): Promise<EffectiveCap | null> {
+): Promise<EffectiveCap | null | 'invalid'> {
   const [row] = await deps.sql.$queryRawUnsafe<{ caps: unknown }[]>(
     CAPS_SQL,
     campaign.project_id
   );
   const projectCaps = zCaps.safeParse(row?.caps ?? null);
-  const campaignCap = campaign.frequency_cap as {
-    max: number;
-    periodSeconds: number;
-  } | null;
+  const campaignCap = zFrequencyCap.safeParse(campaign.frequency_cap ?? null);
+  // Sending without a cap the campaign asked for could message people too often, so it fails instead.
+  if (!campaignCap.success) {
+    return 'invalid';
+  }
   return effectiveCap(
-    campaignCap,
+    campaignCap.data,
     projectCaps.success ? projectCaps.data : null
   );
 }
@@ -302,6 +310,7 @@ async function prepare(
   }
   let quota = Number.POSITIVE_INFINITY;
   if (channel === 'email' && settings.dailyQuota !== null) {
+    // shortcut: read once without a lock, so loops dispatching one campaign at once can overshoot the quota by a batch each; lock or reserve per project and channel if that overshoot matters.
     quota = await remainingQuota(deps.sql, {
       projectId,
       channel,
@@ -342,12 +351,17 @@ async function prepare(
     await deps.campaigns.failCampaign(id, 'template_not_found');
     return null;
   }
+  const cap = await projectCap(deps, campaign);
+  if (cap === 'invalid') {
+    await deps.campaigns.failCampaign(id, 'invalid_frequency_cap');
+    return null;
+  }
   return {
     ...loaded,
     settings,
     source,
     version,
-    cap: await projectCap(deps, campaign),
+    cap,
     limit: Math.min(claimSize(settings.ratePerSecond), quota, MAX_LOOKUP_IDS),
   };
 }
@@ -488,17 +502,18 @@ async function sortEntries(
   const allTokens = [...entries.values()].flatMap(
     (entry) => entry.devices?.map((device) => device.token) ?? []
   );
-  const liveTokens =
-    channel === 'push'
-      ? new Set(
-          await filterLiveTokens(
-            deps.sql,
-            projectId,
-            allTokens,
-            deps.cfg.encryptionKey
-          )
+  const isPush = channel === 'push';
+  // Only push carries device tokens; other channels send none.
+  const liveTokens = new Set(
+    isPush
+      ? await filterLiveTokens(
+          deps.sql,
+          projectId,
+          allTokens,
+          deps.cfg.encryptionKey
         )
-      : new Set(allTokens);
+      : []
+  );
   const sorted: Sorted = { items: [], skipped: [], failed: [] };
   for (const profileId of claim.profileIds) {
     const entry = entries.get(profileId) ?? {
@@ -509,7 +524,7 @@ async function sortEntries(
       entry.devices
         ?.map((device) => device.token)
         .filter((token) => liveTokens.has(token)) ?? [];
-    const noLiveToken = channel === 'push' && deviceTokens.length === 0;
+    const noLiveToken = isPush && deviceTokens.length === 0;
     let skip = lookupSkipReason(entry);
     if (!skip && optedOut.has(profileId)) {
       skip = 'opted_out';
@@ -548,9 +563,10 @@ async function sortEntries(
 async function sendWithDeadline(
   deps: DispatchDeps,
   prepared: Prepared,
-  items: BatchItem[]
+  items: BatchItem[],
+  sendingAt: Date
 ): Promise<DeliveryOutcome[]> {
-  const deadlineAt = deps.now().getTime() + SEND_DEADLINE_MS;
+  const deadlineAt = sendingAt.getTime() + SEND_DEADLINE_MS;
   const controller = new AbortController();
   // Fires at the deadline too, for adapters that check the signal rather than the clock.
   const timer = setTimeout(
@@ -697,13 +713,15 @@ async function deliver(
       return;
     }
     await oneBatchAtATime(`${projectId}:${channel}`, async () => {
+      // The sending lease starts here, and a capped markSending spans several chunk transactions.
+      const sendingAt = deps.now();
       const marked = await markSending(deps.sql, {
         campaignId: id,
         projectId,
         channel,
         token: claim.token,
         profileIds: paced.map((item) => item.profileId),
-        now: deps.now(),
+        now: sendingAt,
         cap: prepared.cap,
       });
       result.skipped += marked.capped.length;
@@ -715,7 +733,7 @@ async function deliver(
       }
       let outcomes: DeliveryOutcome[];
       try {
-        outcomes = await sendWithDeadline(deps, prepared, toSend);
+        outcomes = await sendWithDeadline(deps, prepared, toSend, sendingAt);
       } catch (error) {
         // The rows stay sending: the provider may have accepted some, so only the reaper may decide.
         console.error(
@@ -767,8 +785,8 @@ export async function runDispatchCycle(
   if (result.claimed === 0) {
     return result;
   }
-  await deps.sql.$executeRawUnsafe(STAMP_SQL, campaign.id, now.toISOString());
   try {
+    await deps.sql.$executeRawUnsafe(STAMP_SQL, campaign.id, now.toISOString());
     await deliver(deps, campaign, prepared, claim, result);
   } finally {
     // A row leased but never marked sending always returns to the pool.
