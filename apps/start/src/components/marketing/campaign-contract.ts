@@ -57,6 +57,10 @@ export const MAX_IDS_PER_CHANGE = 2000;
 // The service rejects more than 200 distinct inputs per call (after trim and dedupe); the proxy body holds 1000.
 export const MAX_RESOLVE_DISTINCT_INPUTS = 200;
 export const MAX_RESOLVE_INPUT_LENGTH = 256;
+// A longer leave-out list is not sent to the audience API, so previews cannot drop those students.
+export const MAX_PREVIEW_EXCLUDE_IDS = 1000;
+export const MAX_PREVIEW_LIMIT = 50;
+export const RESERVED_ID_DIMENSION = 'id';
 
 const MAX_CAMPAIGN_NAME = 200;
 const MAX_CAMPAIGN_KEY = 100;
@@ -397,6 +401,15 @@ export interface Dimension {
   type: 'string' | 'number' | 'date' | 'boolean';
   multiValued: boolean;
   valuesListable: boolean;
+}
+
+export interface AudienceSchema {
+  dimensions: Dimension[];
+}
+
+export interface DimensionValue {
+  value: string;
+  label: string;
 }
 
 export interface AudienceRow {
