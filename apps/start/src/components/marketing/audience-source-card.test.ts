@@ -36,7 +36,7 @@ describe('audience source secret', () => {
 
   test('secret_required has a plain message', () => {
     expect(
-      saveErrorMessage(new MarketingApiError(400, 'secret_required', []))
+      saveErrorMessage(new MarketingApiError(400, 'secret_required', [], null))
     ).toContain('Enter the secret again');
   });
 });

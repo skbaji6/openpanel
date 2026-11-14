@@ -1,5 +1,7 @@
 import { useCallback } from 'react';
 import type { ApiIssue } from './contract';
+import { ERROR_LABELS } from './error-labels';
+import { labelSettingsIssue } from './reason-labels';
 import { useAppParams } from '@/hooks/use-app-params';
 
 const MARKETING_PROXY_PATH = '/marketing-api';
@@ -8,12 +10,19 @@ export class MarketingApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly issues: ApiIssue[];
+  readonly details: Record<string, unknown> | null;
 
-  constructor(status: number, code: string, issues: ApiIssue[]) {
+  constructor(
+    status: number,
+    code: string,
+    issues: ApiIssue[],
+    details: Record<string, unknown> | null
+  ) {
     super(code);
     this.status = status;
     this.code = code;
     this.issues = issues;
+    this.details = details;
   }
 }
 
@@ -31,6 +40,10 @@ function issuesOf(body: unknown): ApiIssue[] {
       typeof issue.path === 'string' &&
       typeof issue.message === 'string'
   );
+}
+
+function detailsOf(body: unknown): Record<string, unknown> | null {
+  return isRecord(body) && isRecord(body.details) ? body.details : null;
 }
 
 export async function marketingFetch<T>(
@@ -53,7 +66,12 @@ export async function marketingFetch<T>(
       isRecord(body) && typeof body.error === 'string'
         ? body.error
         : `http_${response.status}`;
-    throw new MarketingApiError(response.status, code, issuesOf(body));
+    throw new MarketingApiError(
+      response.status,
+      code,
+      issuesOf(body),
+      detailsOf(body)
+    );
   }
   return body as T;
 }
@@ -78,14 +96,6 @@ export function useMarketingQueryKey() {
   );
 }
 
-const ERROR_MESSAGES: Record<string, string> = {
-  forbidden: 'You do not have permission to do this',
-  not_found: 'Not found',
-  secrets_required: 'Re-enter the secrets for this channel',
-  rule_reactivated: 'The rule was reactivated while deleting; try again',
-  payload_too_large: 'The request is too large',
-};
-
 export function describeMarketingError(error: unknown): string {
   if (!(error instanceof MarketingApiError)) {
     return 'Something went wrong';
@@ -93,6 +103,13 @@ export function describeMarketingError(error: unknown): string {
   const issues = error.issues
     .map((issue) => `${issue.path}: ${issue.message}`)
     .join('; ');
-  const message = ERROR_MESSAGES[error.code] ?? error.code;
-  return issues ? `${message} (${issues})` : message;
+  const message = ERROR_LABELS[error.code] ?? error.code;
+  const settingsIssues =
+    error.code === 'invalid_settings' && Array.isArray(error.details?.issues)
+      ? error.details.issues
+          .map((issue) => labelSettingsIssue(String(issue)))
+          .join('; ')
+      : '';
+  const extra = [issues, settingsIssues].filter(Boolean).join('; ');
+  return extra ? `${message} (${extra})` : message;
 }

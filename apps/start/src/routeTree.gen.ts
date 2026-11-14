@@ -89,9 +89,12 @@ import { Route as AppOrganizationIdProjectIdProfilesTabsAnonymousRouteImport } f
 import { Route as AppOrganizationIdProjectIdProfilesProfileIdTabsRouteImport } from './routes/_app.$organizationId.$projectId.profiles.$profileId._tabs'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsRulesRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.rules'
 import { Route as AppOrganizationIdProjectIdNotificationsTabsNotificationsRouteImport } from './routes/_app.$organizationId.$projectId.notifications._tabs.notifications'
+import { Route as AppOrganizationIdProjectIdMarketingTabsTemplatesRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.templates'
 import { Route as AppOrganizationIdProjectIdMarketingTabsResultsRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.results'
 import { Route as AppOrganizationIdProjectIdMarketingTabsGuideRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.guide'
 import { Route as AppOrganizationIdProjectIdMarketingTabsChannelsRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.channels'
+import { Route as AppOrganizationIdProjectIdMarketingTabsCampaignsRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.campaigns'
+import { Route as AppOrganizationIdProjectIdMarketingTabsAudiencesRouteImport } from './routes/_app.$organizationId.$projectId.marketing._tabs.audiences'
 import { Route as AppOrganizationIdProjectIdIntegrationsTabsInstalledRouteImport } from './routes/_app.$organizationId.$projectId.integrations._tabs.installed'
 import { Route as AppOrganizationIdProjectIdIntegrationsTabsAvailableRouteImport } from './routes/_app.$organizationId.$projectId.integrations._tabs.available'
 import { Route as AppOrganizationIdProjectIdGroupsGroupIdTabsRouteImport } from './routes/_app.$organizationId.$projectId.groups_.$groupId._tabs'
@@ -640,6 +643,12 @@ const AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute =
     path: '/notifications',
     getParentRoute: () => AppOrganizationIdProjectIdNotificationsTabsRoute,
   } as any)
+const AppOrganizationIdProjectIdMarketingTabsTemplatesRoute =
+  AppOrganizationIdProjectIdMarketingTabsTemplatesRouteImport.update({
+    id: '/templates',
+    path: '/templates',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
+  } as any)
 const AppOrganizationIdProjectIdMarketingTabsResultsRoute =
   AppOrganizationIdProjectIdMarketingTabsResultsRouteImport.update({
     id: '/results',
@@ -656,6 +665,18 @@ const AppOrganizationIdProjectIdMarketingTabsChannelsRoute =
   AppOrganizationIdProjectIdMarketingTabsChannelsRouteImport.update({
     id: '/channels',
     path: '/channels',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsCampaignsRoute =
+  AppOrganizationIdProjectIdMarketingTabsCampaignsRouteImport.update({
+    id: '/campaigns',
+    path: '/campaigns',
+    getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
+  } as any)
+const AppOrganizationIdProjectIdMarketingTabsAudiencesRoute =
+  AppOrganizationIdProjectIdMarketingTabsAudiencesRouteImport.update({
+    id: '/audiences',
+    path: '/audiences',
     getParentRoute: () => AppOrganizationIdProjectIdMarketingTabsRoute,
   } as any)
 const AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute =
@@ -815,9 +836,12 @@ export interface FileRoutesByFullPath {
   '/$organizationId/$projectId/groups/$groupId': typeof AppOrganizationIdProjectIdGroupsGroupIdTabsRouteWithChildren
   '/$organizationId/$projectId/integrations/available': typeof AppOrganizationIdProjectIdIntegrationsTabsAvailableRoute
   '/$organizationId/$projectId/integrations/installed': typeof AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute
+  '/$organizationId/$projectId/marketing/audiences': typeof AppOrganizationIdProjectIdMarketingTabsAudiencesRoute
+  '/$organizationId/$projectId/marketing/campaigns': typeof AppOrganizationIdProjectIdMarketingTabsCampaignsRoute
   '/$organizationId/$projectId/marketing/channels': typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
   '/$organizationId/$projectId/marketing/guide': typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
   '/$organizationId/$projectId/marketing/results': typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
+  '/$organizationId/$projectId/marketing/templates': typeof AppOrganizationIdProjectIdMarketingTabsTemplatesRoute
   '/$organizationId/$projectId/notifications/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/$organizationId/$projectId/notifications/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
   '/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsRouteWithChildren
@@ -906,9 +930,12 @@ export interface FileRoutesByTo {
   '/$organizationId/$projectId/groups/$groupId': typeof AppOrganizationIdProjectIdGroupsGroupIdTabsIndexRoute
   '/$organizationId/$projectId/integrations/available': typeof AppOrganizationIdProjectIdIntegrationsTabsAvailableRoute
   '/$organizationId/$projectId/integrations/installed': typeof AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute
+  '/$organizationId/$projectId/marketing/audiences': typeof AppOrganizationIdProjectIdMarketingTabsAudiencesRoute
+  '/$organizationId/$projectId/marketing/campaigns': typeof AppOrganizationIdProjectIdMarketingTabsCampaignsRoute
   '/$organizationId/$projectId/marketing/channels': typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
   '/$organizationId/$projectId/marketing/guide': typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
   '/$organizationId/$projectId/marketing/results': typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
+  '/$organizationId/$projectId/marketing/templates': typeof AppOrganizationIdProjectIdMarketingTabsTemplatesRoute
   '/$organizationId/$projectId/notifications/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/$organizationId/$projectId/notifications/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
   '/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdTabsIndexRoute
@@ -1007,9 +1034,12 @@ export interface FileRoutesById {
   '/_app/$organizationId/$projectId/groups_/$groupId/_tabs': typeof AppOrganizationIdProjectIdGroupsGroupIdTabsRouteWithChildren
   '/_app/$organizationId/$projectId/integrations/_tabs/available': typeof AppOrganizationIdProjectIdIntegrationsTabsAvailableRoute
   '/_app/$organizationId/$projectId/integrations/_tabs/installed': typeof AppOrganizationIdProjectIdIntegrationsTabsInstalledRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/audiences': typeof AppOrganizationIdProjectIdMarketingTabsAudiencesRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/campaigns': typeof AppOrganizationIdProjectIdMarketingTabsCampaignsRoute
   '/_app/$organizationId/$projectId/marketing/_tabs/channels': typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
   '/_app/$organizationId/$projectId/marketing/_tabs/guide': typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
   '/_app/$organizationId/$projectId/marketing/_tabs/results': typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
+  '/_app/$organizationId/$projectId/marketing/_tabs/templates': typeof AppOrganizationIdProjectIdMarketingTabsTemplatesRoute
   '/_app/$organizationId/$projectId/notifications/_tabs/notifications': typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRoute
   '/_app/$organizationId/$projectId/notifications/_tabs/rules': typeof AppOrganizationIdProjectIdNotificationsTabsRulesRoute
   '/_app/$organizationId/$projectId/profiles/$profileId': typeof AppOrganizationIdProjectIdProfilesProfileIdRouteWithChildren
@@ -1105,9 +1135,12 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/groups/$groupId'
     | '/$organizationId/$projectId/integrations/available'
     | '/$organizationId/$projectId/integrations/installed'
+    | '/$organizationId/$projectId/marketing/audiences'
+    | '/$organizationId/$projectId/marketing/campaigns'
     | '/$organizationId/$projectId/marketing/channels'
     | '/$organizationId/$projectId/marketing/guide'
     | '/$organizationId/$projectId/marketing/results'
+    | '/$organizationId/$projectId/marketing/templates'
     | '/$organizationId/$projectId/notifications/notifications'
     | '/$organizationId/$projectId/notifications/rules'
     | '/$organizationId/$projectId/profiles/$profileId'
@@ -1196,9 +1229,12 @@ export interface FileRouteTypes {
     | '/$organizationId/$projectId/groups/$groupId'
     | '/$organizationId/$projectId/integrations/available'
     | '/$organizationId/$projectId/integrations/installed'
+    | '/$organizationId/$projectId/marketing/audiences'
+    | '/$organizationId/$projectId/marketing/campaigns'
     | '/$organizationId/$projectId/marketing/channels'
     | '/$organizationId/$projectId/marketing/guide'
     | '/$organizationId/$projectId/marketing/results'
+    | '/$organizationId/$projectId/marketing/templates'
     | '/$organizationId/$projectId/notifications/notifications'
     | '/$organizationId/$projectId/notifications/rules'
     | '/$organizationId/$projectId/profiles/$profileId'
@@ -1296,9 +1332,12 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/$projectId/groups_/$groupId/_tabs'
     | '/_app/$organizationId/$projectId/integrations/_tabs/available'
     | '/_app/$organizationId/$projectId/integrations/_tabs/installed'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/audiences'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/campaigns'
     | '/_app/$organizationId/$projectId/marketing/_tabs/channels'
     | '/_app/$organizationId/$projectId/marketing/_tabs/guide'
     | '/_app/$organizationId/$projectId/marketing/_tabs/results'
+    | '/_app/$organizationId/$projectId/marketing/_tabs/templates'
     | '/_app/$organizationId/$projectId/notifications/_tabs/notifications'
     | '/_app/$organizationId/$projectId/notifications/_tabs/rules'
     | '/_app/$organizationId/$projectId/profiles/$profileId'
@@ -1975,6 +2014,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrganizationIdProjectIdNotificationsTabsNotificationsRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdNotificationsTabsRoute
     }
+    '/_app/$organizationId/$projectId/marketing/_tabs/templates': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/templates'
+      path: '/templates'
+      fullPath: '/$organizationId/$projectId/marketing/templates'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsTemplatesRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
+    }
     '/_app/$organizationId/$projectId/marketing/_tabs/results': {
       id: '/_app/$organizationId/$projectId/marketing/_tabs/results'
       path: '/results'
@@ -1994,6 +2040,20 @@ declare module '@tanstack/react-router' {
       path: '/channels'
       fullPath: '/$organizationId/$projectId/marketing/channels'
       preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsChannelsRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs/campaigns': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/campaigns'
+      path: '/campaigns'
+      fullPath: '/$organizationId/$projectId/marketing/campaigns'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsCampaignsRouteImport
+      parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
+    }
+    '/_app/$organizationId/$projectId/marketing/_tabs/audiences': {
+      id: '/_app/$organizationId/$projectId/marketing/_tabs/audiences'
+      path: '/audiences'
+      fullPath: '/$organizationId/$projectId/marketing/audiences'
+      preLoaderRoute: typeof AppOrganizationIdProjectIdMarketingTabsAudiencesRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdMarketingTabsRoute
     }
     '/_app/$organizationId/$projectId/integrations/_tabs/installed': {
@@ -2187,20 +2247,29 @@ const AppOrganizationIdProjectIdIntegrationsRouteWithChildren =
   )
 
 interface AppOrganizationIdProjectIdMarketingTabsRouteChildren {
+  AppOrganizationIdProjectIdMarketingTabsAudiencesRoute: typeof AppOrganizationIdProjectIdMarketingTabsAudiencesRoute
+  AppOrganizationIdProjectIdMarketingTabsCampaignsRoute: typeof AppOrganizationIdProjectIdMarketingTabsCampaignsRoute
   AppOrganizationIdProjectIdMarketingTabsChannelsRoute: typeof AppOrganizationIdProjectIdMarketingTabsChannelsRoute
   AppOrganizationIdProjectIdMarketingTabsGuideRoute: typeof AppOrganizationIdProjectIdMarketingTabsGuideRoute
   AppOrganizationIdProjectIdMarketingTabsResultsRoute: typeof AppOrganizationIdProjectIdMarketingTabsResultsRoute
+  AppOrganizationIdProjectIdMarketingTabsTemplatesRoute: typeof AppOrganizationIdProjectIdMarketingTabsTemplatesRoute
   AppOrganizationIdProjectIdMarketingTabsIndexRoute: typeof AppOrganizationIdProjectIdMarketingTabsIndexRoute
 }
 
 const AppOrganizationIdProjectIdMarketingTabsRouteChildren: AppOrganizationIdProjectIdMarketingTabsRouteChildren =
   {
+    AppOrganizationIdProjectIdMarketingTabsAudiencesRoute:
+      AppOrganizationIdProjectIdMarketingTabsAudiencesRoute,
+    AppOrganizationIdProjectIdMarketingTabsCampaignsRoute:
+      AppOrganizationIdProjectIdMarketingTabsCampaignsRoute,
     AppOrganizationIdProjectIdMarketingTabsChannelsRoute:
       AppOrganizationIdProjectIdMarketingTabsChannelsRoute,
     AppOrganizationIdProjectIdMarketingTabsGuideRoute:
       AppOrganizationIdProjectIdMarketingTabsGuideRoute,
     AppOrganizationIdProjectIdMarketingTabsResultsRoute:
       AppOrganizationIdProjectIdMarketingTabsResultsRoute,
+    AppOrganizationIdProjectIdMarketingTabsTemplatesRoute:
+      AppOrganizationIdProjectIdMarketingTabsTemplatesRoute,
     AppOrganizationIdProjectIdMarketingTabsIndexRoute:
       AppOrganizationIdProjectIdMarketingTabsIndexRoute,
   }
