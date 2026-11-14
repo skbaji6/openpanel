@@ -31,6 +31,7 @@ import {
   testClockBackoff,
   USER,
 } from './dispatch.test-helpers';
+import { CHANNEL_ERROR_BACKOFF_MS } from './recipients';
 
 const SECOND_MS = 1000;
 const OUTAGE_MS = 60_000;
@@ -42,6 +43,9 @@ const RECIPIENTS = 50;
 // Ten seconds of tokens per claim: ten recipients a cycle, so the campaign spans several cycles.
 const RATE_PER_SECOND = 1;
 const MAX_CYCLES = 200;
+const UNREACHABLE_RECIPIENTS = 10;
+// More cycles than MAX_SEND_ATTEMPTS, so a spent attempt per cycle would fail every row.
+const UNREACHABLE_CYCLES = 6;
 
 let project = '';
 let clock: Clock;
@@ -83,6 +87,60 @@ async function cycleUntilSent(deps: DispatchDeps, campaignId: string) {
 }
 
 describe('outages', () => {
+  it('a provider refusing connections for six cycles spends no attempt and fails nobody; after recovery each profile is sent once', async () => {
+    const members = pushMembers(UNREACHABLE_RECIPIENTS);
+    let refusing = true;
+    let refusedBatches = 0;
+    const deliveries = recordingAdapter('push', {
+      beforeSend: () => {
+        refusedBatches += refusing ? 1 : 0;
+      },
+      outcome: (item) =>
+        refusing
+          ? { profileId: item.profileId, outcome: 'retry', reason: 'not_sent' }
+          : { profileId: item.profileId, outcome: 'sent' },
+    });
+    const id = await insertRunningCampaign({
+      project,
+      channel: 'push',
+      recipients: members.map((member) => member.id),
+      now: clock.now(),
+    });
+    const deps = dispatchDeps(createFakeSource({ members }), clock);
+
+    for (let cycle = 0; cycle < UNREACHABLE_CYCLES; cycle++) {
+      await runDispatchCycle(deps);
+      clock.advance(CHANNEL_ERROR_BACKOFF_MS);
+    }
+
+    expect(refusedBatches).toBe(UNREACHABLE_CYCLES);
+    const rows = await sql.$queryRawUnsafe<
+      { status: string; attempt: number }[]
+    >(
+      'SELECT status, attempt FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid',
+      id
+    );
+    expect(
+      rows.every((row) => row.status === 'pending' && row.attempt === 0)
+    ).toBe(true);
+    const held = await campaignSnapshot(id);
+    expect(held.state).toBe('running');
+    expect(held.dispatch_error).toBe('channel_unreachable');
+    expect(held.dispatch_retry_at).not.toBeNull();
+    expect(held.failed).toBe(0);
+
+    refusing = false;
+    await drain(deps, clock);
+
+    const state = await campaignSnapshot(id);
+    expect(state.state).toBe('completed');
+    expect(state.dispatch_error).toBeNull();
+    expect(
+      (await settlement(id, UNREACHABLE_RECIPIENTS, deliveries)).violations
+    ).toEqual(NO_VIOLATIONS);
+    expect(await statuses(id)).toEqual({ sent: UNREACHABLE_RECIPIENTS });
+  });
+
   it('the audience API failing for 60 s (fake clock) mid-campaign: dispatch_error source_unavailable, no failed mark, no duplicate, completes after recovery', async () => {
     const members = pushMembers(RECIPIENTS);
     const deliveries = recordingAdapter('push');
@@ -269,7 +327,8 @@ describe('outages', () => {
     expect(held.state).toBe('running');
     expect(held.failed).toBe(0);
     expect(await statuses(whatsappId)).toEqual({ pending: RECIPIENTS });
-    expect(await backoff.until(whatsappProject, 'whatsapp')).not.toBeNull();
+    // The wait is the provider's: the campaign says so instead of looking stalled.
+    expect(held.dispatch_error).toBe('rate_limited');
 
     clock.moveTo(new Date(stormUntil));
     await drain(deps, clock);

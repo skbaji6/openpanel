@@ -75,6 +75,7 @@ import {
   RETRY_BACKOFF_MS,
   releaseLeased,
   SENDING_LEASE_MS,
+  UNREACHABLE_REASONS,
 } from './recipients';
 import type { createCampaignService } from './service';
 
@@ -653,6 +654,18 @@ async function recordOutcomes(
     );
     await deps.backoff.set(projectId, channel, backoffMs);
     await retryLater(deps, id, later(now, backoffMs), 'rate_limited');
+  }
+  const unreachable = outcomes.some(
+    (o) => o.outcome === 'retry' && UNREACHABLE_REASONS.has(o.reason ?? '')
+  );
+  if (unreachable) {
+    await deps.backoff.set(projectId, channel, CHANNEL_ERROR_BACKOFF_MS);
+    await retryLater(
+      deps,
+      id,
+      later(now, CHANNEL_ERROR_BACKOFF_MS),
+      'channel_unreachable'
+    );
   }
   if (outcomes.some((o) => o.outcome === 'channel_error')) {
     await retryLater(

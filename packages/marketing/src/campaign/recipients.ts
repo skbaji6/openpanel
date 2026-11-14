@@ -31,11 +31,21 @@ export const REAP_BATCH = 1000;
 export const CAP_LOCK_CHUNK = 100;
 
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
-// Adapter reasons for items never put on the wire (past the batch deadline, or held back after a failed probe):
-// they spend no attempt.
+// The provider could not be reached before a byte of the request left: no connection, no DNS answer,
+// or a closed email pool that never took the message.
+export const UNREACHABLE_REASONS: ReadonlySet<string> = new Set([
+  'not_sent',
+  'pool closed',
+  'smtp ECONNREFUSED',
+  'smtp ENOTFOUND',
+  'smtp EAI_AGAIN',
+]);
+// Adapter reasons for items never put on the wire (past the batch deadline, held back after a failed probe,
+// or the provider unreachable): they spend no attempt.
 export const NOT_ATTEMPTED_REASONS: ReadonlySet<string> = new Set([
   'deadline',
   'breaker',
+  ...UNREACHABLE_REASONS,
 ]);
 const NOT_ATTEMPTED_SQL = [...NOT_ATTEMPTED_REASONS]
   .map((reason) => `'${reason}'`)

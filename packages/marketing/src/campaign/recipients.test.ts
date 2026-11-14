@@ -587,9 +587,9 @@ describe('campaign recipients', () => {
     expect([b.status, b.attempt]).toEqual(['pending', 0]);
   });
 
-  it('six deadline or breaker retries leave the row pending with its attempts given back', async () => {
+  it('six deadline, breaker or unreachable retries leave the row pending with its attempts given back', async () => {
     const id = await insertCampaign();
-    await insertRecipients(id, ['a', 'b', 'c']);
+    await insertRecipients(id, ['a', 'b', 'c', 'd', 'e']);
     let now = NOW;
     for (let round = 0; round < MAX_SEND_ATTEMPTS + 1; round++) {
       const token = await toSending(id, now);
@@ -599,7 +599,9 @@ describe('campaign recipients', () => {
         [
           { profileId: 'a', outcome: 'retry', reason: 'deadline' },
           { profileId: 'b', outcome: 'retry', reason: 'breaker' },
-          { profileId: 'c', outcome: 'retry', reason: 'smtp ECONNREFUSED' },
+          { profileId: 'c', outcome: 'retry', reason: 'exception' },
+          { profileId: 'd', outcome: 'retry', reason: 'smtp ECONNREFUSED' },
+          { profileId: 'e', outcome: 'retry', reason: 'not_sent' },
         ],
         now
       );
@@ -614,6 +616,10 @@ describe('campaign recipients', () => {
     expect([b.status, b.attempt]).toEqual(['pending', 0]);
     const c = await row(id, 'c');
     expect([c.status, c.reason]).toEqual(['failed', 'max_attempts']);
+    const d = await row(id, 'd');
+    expect([d.status, d.attempt]).toEqual(['pending', 0]);
+    const e = await row(id, 'e');
+    expect([e.status, e.attempt]).toEqual(['pending', 0]);
   });
 
   it('a late retry outcome on a cancelled campaign ends skipped, not pending', async () => {
