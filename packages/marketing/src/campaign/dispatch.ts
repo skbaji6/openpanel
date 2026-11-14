@@ -26,6 +26,7 @@ import {
   type ChannelSettings,
   effectiveQuietHours,
   getChannelSettings,
+  PROVIDER_CHANNELS,
 } from '../channels/settings';
 import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from '../channels/timeouts';
 import type { RenderedMessage } from '../channels/types';
@@ -90,7 +91,6 @@ export const SEND_DEADLINE_MS =
   SENDING_LEASE_MS - SEND_TIMEOUT_MS - LEASE_MARGIN_MS;
 const LOG_PREFIX = 'marketing dispatch:';
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
-export const PROVIDER_CHANNELS = new Set<CampaignChannel>(['sms', 'whatsapp']);
 const RETURNED_OUTCOMES = new Set<DeliveryOutcome['outcome']>([
   'retry',
   'rate_limited',

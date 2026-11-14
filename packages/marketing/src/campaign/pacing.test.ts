@@ -8,6 +8,7 @@ import {
 } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
+import { retryAfterMs } from '../channels/retry-after';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
@@ -21,7 +22,6 @@ import {
   nextQuotaDayStart,
   quotaDayStart,
   remainingQuota,
-  retryAfterMs,
 } from './pacing';
 
 const redis = getRedisCache();

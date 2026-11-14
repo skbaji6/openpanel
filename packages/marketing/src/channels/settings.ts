@@ -13,6 +13,11 @@ export const CAMPAIGN_CHANNELS = [
   'webhook',
 ] as const;
 export type CampaignChannel = (typeof CAMPAIGN_CHANNELS)[number];
+// Channels that send provider-approved templates from the registry, pinned by version.
+export const PROVIDER_CHANNELS: ReadonlySet<string> = new Set([
+  'sms',
+  'whatsapp',
+]);
 
 const MAX_CONCURRENCY = 200;
 const MAX_RATE_PER_SECOND = 10_000;

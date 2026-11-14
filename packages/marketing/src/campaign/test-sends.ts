@@ -10,7 +10,7 @@ import {
 import { withCampaignLane } from '../audience/lane';
 import type { DeliveryOutcome } from '../channels/batch';
 import { phoneSecrets } from '../channels/msg91-http';
-import { getChannelSettings } from '../channels/settings';
+import { getChannelSettings, PROVIDER_CHANNELS } from '../channels/settings';
 import { recordDeadTokens } from '../engine/dead-tokens';
 import { entryValues } from '../engine/ticker';
 import { redactSecrets } from '../redact';
@@ -22,7 +22,6 @@ import {
   type DueCampaign,
   loadAdapterConfig,
   lookupChannelOf,
-  PROVIDER_CHANNELS,
   type Prepared,
   SEND_DEADLINE_MS,
   safeProviderRef,

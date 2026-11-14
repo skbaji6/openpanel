@@ -3,11 +3,11 @@ import {
   CAMPAIGN_CHANNELS,
   checkChannelSettings,
   getChannelSettings,
+  PROVIDER_CHANNELS,
 } from '../channels/settings';
 import type { Queryable, Sql } from '../engine/engine';
 import type { createTemplateRegistry } from '../templates/registry';
 
-const REGISTRY_CHANNELS = new Set(['sms', 'whatsapp']);
 // Channels without a template registry have nothing to pin.
 const UNVERSIONED = 0;
 const zTemplateRef = z.object({ templateId: z.string() });
@@ -36,7 +36,7 @@ export function createChannelReady(deps: {
     if (issue) {
       return issue;
     }
-    if (!REGISTRY_CHANNELS.has(known)) {
+    if (!PROVIDER_CHANNELS.has(known)) {
       return null;
     }
     const ref = zTemplateRef.safeParse(template);
@@ -61,7 +61,7 @@ export async function pinTemplate(
   channel: string,
   template: unknown
 ): Promise<number | null> {
-  if (!REGISTRY_CHANNELS.has(channel)) {
+  if (!PROVIDER_CHANNELS.has(channel)) {
     return UNVERSIONED;
   }
   const ref = zPinnableRef.safeParse(template);

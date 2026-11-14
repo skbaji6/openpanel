@@ -265,7 +265,7 @@ A campaign sends one message to an audience over one channel. It is drafted, che
 
 ### 10.1 Channel credentials and settings
 
-Every channel needs a stored credential and a settings row before a campaign on it can start. Routes (worker path `/marketing/...`; the dashboard proxy serves the same paths as `/marketing-api/...`, owners and admins only for changes). The dashboard screens for the new channels and settings come in the next phase; until then call the routes.
+A campaign can start only when its channel has a stored credential; `sms`, `whatsapp` and `email` also need a saved `ratePerSecond`, and `email` a `dailyQuota` (the defaults have neither). Other channels start on the default settings. Routes (worker path `/marketing/...`; the dashboard proxy serves the same paths as `/marketing-api/...`, owners and admins only for changes). The dashboard screens for the new channels and settings come in the next phase; until then call the routes.
 
 | Route | Body | Answer |
 |---|---|---|

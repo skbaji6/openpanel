@@ -7,7 +7,7 @@ import type { FilterTree } from '../audience/contract';
 import { checkAudienceInput } from '../audience/definition';
 import type { AudienceSource } from '../audience/source';
 import { type createAudienceStore, sourceHttpError } from '../audience/store';
-import { getChannelSettings } from '../channels/settings';
+import { getChannelSettings, PROVIDER_CHANNELS } from '../channels/settings';
 import type { MarketingConfig } from '../config';
 import type { Queryable, Sql } from '../engine/engine';
 import {
@@ -34,7 +34,6 @@ const UNIQUE_VIOLATION = '23505';
 const ONE_ACTIVE_KEY = 'Key (project_id)=';
 const TERMINAL = new Set<CampaignState>(TERMINAL_STATES);
 const PREVIEWABLE = new Set<CampaignState>(['draft', 'scheduled']);
-const REGISTRY_CHANNELS = new Set(['sms', 'whatsapp']);
 const zCampaignId = z.uuid();
 
 interface Counters {
@@ -147,7 +146,7 @@ const LOCK_AUDIENCE =
 const READ_AUDIENCE = `SELECT mode, filter, exclude_filter, version, snapshot_version
   FROM marketing.audiences WHERE id = $1::uuid AND project_id = $2`;
 const SKIP_UNSENT_RECIPIENTS = `WITH skipped AS (
-    UPDATE marketing.campaign_recipients SET status = 'skipped', reason = $3, lease_until = NULL, updated_at = $2
+    UPDATE marketing.campaign_recipients SET status = 'skipped', reason = $3, lease_token = NULL, lease_until = NULL, updated_at = $2
     WHERE campaign_id = $1::uuid AND status IN ('pending', 'leased') RETURNING 1
   )
   INSERT INTO marketing.campaign_counters (campaign_id, skipped, updated_at)
@@ -240,7 +239,7 @@ function parseDraft(input: unknown) {
 }
 
 const defaultChannelReady = async (_projectId: string, channel: string) =>
-  REGISTRY_CHANNELS.has(channel) ? 'channel_not_ready' : null;
+  PROVIDER_CHANNELS.has(channel) ? 'channel_not_ready' : null;
 
 export function createCampaignService(deps: CampaignDeps) {
   const { sql } = deps;

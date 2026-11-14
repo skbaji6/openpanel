@@ -165,6 +165,24 @@ async function insertRecipients(campaignId: string, statuses: string[]) {
   }
 }
 
+// Gives the leased rows a live lease, as a dispatcher holding them would.
+async function leaseLeasedRows(campaignId: string) {
+  await sql.$executeRawUnsafe(
+    `UPDATE marketing.campaign_recipients SET lease_token = gen_random_uuid(), lease_until = now() + interval '1 minute'
+     WHERE campaign_id = $1::uuid AND status = 'leased'`,
+    campaignId
+  );
+}
+
+async function leasedSkippedRows(campaignId: string): Promise<number> {
+  const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+    `SELECT count(*)::int AS n FROM marketing.campaign_recipients
+     WHERE campaign_id = $1::uuid AND status = 'skipped' AND (lease_token IS NOT NULL OR lease_until IS NOT NULL)`,
+    campaignId
+  );
+  return row?.n ?? 0;
+}
+
 async function recipients(campaignId: string) {
   return await sql.$queryRawUnsafe<
     { profile_id: string; status: string; reason: string | null }[]
@@ -535,8 +553,10 @@ describe('campaign service', () => {
     const { campaigns, draft } = await previewedDraft();
     await campaigns.start(CTX, draft.id, {});
     await insertRecipients(draft.id, ['pending', 'leased', 'sending', 'sent']);
+    await leaseLeasedRows(draft.id);
     await stageExclusion(draft.id);
     const cancelled = await campaigns.cancel(CTX, draft.id);
+    expect(await leasedSkippedRows(draft.id)).toBe(0);
     expect(await stagedCount(draft.id)).toBe(0);
     expect(cancelled.state).toBe('cancelled');
     expect(cancelled.finishedAt).toBe(START.toISOString());
@@ -698,8 +718,10 @@ describe('campaign service', () => {
     const { campaigns, draft } = await previewedDraft();
     await campaigns.start(CTX, draft.id, {});
     await insertRecipients(draft.id, ['pending', 'leased', 'sending']);
+    await leaseLeasedRows(draft.id);
     await stageExclusion(draft.id);
     await campaigns.failCampaign(draft.id, 'materialize_failed');
+    expect(await leasedSkippedRows(draft.id)).toBe(0);
     expect(await stagedCount(draft.id)).toBe(0);
     const failed = await campaigns.get(CTX, draft.id);
     expect(failed).toMatchObject({
