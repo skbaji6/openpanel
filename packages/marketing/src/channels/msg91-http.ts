@@ -176,6 +176,9 @@ function requestIdOf(
   return usable ? { providerRef: id } : {};
 }
 
+// A fragment this short would blank ordinary provider codes and cannot identify anyone.
+const MIN_PHONE_SECRET_LENGTH = 6;
+
 export const digitsOf = (phone: string) => phone.replace(/\D/g, '');
 
 // MSG91 takes digits with the country code; a shorter number cannot be one and is never sent.
@@ -196,7 +199,11 @@ export function withMsg91Phone(
 
 // A provider may echo a phone in either form, so both count as secrets.
 export const phoneSecrets = (phone: string | undefined): string[] =>
-  phone ? [phone, digitsOf(phone)].filter(Boolean) : [];
+  phone
+    ? [phone, digitsOf(phone)].filter(
+        (secret) => secret.length >= MIN_PHONE_SECRET_LENGTH
+      )
+    : [];
 
 // A code that echoes a phone number, the integrated number or the key is not a code.
 export function providerReason(

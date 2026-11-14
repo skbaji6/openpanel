@@ -14,7 +14,11 @@ import {
   SMS_PATH,
   startFakeMsg91,
 } from './fakes/msg91-server';
-import { MSG91_SMS_BASE_URL, sendMsg91Groups } from './msg91-http';
+import {
+  MSG91_SMS_BASE_URL,
+  phoneSecrets,
+  sendMsg91Groups,
+} from './msg91-http';
 import {
   createMsg91SmsAdapter,
   msg91SmsConfigSchema,
@@ -639,5 +643,15 @@ describe('msg91 base url', () => {
         allowHosts: ['127.0.0.1'],
       }).configSchema.safeParse(config).success
     ).toBe(true);
+  });
+});
+
+describe('phoneSecrets', () => {
+  it('a fragment too short to be a phone is not a secret', () => {
+    expect(phoneSecrets('+1')).toEqual([]);
+    expect(phoneSecrets('+91 98765 43210')).toEqual([
+      '+91 98765 43210',
+      '919876543210',
+    ]);
   });
 });
