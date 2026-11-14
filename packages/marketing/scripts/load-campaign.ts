@@ -20,7 +20,12 @@ const MAX_DURING_TO_IDLE_RATIO = 2;
 const FCM_FINISH_LIMIT_MS = 600_000;
 const DRAIN_LIMIT_MS = 1_800_000;
 const JOURNEY_STEPS = 200;
-const JOURNEY_TICK_MS = 1000;
+// Short, so the measured latency is the engine's and not the wait for the next tick.
+const JOURNEY_TICK_MS = 100;
+const JOURNEY_ROUNDS = 3;
+const P95 = 0.95;
+const MEDIAN_FRACTION = 0.5;
+const USAGE_EXIT_CODE = 2;
 const JOURNEY_LIMIT_MS = 120_000;
 const LANE_IDLE_MS = 100;
 const POLL_MS = 50;
@@ -28,7 +33,6 @@ const MS_PER_SECOND = 1000;
 const CONFIRM_THRESHOLD = 1_000_000;
 const PROFILE_DIGITS = 6;
 const DECIMAL_PLACES = 1;
-const MEDIAN_DIVISOR = 2;
 const CFG = {
   encryptionKey: ENCRYPTION_KEY,
   leaseSeconds: 120,
@@ -59,13 +63,22 @@ const { values } = parseArgs({
 });
 const mode = values.mode as Mode;
 if (!MODES.includes(mode)) {
-  throw new Error(`--mode must be one of ${MODES.join(', ')}`);
+  console.error(`usage: --mode must be one of ${MODES.join(', ')}`);
+  process.exit(USAGE_EXIT_CODE);
 }
-const recipients = Number(values.recipients);
-const loops = Number(values.loops);
-const delayMs = Number(values['delay-ms']);
-const fcmLatencyMs = Number(values['fcm-latency-ms']);
-const fcmTokensPerSecond = Number(values['fcm-tokens-per-second']);
+function positiveNumber(flag: keyof typeof values): number {
+  const value = Number(values[flag]);
+  if (!(Number.isFinite(value) && value > 0)) {
+    console.error(`usage: --${flag} must be a positive number`);
+    process.exit(USAGE_EXIT_CODE);
+  }
+  return value;
+}
+const recipients = positiveNumber('recipients');
+const loops = positiveNumber('loops');
+const delayMs = positiveNumber('delay-ms');
+const fcmLatencyMs = positiveNumber('fcm-latency-ms');
+const fcmTokensPerSecond = positiveNumber('fcm-tokens-per-second');
 
 function assertTestDatabase(): void {
   const url = process.env.DATABASE_URL;
@@ -132,38 +145,60 @@ const tokenOf = (profileId: string) => profileId.replace('p-', 'token-');
 const now = () => new Date();
 
 async function cleanup() {
+  const projects = [CAMPAIGN_PROJECT, JOURNEY_PROJECT];
   for (const table of [
     'campaigns',
     'rules',
     'contacts',
     'channel_configs',
     'channel_settings',
+    'send_ledger',
   ]) {
     await sql.$executeRawUnsafe(
-      `DELETE FROM marketing.${table} WHERE project_id LIKE $1`,
-      `${LOAD_PREFIX}%`
+      `DELETE FROM marketing.${table} WHERE project_id = ANY($1::text[])`,
+      projects
     );
   }
   // Enrollments and steps do not cascade from rules.
   await sql.$executeRawUnsafe(
     `DELETE FROM marketing.steps WHERE enrollment_id IN
-       (SELECT id FROM marketing.enrollments WHERE project_id LIKE $1)`,
-    `${LOAD_PREFIX}%`
+       (SELECT id FROM marketing.enrollments WHERE project_id = ANY($1::text[]))`,
+    projects
   );
   await sql.$executeRawUnsafe(
-    'DELETE FROM marketing.enrollments WHERE project_id LIKE $1',
-    `${LOAD_PREFIX}%`
+    'DELETE FROM marketing.enrollments WHERE project_id = ANY($1::text[])',
+    projects
   );
-  await sql.$executeRawUnsafe(
-    'DELETE FROM marketing.send_ledger WHERE project_id LIKE $1',
-    `${LOAD_PREFIX}%`
-  );
-  for (const project of [CAMPAIGN_PROJECT, JOURNEY_PROJECT]) {
+  for (const project of projects) {
     const keys = await redis.keys(`*${project}*`);
     if (keys.length > 0) {
       await redis.del(...keys);
     }
   }
+}
+
+interface ConsumerState {
+  lag: number;
+  updated_at: Date;
+}
+// The ticker's lag gate reads this global row; the script forces it open and puts it back afterwards.
+let savedConsumerState: ConsumerState | null | undefined;
+
+async function restoreConsumerState() {
+  if (savedConsumerState === undefined) {
+    return;
+  }
+  if (savedConsumerState === null) {
+    await sql.$executeRawUnsafe(
+      'DELETE FROM marketing.consumer_state WHERE id = 1'
+    );
+    return;
+  }
+  await sql.$executeRawUnsafe(
+    'UPDATE marketing.consumer_state SET lag = $1, updated_at = $2::timestamptz WHERE id = 1',
+    savedConsumerState.lag,
+    savedConsumerState.updated_at.toISOString()
+  );
 }
 
 async function setChannelConfig(
@@ -361,6 +396,10 @@ function registerJourneyAdapter() {
 }
 
 async function seedJourneyProject() {
+  const [prior] = await sql.$queryRawUnsafe<ConsumerState[]>(
+    'SELECT lag, updated_at FROM marketing.consumer_state WHERE id = 1'
+  );
+  savedConsumerState = prior ?? null;
   await setChannelConfig(JOURNEY_PROJECT, 'webhook', { secret: 'load-secret' });
   await sql.$executeRawUnsafe(
     `INSERT INTO marketing.consumer_state (id, lag, updated_at) VALUES (1, 0, now())
@@ -396,8 +435,8 @@ function startJourneyTicker() {
   };
 }
 
-// Seeds due steps and returns the median of sent_at - due_at in ms.
-async function measureJourneySteps(label: string): Promise<number> {
+// Seeds due steps and returns each step's sent_at - due_at in ms, ascending.
+async function measureJourneySteps(label: string): Promise<number[]> {
   const ruleId = randomUUID();
   const definition = {
     name: label,
@@ -458,13 +497,23 @@ async function measureJourneySteps(label: string): Promise<number> {
       `${label}: ${latencies.length} of ${JOURNEY_STEPS} journey steps were sent`
     );
   }
-  const mid = Math.floor(latencies.length / MEDIAN_DIVISOR);
-  const median =
-    latencies.length % MEDIAN_DIVISOR === 0
-      ? ((latencies[mid - 1]?.ms ?? 0) + (latencies[mid]?.ms ?? 0)) /
-        MEDIAN_DIVISOR
-      : (latencies[mid]?.ms ?? 0);
-  return Math.round(median);
+  return latencies.map((row) => row.ms);
+}
+
+async function measureRounds(phase: string): Promise<number[]> {
+  const all: number[] = [];
+  for (let round = 1; round <= JOURNEY_ROUNDS; round++) {
+    all.push(...(await measureJourneySteps(`${phase}-${round}`)));
+  }
+  return all.sort((x, y) => x - y);
+}
+
+function percentile(sorted: number[], fraction: number): number {
+  const index = Math.min(
+    sorted.length - 1,
+    Math.ceil(sorted.length * fraction) - 1
+  );
+  return Math.round(sorted[index] ?? 0);
 }
 
 // ---- run ----
@@ -483,14 +532,14 @@ async function main() {
   const campaignId = await seedCampaign(profileIds);
   const source = buildSource(members);
 
-  let journeyIdleMedianMs: number | undefined;
-  let journeyDuringMedianMs: number | undefined;
+  let idleLatencies: number[] = [];
+  let duringLatencies: number[] = [];
   let stopTicker: (() => Promise<void>) | undefined;
   if (mode === 'isolation') {
     registerJourneyAdapter();
     await seedJourneyProject();
     stopTicker = startJourneyTicker();
-    journeyIdleMedianMs = await measureJourneySteps('idle');
+    idleLatencies = await measureRounds('idle');
   }
 
   const started = performance.now();
@@ -501,7 +550,7 @@ async function main() {
       async () => (await sentCount(campaignId)) > 0,
       DRAIN_LIMIT_MS
     );
-    journeyDuringMedianMs = await measureJourneySteps('during');
+    duringLatencies = await measureRounds('during');
     overlapped = (await campaignState(campaignId)) !== 'completed';
   }
   const limitMs = mode === 'fcm' ? FCM_FINISH_LIMIT_MS : DRAIN_LIMIT_MS;
@@ -515,6 +564,8 @@ async function main() {
 
   const { duplicates, missing, uncertain, statusCounts } =
     await audit(campaignId);
+  const journeyIdleMedianMs = percentile(idleLatencies, MEDIAN_FRACTION);
+  const journeyDuringMedianMs = percentile(duringLatencies, MEDIAN_FRACTION);
   const sendsPerSecond = recipients / (elapsedMs / MS_PER_SECOND);
   const line: Record<string, number | string> = {
     mode,
@@ -526,8 +577,10 @@ async function main() {
     uncertain,
   };
   if (mode === 'isolation') {
-    line.journeyIdleMedianMs = journeyIdleMedianMs as number;
-    line.journeyDuringMedianMs = journeyDuringMedianMs as number;
+    line.journeyIdleMedianMs = journeyIdleMedianMs;
+    line.journeyDuringMedianMs = journeyDuringMedianMs;
+    line.journeyIdleP95Ms = percentile(idleLatencies, P95);
+    line.journeyDuringP95Ms = percentile(duringLatencies, P95);
   }
   console.log(JSON.stringify(line));
 
@@ -552,8 +605,8 @@ async function main() {
       problems.push('campaign finished before the journey steps did');
     }
     if (
-      (journeyDuringMedianMs as number) >
-      MAX_DURING_TO_IDLE_RATIO * (journeyIdleMedianMs as number)
+      journeyDuringMedianMs >
+      MAX_DURING_TO_IDLE_RATIO * journeyIdleMedianMs
     ) {
       problems.push(`journey median above ${MAX_DURING_TO_IDLE_RATIO}x idle`);
     }
@@ -572,6 +625,7 @@ try {
 } finally {
   unregisterBatchAdapter('push');
   await cleanup();
+  await restoreConsumerState();
   await sql.$disconnect();
   redis.disconnect();
 }

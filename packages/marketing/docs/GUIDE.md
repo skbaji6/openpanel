@@ -323,11 +323,11 @@ Measured on 2026-11-14 with `bun scripts/load-campaign.ts --mode <mode>` (20,000
 | Mode | Result | Target |
 |---|---|---|
 | `noop` (no-op adapter, instant source) | 20,000 sent in 24.7 s, 808.7 sends/s, 0 duplicates, 0 missing | 1,000 sends/s: not met on this laptop |
-| `isolation` (200 due journey steps, idle then during the campaign) | idle median 1,848 ms, during median 1,577 ms, campaign 442.3 sends/s | during at most 2x idle: met |
+| `isolation` (200 due journey steps, 3 rounds idle then 3 rounds during the campaign, journey tick 100 ms; run 2026-11-14) | idle median 1,185 ms / p95 2,769 ms; during median 1,803 ms / p95 3,092 ms (1.52x); campaign 715.7 sends/s | during median at most 2x idle: met |
 | `slow-api` (2 s per lookup) | finished in 66.8 s, 0 duplicates, 0 missing, 0 uncertain | finishes, no duplicates: met |
 | `fcm` (150 ms latency, 600 tokens/s, one token each) | finished in 311.0 s, 64.3 sends/s, 0 duplicates, 0 missing | within 600 s: met |
 
-Journey latency is measured from `due_at` to `sent_at` with the journey ticker running every second, so it includes up to one tick of waiting.
+Journey latency is measured from `due_at` to `sent_at` over 600 steps per phase with the journey ticker running every 100 ms. It is dominated by the time to send a 200-step tick (10 concurrent sends), not by tick waiting. The other rows are from the first run of 2026-11-14.
 
 ## 15. Rules for changing the code
 
