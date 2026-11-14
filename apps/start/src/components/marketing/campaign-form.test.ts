@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import type { CampaignRow } from './campaign-contract';
 import {
+  audienceLabel,
   type CampaignForm,
   campaignProblems,
   emptyCampaign,
   fromRow,
+  PROBLEM_LABELS,
   progressText,
   pushPreview,
   STATE_BADGE,
@@ -243,14 +245,204 @@ describe('campaignProblems', () => {
     );
   });
 
-  test('an unknown time zone is reported', () => {
-    expect(pathsOf(form({ body: 'x', timezone: 'Mars/Base' }))).toEqual([
-      'timezone',
-    ]);
+  test('an unknown time zone is reported when scheduled', () => {
+    expect(
+      pathsOf(
+        form({
+          body: 'x',
+          sendKind: 'scheduled',
+          sendAtLocal: '2026-11-20T09:30',
+          timezone: 'Mars/Base',
+        })
+      )
+    ).toEqual(['timezone']);
+  });
+
+  test('sending now ignores the hidden time zone and late minutes', () => {
+    const value = form({ body: 'x', timezone: 'Mars/Base', ifLateMinutes: '' });
+    expect(campaignProblems(value)).toEqual([]);
+    expect(toDraftBody(value)).toMatchObject({
+      timezone: 'Asia/Kolkata',
+      ifLateMinutes: 60,
+    });
+    expect(
+      toDraftBody(form({ timezone: 'Europe/Berlin', ifLateMinutes: '15' }))
+    ).toMatchObject({ timezone: 'Europe/Berlin', ifLateMinutes: 15 });
   });
 
   test('sms needs a template', () => {
     expect(pathsOf(form({ channel: 'sms' }))).toEqual(['template.templateId']);
+  });
+});
+
+describe('campaignProblems messages', () => {
+  const messageAt = (value: CampaignForm, path: string) =>
+    campaignProblems(value).find((problem) => problem.path === path)?.message;
+  const scheduled = {
+    sendKind: 'scheduled',
+    sendAtLocal: '2026-11-20T09:30',
+  } as const;
+
+  test('quiet hours times', () => {
+    const value = form({ body: 'x', quietHours: 'custom' });
+    expect(messageAt(value, 'quietHoursOverride.start')).toBe('Pick a time');
+    expect(messageAt(value, 'quietHoursOverride.end')).toBe('Pick a time');
+    expect(
+      messageAt(
+        form({
+          body: 'x',
+          quietHours: 'custom',
+          quietStart: '21:00',
+          quietEnd: '21:00',
+        }),
+        'quietHoursOverride.end'
+      )
+    ).toBe('Pick an end time different from the start');
+  });
+
+  test('no template', () => {
+    expect(
+      messageAt(form({ channel: 'whatsapp' }), 'template.templateId')
+    ).toBe('Pick a template');
+  });
+
+  test('blank numbers', () => {
+    expect(
+      messageAt(
+        form({ body: 'x', ...scheduled, ifLateMinutes: '' }),
+        'ifLateMinutes'
+      )
+    ).toBe('Enter a number');
+    expect(
+      messageAt(
+        form({ body: 'x', capEnabled: true, capMax: '' }),
+        'frequencyCap.max'
+      )
+    ).toBe('Enter a number');
+    expect(
+      messageAt(
+        form({ body: 'x', capEnabled: true, capPeriodHours: '' }),
+        'frequencyCap.periodSeconds'
+      )
+    ).toBe('Enter a number');
+  });
+
+  test('period under a minute', () => {
+    expect(
+      messageAt(
+        form({ body: 'x', capEnabled: true, capPeriodHours: '0.01' }),
+        'frequencyCap.periodSeconds'
+      )
+    ).toBe('Use at least 1 minute');
+  });
+
+  test('message text is required for text channels', () => {
+    for (const channel of ['push', 'email', 'webhook'] as const) {
+      expect(messageAt(form({ channel }), 'template.body')).toBe(
+        'Write the message text'
+      );
+    }
+  });
+
+  test('image and link', () => {
+    expect(
+      messageAt(
+        form({ body: 'x', imageUrl: 'http://x.example/a.png' }),
+        'template.imageUrl'
+      )
+    ).toBe('Use an https link without a user name or password');
+    expect(
+      messageAt(
+        form({ body: 'x', link: 'javascript:alert(1)' }),
+        'template.link'
+      )
+    ).toBe('Use a full link such as https://… or sia://…');
+  });
+
+  test('other fields read as sentences, never zod text', () => {
+    const value = form({
+      name: ' ',
+      body: 'x',
+      skipPreviousRecipients: true,
+      ...scheduled,
+      timezone: 'Mars/Base',
+    });
+    expect(messageAt(value, 'name')).toBe('Give the campaign a name');
+    expect(messageAt(value, 'campaignKey')).toBe(
+      'Add a campaign key to skip students who already received it'
+    );
+    expect(messageAt(value, 'timezone')).toBe(
+      'Use a time zone such as Asia/Kolkata'
+    );
+  });
+
+  test('every path has a label', () => {
+    expect(PROBLEM_LABELS['frequencyCap.periodSeconds']).toBe('Limit period');
+  });
+});
+
+describe('toDraftBody details', () => {
+  test('cap with fractional hours gives whole seconds', () => {
+    expect(
+      (
+        toDraftBody(
+          form({ capEnabled: true, capMax: '3', capPeriodHours: '1.5005' })
+        ) as Record<string, unknown>
+      ).frequencyCap
+    ).toEqual({ max: 3, periodSeconds: 5402 });
+  });
+
+  test('custom quiet hours', () => {
+    expect(
+      (
+        toDraftBody(
+          form({
+            quietHours: 'custom',
+            quietStart: '21:00',
+            quietEnd: '08:00',
+            quietTimezone: 'Asia/Dubai',
+          })
+        ) as Record<string, unknown>
+      ).quietHoursOverride
+    ).toEqual({
+      enabled: true,
+      start: '21:00',
+      end: '08:00',
+      timezone: 'Asia/Dubai',
+    });
+  });
+
+  test('sendAtLocal passes through unchanged', () => {
+    expect(
+      (
+        toDraftBody(
+          form({ sendKind: 'scheduled', sendAtLocal: '2026-03-29T02:30' })
+        ) as Record<string, unknown>
+      ).sendAtLocal
+    ).toBe('2026-03-29T02:30');
+  });
+
+  test('withChannel leaves non-message fields alone', () => {
+    const before = form({
+      audienceId: AUDIENCE_ID,
+      campaignKey: 'k',
+      sendKind: 'scheduled',
+      sendAtLocal: '2026-11-20T09:30',
+      capEnabled: true,
+      body: 'x',
+    });
+    const { subject, body, imageUrl, link, templateId, channel, ...rest } =
+      withChannel(before, 'sms');
+    const {
+      subject: _s,
+      body: _b,
+      imageUrl: _i,
+      link: _l,
+      templateId: _t,
+      channel: _c,
+      ...restBefore
+    } = before;
+    expect(rest).toEqual(restBefore);
   });
 });
 
@@ -279,6 +471,25 @@ describe('pushPreview', () => {
       pushPreview(form({ body: 'Text', imageUrl: 'https://u:p@x.example/a' }))
         .imageUrl
     ).toBeNull();
+  });
+});
+
+describe('audienceLabel', () => {
+  const audiences = [{ id: AUDIENCE_ID, name: 'Grade 10' }];
+  test('names, deleted, unknown and none', () => {
+    expect(audienceLabel(AUDIENCE_ID, { audiences, failed: false })).toBe(
+      'Grade 10'
+    );
+    expect(audienceLabel('gone', { audiences, failed: false })).toBe(
+      'Deleted audience'
+    );
+    expect(
+      audienceLabel(AUDIENCE_ID, { audiences: undefined, failed: true })
+    ).toBe('—');
+    expect(
+      audienceLabel(AUDIENCE_ID, { audiences: undefined, failed: false })
+    ).toBe('');
+    expect(audienceLabel(null, { audiences, failed: false })).toBe('');
   });
 });
 

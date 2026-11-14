@@ -22,6 +22,7 @@ import {
   campaignProblems,
   emptyCampaign,
   fromRow,
+  PROBLEM_LABELS,
   type QuietHoursChoice,
   toDraftBody,
   withChannel,
@@ -44,6 +45,10 @@ const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
 const SELECT_CLASS =
   'h-8 self-start rounded-md border bg-background px-2 text-sm';
 const MODE_LABELS = { dynamic: 'Dynamic', snapshot: 'Snapshot' } as const;
+const STALE_TEMPLATE =
+  'The chosen template is no longer enabled. Pick another.';
+const CAP_HINT =
+  "Counts every message to the student on this channel from any campaign or journey (all channels if the project's limit is set that way). Students at the limit are skipped, not delayed.";
 
 type ErrorOf = (path: string) => string | undefined;
 type SetField = <K extends keyof CampaignForm>(
@@ -74,6 +79,37 @@ function Section({
   );
 }
 
+// A new tab keeps the half-written campaign open.
+function AudiencesTabLink() {
+  const { organizationId, projectId } = useAppParams();
+  return (
+    <Link
+      params={{ organizationId, projectId }}
+      rel="noopener noreferrer"
+      search={{ new: true }}
+      target="_blank"
+      to="/$organizationId/$projectId/marketing/audiences"
+    >
+      <u>Create an audience (opens in a new tab)</u>
+    </Link>
+  );
+}
+
+function TemplatesTabLink({ channel }: { channel: ProviderTemplateChannel }) {
+  const { organizationId, projectId } = useAppParams();
+  return (
+    <Link
+      params={{ organizationId, projectId }}
+      rel="noopener noreferrer"
+      search={{ channel }}
+      target="_blank"
+      to="/$organizationId/$projectId/marketing/templates"
+    >
+      <u>Templates tab (opens in a new tab)</u>
+    </Link>
+  );
+}
+
 function AudienceField({
   value,
   onChange,
@@ -83,7 +119,6 @@ function AudienceField({
   onChange: (id: string) => void;
   error?: string;
 }) {
-  const { organizationId, projectId } = useAppParams();
   const fieldId = useId();
   const audiences = useAudiences();
   const rows = audiences.data?.audiences ?? [];
@@ -96,13 +131,7 @@ function AudienceField({
       hint={
         <>
           Who receives the campaign. It can be picked later, before sending.{' '}
-          <Link
-            params={{ organizationId, projectId }}
-            search={{ new: true }}
-            to="/$organizationId/$projectId/marketing/audiences"
-          >
-            <u>Create an audience</u>
-          </Link>
+          <AudiencesTabLink />
         </>
       }
       id={fieldId}
@@ -138,7 +167,6 @@ function RegistryTemplateField({
 }) {
   const marketingFetch = useMarketingFetch();
   const queryKey = useMarketingQueryKey();
-  const { organizationId, projectId } = useAppParams();
   const fieldId = useId();
   const templates = useQuery({
     queryKey: queryKey('templates', channel),
@@ -149,20 +177,13 @@ function RegistryTemplateField({
   });
   const enabled = (templates.data?.templates ?? []).filter((t) => t.enabled);
   const selected = enabled.find((t) => t.templateId === value);
-  const templatesLink = (
-    <Link
-      params={{ organizationId, projectId }}
-      search={{ channel }}
-      to="/$organizationId/$projectId/marketing/templates"
-    >
-      <u>Templates tab</u>
-    </Link>
-  );
+  const isStale = templates.data !== undefined && value !== '' && !selected;
   if (templates.data && enabled.length === 0) {
     return (
       <p className="rounded border p-3 text-sm">
+        {isStale && `${STALE_TEMPLATE} `}
         No enabled {CHANNEL_LABELS[channel]} template yet. Add one on the{' '}
-        {templatesLink} first.
+        <TemplatesTabLink channel={channel} /> first.
       </p>
     );
   }
@@ -183,12 +204,9 @@ function RegistryTemplateField({
           className={SELECT_CLASS}
           id={fieldId}
           onChange={(event) => onChange(event.target.value)}
-          value={value}
+          value={isStale ? '' : value}
         >
           <option value="">Pick a template</option>
-          {value && !selected && (
-            <option value={value}>Template no longer enabled</option>
-          )}
           {enabled.map((t) => (
             <option key={t.templateId} value={t.templateId}>
               {t.displayName}
@@ -196,6 +214,11 @@ function RegistryTemplateField({
           ))}
         </select>
       </WithLabel>
+      {isStale && (
+        <p className="text-destructive text-sm" role="alert">
+          {STALE_TEMPLATE}
+        </p>
+      )}
       {selected && (
         <p className="whitespace-pre-wrap rounded border p-3 text-sm">
           {selected.approvedText}
@@ -234,6 +257,7 @@ function MessageFields({
       {isEmail && (
         <InputWithLabel
           error={errorOf('template.subject')}
+          hint="The subject line students see in their inbox"
           label="Subject"
           onChange={(event) => set('subject', event.target.value)}
           value={form.subject}
@@ -336,7 +360,7 @@ function channelQuietHint(settings: ChannelSettingsResponse | undefined) {
     : 'This channel has no quiet hours';
 }
 
-function LimitFields({
+function QuietHoursFields({
   form,
   set,
   errorOf,
@@ -356,6 +380,13 @@ function LimitFields({
       ),
     retry: false,
   });
+  const choose = (choice: QuietHoursChoice) => {
+    set('quietHours', choice);
+    const channelZone = settings.data?.settings.quietHours.timezone;
+    if (choice === 'custom' && channelZone) {
+      set('quietTimezone', channelZone);
+    }
+  };
   return (
     <>
       <WithLabel
@@ -366,9 +397,7 @@ function LimitFields({
         <select
           className={SELECT_CLASS}
           id={`${fieldId}-quiet`}
-          onChange={(event) =>
-            set('quietHours', event.target.value as QuietHoursChoice)
-          }
+          onChange={(event) => choose(event.target.value as QuietHoursChoice)}
           value={form.quietHours}
         >
           <option value="channel">Use the channel's quiet hours</option>
@@ -377,9 +406,10 @@ function LimitFields({
         </select>
       </WithLabel>
       {form.quietHours === 'custom' && (
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid gap-2 md:grid-cols-3">
           <WithLabel
             error={errorOf('quietHoursOverride.start')}
+            hint="Messages due from this time wait"
             id={`${fieldId}-qs`}
             label="From"
           >
@@ -392,6 +422,7 @@ function LimitFields({
           </WithLabel>
           <WithLabel
             error={errorOf('quietHoursOverride.end')}
+            hint="They are sent from this time on"
             id={`${fieldId}-qe`}
             label="Until"
           >
@@ -404,48 +435,82 @@ function LimitFields({
           </WithLabel>
           <InputWithLabel
             error={errorOf('quietHoursOverride.timezone')}
+            hint={`The times are in ${form.quietTimezone || 'this zone'}, taken from the channel's settings when you picked this option`}
             label="Time zone"
             onChange={(event) => set('quietTimezone', event.target.value)}
             value={form.quietTimezone}
           />
         </div>
       )}
-      <div className="col gap-2">
-        <label
-          className="row items-center gap-2 text-sm"
-          htmlFor={`${fieldId}-cap`}
-        >
-          <Switch
-            checked={form.capEnabled}
-            id={`${fieldId}-cap`}
-            onCheckedChange={(checked) => set('capEnabled', checked)}
+    </>
+  );
+}
+
+function CapFields({
+  form,
+  set,
+  errorOf,
+}: {
+  form: CampaignForm;
+  set: SetField;
+  errorOf: ErrorOf;
+}) {
+  const fieldId = useId();
+  return (
+    <div className="col gap-2">
+      <label
+        className="row items-center gap-2 text-sm"
+        htmlFor={`${fieldId}-cap`}
+      >
+        <Switch
+          aria-describedby={`${fieldId}-cap-hint`}
+          checked={form.capEnabled}
+          id={`${fieldId}-cap`}
+          onCheckedChange={(checked) => set('capEnabled', checked)}
+        />
+        Limit per student
+      </label>
+      <p className="text-muted-foreground text-xs" id={`${fieldId}-cap-hint`}>
+        {CAP_HINT}
+      </p>
+      {form.capEnabled && (
+        <div className="grid grid-cols-2 gap-2">
+          <InputWithLabel
+            error={errorOf('frequencyCap.max')}
+            hint="The most messages a student may receive in the period"
+            label="At most (messages)"
+            min={1}
+            onChange={(event) => set('capMax', event.target.value)}
+            type="number"
+            value={form.capMax}
           />
-          Limit per student
-        </label>
-        <p className="text-muted-foreground text-xs">
-          Skip a student who already received this many messages in the period
-        </p>
-        {form.capEnabled && (
-          <div className="grid grid-cols-2 gap-2">
-            <InputWithLabel
-              error={errorOf('frequencyCap.max')}
-              label="At most (messages)"
-              min={1}
-              onChange={(event) => set('capMax', event.target.value)}
-              type="number"
-              value={form.capMax}
-            />
-            <InputWithLabel
-              error={errorOf('frequencyCap.periodSeconds')}
-              label="In (hours)"
-              min={0}
-              onChange={(event) => set('capPeriodHours', event.target.value)}
-              type="number"
-              value={form.capPeriodHours}
-            />
-          </div>
-        )}
-      </div>
+          <InputWithLabel
+            error={errorOf('frequencyCap.periodSeconds')}
+            hint="Length of the period, for example 24 for a day"
+            label="In (hours)"
+            min={0}
+            onChange={(event) => set('capPeriodHours', event.target.value)}
+            type="number"
+            value={form.capPeriodHours}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KeyFields({
+  form,
+  set,
+  errorOf,
+}: {
+  form: CampaignForm;
+  set: SetField;
+  errorOf: ErrorOf;
+}) {
+  const fieldId = useId();
+  return (
+    <>
       <InputWithLabel
         error={errorOf('campaignKey')}
         hint="A short name shared by related campaigns, for example nov-promo. Optional"
@@ -509,6 +574,25 @@ function DeleteButton({
     >
       Delete
     </Button>
+  );
+}
+
+function ProblemSummary({
+  problems,
+}: {
+  problems: { path: string; message: string }[];
+}) {
+  const labels = [
+    ...new Set(problems.map((p) => PROBLEM_LABELS[p.path]).filter(Boolean)),
+  ];
+  const unplaced = problems.filter((p) => !PROBLEM_LABELS[p.path]);
+  return (
+    <div className="px-4 pb-2 text-destructive text-sm" role="alert">
+      {labels.length > 0 && <p>{`Check these fields: ${labels.join(', ')}`}</p>}
+      {unplaced.map((problem) => (
+        <p key={`${problem.path}-${problem.message}`}>{problem.message}</p>
+      ))}
+    </div>
   );
 }
 
@@ -579,6 +663,7 @@ export function CampaignEditor({
     },
     onSuccess(saved) {
       adopt(saved);
+      setConflict(false);
       client.setQueryData(queryKey('campaigns', saved.id), saved);
       client.invalidateQueries({
         queryKey: queryKey('campaigns'),
@@ -619,6 +704,18 @@ export function CampaignEditor({
     });
   };
 
+  const back = () => {
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    showConfirm({
+      title: 'Discard unsaved changes?',
+      text: 'Your edits to this campaign have not been saved.',
+      onConfirm: onClose,
+    });
+  };
+
   return (
     <div className="col gap-4">
       <form
@@ -637,8 +734,8 @@ export function CampaignEditor({
             role="alert"
           >
             <p>
-              Someone else changed this campaign. Review the latest version
-              below before saving again.
+              Someone else changed this campaign. Discard my edits to see the
+              latest version, or save again to replace it with what is below.
             </p>
             {row && (
               <div>
@@ -704,17 +801,12 @@ export function CampaignEditor({
           <WhenFields errorOf={errorOf} form={form} set={set} />
         </Section>
         <Section title="Limits">
-          <LimitFields errorOf={errorOf} form={form} set={set} />
+          <QuietHoursFields errorOf={errorOf} form={form} set={set} />
+          <CapFields errorOf={errorOf} form={form} set={set} />
+          <KeyFields errorOf={errorOf} form={form} set={set} />
         </Section>
         {showProblems && problems.length > 0 && (
-          <ul className="px-4 pb-2 text-destructive text-sm" role="alert">
-            {problems.map((problem) => (
-              <li key={`${problem.path}-${problem.message}`}>
-                {problem.path ? `${problem.path}: ` : ''}
-                {problem.message}
-              </li>
-            ))}
-          </ul>
+          <ProblemSummary problems={problems} />
         )}
         <div className="row items-center justify-between gap-2 border-t p-4">
           <div className="row items-center gap-2">
@@ -731,7 +823,7 @@ export function CampaignEditor({
             )}
           </div>
           <div className="row gap-2">
-            <Button onClick={onClose} type="button" variant="ghost">
+            <Button onClick={back} type="button" variant="ghost">
               Back
             </Button>
             <Button loading={save.isPending} type="submit">

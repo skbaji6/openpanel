@@ -326,6 +326,7 @@ export function TemplateEditor({
       });
     },
     onSuccess(saved) {
+      setConflict(false);
       client.setQueryData(
         queryKey('templates', 'one', saved.templateId),
         saved
@@ -390,8 +391,8 @@ export function TemplateEditor({
           role="alert"
         >
           <p>
-            Someone else changed this template. Review the latest version below
-            before saving again.
+            Someone else changed this template. Discard my edits to see the
+            latest version, or save again to replace it with what is below.
           </p>
           {row && (
             <div>

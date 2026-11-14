@@ -1,6 +1,18 @@
 import { useQuery } from '@tanstack/react-query';
-import { useMarketingFetch, useMarketingQueryKey } from './api';
+import {
+  MarketingApiError,
+  useMarketingFetch,
+  useMarketingQueryKey,
+} from './api';
 import type { AudienceRow, CampaignRow } from './campaign-contract';
+
+const NOT_FOUND = 404;
+
+export function campaignLoadErrorTitle(error: unknown): string {
+  const notFound =
+    error instanceof MarketingApiError && error.status === NOT_FOUND;
+  return notFound ? 'Campaign not found' : 'Could not load the campaign';
+}
 
 export function useCampaign(campaignId: string) {
   const marketingFetch = useMarketingFetch();

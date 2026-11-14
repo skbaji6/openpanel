@@ -3,6 +3,7 @@ import {
   type CampaignChannel,
   type CampaignRow,
   type CampaignState,
+  isTimeZone,
   zCampaignDraft,
   zImageUrl,
 } from './campaign-contract';
@@ -13,7 +14,56 @@ const DEFAULT_IF_LATE_MINUTES = '60';
 const DEFAULT_CAP_MAX = '1';
 const DEFAULT_CAP_PERIOD_HOURS = '24';
 const SECONDS_PER_HOUR = 3600;
+const MAX_IF_LATE_MINUTES = 1440;
 const MISSING_SEND_TIME = 'Pick the date and time to send';
+const TIMEZONE_MESSAGE = 'Use a time zone such as Asia/Kolkata';
+const BLANK_NUMBER = 'Enter a number';
+const BLANK_BODY = 'Write the message text';
+const FALLBACK_MESSAGE = 'Check this value';
+const TEXT_CHANNELS: CampaignChannel[] = ['push', 'email', 'webhook'];
+
+export const PROBLEM_LABELS: Record<string, string> = {
+  name: 'Name',
+  audienceId: 'Audience',
+  'template.subject': 'Title or subject',
+  'template.body': 'Message text',
+  'template.imageUrl': 'Image URL',
+  'template.link': 'Link',
+  'template.templateId': 'Template',
+  sendAtLocal: 'Send at',
+  timezone: 'Time zone',
+  ifLateMinutes: 'Late by at most',
+  'quietHoursOverride.start': 'Quiet hours from',
+  'quietHoursOverride.end': 'Quiet hours until',
+  'quietHoursOverride.timezone': 'Quiet hours time zone',
+  'frequencyCap.max': 'Limit per student',
+  'frequencyCap.periodSeconds': 'Limit period',
+  campaignKey: 'Campaign key',
+};
+
+const PATH_MESSAGES: Record<string, string> = {
+  name: 'Give the campaign a name',
+  audienceId: 'Pick an audience from the list',
+  'template.imageUrl': 'Use an https link without a user name or password',
+  'template.link': 'Use a full link such as https://… or sia://…',
+  'template.templateId': 'Pick a template',
+  sendAtLocal: MISSING_SEND_TIME,
+  timezone: TIMEZONE_MESSAGE,
+  ifLateMinutes: 'Use a whole number of minutes from 0 to 1440',
+  'quietHoursOverride.start': 'Pick a time',
+  'quietHoursOverride.end': 'Pick a time',
+  'quietHoursOverride.timezone': TIMEZONE_MESSAGE,
+  'frequencyCap.max': 'Use a whole number from 1 to 10,000',
+  'frequencyCap.periodSeconds': 'Use at most 365 days',
+  campaignKey: 'Add a campaign key to skip students who already received it',
+};
+
+// Blank number inputs become NaN, which zod reports like any other wrong type.
+const NUMBER_FIELDS: Record<string, keyof CampaignForm> = {
+  ifLateMinutes: 'ifLateMinutes',
+  'frequencyCap.max': 'capMax',
+  'frequencyCap.periodSeconds': 'capPeriodHours',
+};
 
 export type QuietHoursChoice = 'channel' | 'off' | 'custom';
 
@@ -77,6 +127,28 @@ export function sendTimeText(row: CampaignRow): string {
     return `${row.sendAtLocal.replace('T', ' ')} ${row.timezone}`;
   }
   return 'When launched';
+}
+
+export function audienceLabel(
+  audienceId: string | null,
+  source: {
+    audiences: { id: string; name: string }[] | undefined;
+    failed: boolean;
+  }
+): string {
+  if (!audienceId) {
+    return '';
+  }
+  if (source.failed) {
+    return '—';
+  }
+  if (!source.audiences) {
+    return '';
+  }
+  return (
+    source.audiences.find((audience) => audience.id === audienceId)?.name ??
+    'Deleted audience'
+  );
 }
 
 export function progressText(row: CampaignRow): string {
@@ -163,6 +235,25 @@ function quietHoursOf(form: CampaignForm): unknown {
 }
 
 // The API merges a PATCH over the stored draft, so cleared fields are sent as null rather than left out.
+// Hidden while sending now, so a bad typed value falls back instead of blocking the save.
+function timingOf(form: CampaignForm) {
+  const timezone = form.timezone.trim();
+  const ifLateMinutes = numberOf(form.ifLateMinutes);
+  if (form.sendKind === 'scheduled') {
+    return { timezone, ifLateMinutes };
+  }
+  const lateIsValid =
+    Number.isInteger(ifLateMinutes) &&
+    ifLateMinutes >= 0 &&
+    ifLateMinutes <= MAX_IF_LATE_MINUTES;
+  return {
+    timezone: isTimeZone(timezone) ? timezone : DEFAULT_TIMEZONE,
+    ifLateMinutes: lateIsValid
+      ? ifLateMinutes
+      : Number(DEFAULT_IF_LATE_MINUTES),
+  };
+}
+
 export function toDraftBody(form: CampaignForm): unknown {
   const scheduled = form.sendKind === 'scheduled';
   return {
@@ -173,8 +264,7 @@ export function toDraftBody(form: CampaignForm): unknown {
     campaignKey: form.campaignKey.trim() || null,
     skipPreviousRecipients: form.skipPreviousRecipients,
     sendAtLocal: scheduled && form.sendAtLocal ? form.sendAtLocal : null,
-    timezone: form.timezone.trim(),
-    ifLateMinutes: numberOf(form.ifLateMinutes),
+    ...timingOf(form),
     quietHoursOverride: quietHoursOf(form),
     frequencyCap: form.capEnabled
       ? {
@@ -235,14 +325,42 @@ export function fromRow(row: CampaignRow): CampaignForm {
   };
 }
 
+function messageFor(
+  form: CampaignForm,
+  path: string,
+  issue: { code: string; maximum?: unknown }
+): string {
+  const numberField = NUMBER_FIELDS[path];
+  if (numberField && Number.isNaN(numberOf(String(form[numberField])))) {
+    return BLANK_NUMBER;
+  }
+  if (path === 'frequencyCap.periodSeconds' && issue.code === 'too_small') {
+    return 'Use at least 1 minute';
+  }
+  if (path === 'quietHoursOverride.end' && issue.code === 'custom') {
+    return 'Pick an end time different from the start';
+  }
+  const isTooLongText =
+    issue.code === 'too_big' &&
+    typeof issue.maximum === 'number' &&
+    !numberField;
+  if (isTooLongText) {
+    return `Keep it under ${issue.maximum} characters`;
+  }
+  return PATH_MESSAGES[path] ?? FALLBACK_MESSAGE;
+}
+
 export function campaignProblems(form: CampaignForm): CampaignProblem[] {
   const parsed = zCampaignDraft.safeParse(toDraftBody(form));
   const problems = parsed.success
     ? []
-    : parsed.error.issues.map((issue) => ({
-        path: issue.path.join('.'),
-        message: issue.message,
-      }));
+    : parsed.error.issues.map((issue) => {
+        const path = issue.path.join('.');
+        return { path, message: messageFor(form, path, issue) };
+      });
+  if (TEXT_CHANNELS.includes(form.channel) && form.body.trim() === '') {
+    problems.push({ path: 'template.body', message: BLANK_BODY });
+  }
   if (form.sendKind === 'scheduled' && !form.sendAtLocal) {
     problems.push({ path: 'sendAtLocal', message: MISSING_SEND_TIME });
   }

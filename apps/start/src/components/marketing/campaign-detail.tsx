@@ -1,7 +1,16 @@
 import { MegaphoneIcon } from 'lucide-react';
 import { describeMarketingError } from './api';
-import { CHANNEL_LABELS, STATE_BADGE, sendTimeText } from './campaign-form';
-import { useAudiences, useCampaign } from './use-campaign';
+import {
+  audienceLabel,
+  CHANNEL_LABELS,
+  STATE_BADGE,
+  sendTimeText,
+} from './campaign-form';
+import {
+  campaignLoadErrorTitle,
+  useAudiences,
+  useCampaign,
+} from './use-campaign';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +34,7 @@ export function CampaignSummary({
       <FullPageEmptyState
         description={describeMarketingError(campaign.error)}
         icon={MegaphoneIcon}
-        title="Campaign not found"
+        title={campaignLoadErrorTitle(campaign.error)}
       >
         <Button onClick={onClose}>Back to campaigns</Button>
       </FullPageEmptyState>
@@ -34,9 +43,10 @@ export function CampaignSummary({
   const row = campaign.data;
   const badge = STATE_BADGE[row.state];
   const audienceName =
-    audiences.data?.audiences.find((a) => a.id === row.audienceId)?.name ??
-    row.audienceId ??
-    'None';
+    audienceLabel(row.audienceId, {
+      audiences: audiences.data?.audiences,
+      failed: Boolean(audiences.error),
+    }) || 'None';
   const facts: [string, string][] = [
     ['Channel', CHANNEL_LABELS[row.channel]],
     ['Audience', audienceName],

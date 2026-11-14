@@ -4,7 +4,7 @@ import { describeMarketingError } from './api';
 import { CampaignSummary } from './campaign-detail';
 import { CampaignEditor } from './campaign-editor';
 import { CampaignList } from './campaign-list';
-import { useCampaign } from './use-campaign';
+import { campaignLoadErrorTitle, useCampaign } from './use-campaign';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
@@ -31,7 +31,7 @@ function OpenCampaign({
       <FullPageEmptyState
         description={describeMarketingError(campaign.error)}
         icon={MegaphoneIcon}
-        title="Campaign not found"
+        title={campaignLoadErrorTitle(campaign.error)}
       >
         <Button onClick={onClose}>Back to campaigns</Button>
       </FullPageEmptyState>
