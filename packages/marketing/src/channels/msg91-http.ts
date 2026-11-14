@@ -154,6 +154,12 @@ function requestIdOf(reading: Msg91Reading): { providerRef?: string } {
     : {};
 }
 
+export const digitsOf = (phone: string) => phone.replace(/\D/g, '');
+
+// A provider may echo a phone in either form, so both count as secrets.
+export const phoneSecrets = (phone: string | undefined): string[] =>
+  phone ? [phone, digitsOf(phone)].filter(Boolean) : [];
+
 // A code that echoes a phone number, the integrated number or the key is not a code.
 export function providerReason(
   code: unknown,
@@ -344,7 +350,7 @@ export async function sendMsg91Groups(
       }
       const secrets = [
         spec.authKey,
-        ...items.map((item) => item.to.phone ?? ''),
+        ...items.flatMap((item) => phoneSecrets(item.to.phone)),
       ].filter(Boolean);
       const reason = failureReason(status, json, secrets);
       if (rejected && items.length === 1) {

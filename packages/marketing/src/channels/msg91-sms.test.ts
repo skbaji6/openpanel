@@ -244,6 +244,17 @@ describe('msg91 sms adapter', () => {
     expect(JSON.stringify(results)).not.toContain(AUTH_KEY);
   });
 
+  it('an error code echoing the digits of a phone stored with a plus and spaces yields a reason without it', async () => {
+    const digits = phoneOf(1);
+    const spaced = `+${digits.slice(0, 2)} ${digits.slice(2, 7)} ${digits.slice(7)}`;
+    fake.script(SMS_PATH, () => ({
+      status: 400,
+      body: { type: 'error', code: digits },
+    }));
+    const results = await run([item(1, { phone: spaced })]);
+    expect(results[0]?.reason).toBe('msg91 400');
+  });
+
   it('a single recipient 422 with a clean provider code reports that code', async () => {
     fake.script(SMS_PATH, () => ({
       status: 422,
@@ -413,6 +424,25 @@ describe('msg91 sms adapter', () => {
         .sort()
     ).toEqual(['p3', 'p40', 'p41', 'p77']);
     expect(count(results, 'sent')).toBe(96);
+  });
+
+  it('a probe that succeeds resets the breaker, so a later bad phone fails alone', async () => {
+    const bad = [1, 2, 3, 150].map((n) => phoneOf(n));
+    fake.script(SMS_PATH, (body) =>
+      bad.some((phone) => extractPhones(body).includes(phone))
+        ? { status: 400, body: { type: 'error' } }
+        : { status: 200, body: { type: 'success', message: 'req-0123456789' } }
+    );
+    const results = await run(items(250), {}, { concurrency: 1 });
+    expect(
+      results
+        .filter((r) => r.outcome === 'failed')
+        .map((r) => r.profileId)
+        .sort()
+    ).toEqual(['p1', 'p150', 'p2', 'p3']);
+    expect(results.some((r) => r.reason === 'breaker')).toBe(false);
+    expect(count(results, 'sent')).toBe(246);
+    expect([...fake.delivered.values()].every((n) => n === 1)).toBe(true);
   });
 
   it('a 429 on the first bisection half spares the sibling half', async () => {

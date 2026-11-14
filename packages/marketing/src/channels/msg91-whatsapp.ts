@@ -6,7 +6,13 @@ import type {
   DeliveryOutcome,
   ProviderMessage,
 } from './batch';
-import { providerReason, sendMsg91Groups, zMsg91BaseUrl } from './msg91-http';
+import {
+  digitsOf,
+  phoneSecrets,
+  providerReason,
+  sendMsg91Groups,
+  zMsg91BaseUrl,
+} from './msg91-http';
 
 export const MSG91_WHATSAPP_BASE_URL = 'https://api.msg91.com';
 export const MSG91_WHATSAPP_MAX_RECIPIENTS = 100;
@@ -24,8 +30,6 @@ export type Msg91WhatsAppConfig = z.infer<typeof zMsg91WhatsAppConfig>;
 type WhatsAppRef = z.infer<typeof zWhatsAppProviderRef>;
 type Outcome = Omit<DeliveryOutcome, 'profileId'>;
 type Slots = ProviderMessage['variables'];
-
-const digitsOf = (phone: string) => phone.replace(/\D/g, '');
 
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === 'object' && value !== null
@@ -159,7 +163,7 @@ export function createMsg91WhatsAppAdapter(
         config.integratedNumber,
         ...[...groups.values()].flatMap((group) => [
           group.integratedNumber,
-          ...group.items.map((item) => item.to.phone ?? ''),
+          ...group.items.flatMap((item) => phoneSecrets(item.to.phone)),
         ]),
       ];
       results.push(

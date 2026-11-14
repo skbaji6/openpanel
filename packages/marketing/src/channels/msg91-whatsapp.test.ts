@@ -271,6 +271,20 @@ describe('msg91 whatsapp adapter', () => {
     ]);
   });
 
+  it('an error_code echoing the digits of a phone stored with a plus and spaces never reaches the reason', async () => {
+    fake.script(WHATSAPP_PATH, () => ({
+      status: 200,
+      body: {
+        status: 'success',
+        hasError: true,
+        request_id: 'req-0123456789',
+        results: [{ to: phoneOf(1), status: 'failed', error_code: phoneOf(1) }],
+      },
+    }));
+    const results = await run([item(1, { phone: `+${phoneOf(1)}` })]);
+    expect(results.map((r) => r.reason)).toEqual(['msg91 failed']);
+  });
+
   it('hasError true without results is uncertain', async () => {
     fake.script(WHATSAPP_PATH, () => ({
       status: 200,
