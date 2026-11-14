@@ -208,3 +208,18 @@ export function claimSize(ratePerSecond: number | null): number {
 }
 
 export { retryAfterMs } from '../channels/retry-after';
+
+// Today counts as a day even when only part of it is left; a day with no quota left is still waited out.
+export function daysNeeded(
+  count: number,
+  remainingToday: number,
+  dailyQuota: number
+): number {
+  if (count <= 0) {
+    return 0;
+  }
+  if (count <= remainingToday) {
+    return 1;
+  }
+  return 1 + Math.ceil((count - remainingToday) / dailyQuota);
+}

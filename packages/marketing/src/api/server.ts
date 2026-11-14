@@ -102,6 +102,7 @@ export function createServer(deps: ServerDeps) {
   const { sources } = deps;
   const clock = () => new Date((deps.now ?? Date.now)());
   const templates = createTemplateRegistry({ sql, now: clock });
+  const channelReady = createChannelReady({ sql, registry: templates });
 
   const routes: Route[] = [
     {
@@ -151,9 +152,10 @@ export function createServer(deps: ServerDeps) {
               }),
               source: (projectId) => sources.forProject(projectId),
               now: clock,
-              channelReady: createChannelReady({ sql, registry: templates }),
+              channelReady,
               pinTemplate,
-            })
+            }),
+            { sql, now: clock, channelReady }
           ),
         ]
       : []),

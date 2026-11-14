@@ -19,6 +19,7 @@ const ACTIONS: CampaignAction[] = [
   'cancel',
   'complete',
   'fail',
+  'reopen',
 ];
 
 const EXPECTED: Record<
@@ -40,7 +41,7 @@ const EXPECTED: Record<
     fail: 'failed',
   },
   paused: { resume: 'running', cancel: 'cancelled', fail: 'failed' },
-  completed: {},
+  completed: { reopen: 'running' },
   cancelled: {},
   failed: {},
   missed: {},
@@ -69,10 +70,11 @@ describe('nextState', () => {
     }
   });
 
-  it('terminal states accept no action', () => {
+  it('completed accepts reopen and nothing else; cancelled, failed and missed accept nothing', () => {
     for (const state of TERMINAL_STATES) {
       for (const action of ACTIONS) {
-        expect(nextState(state, action)).toBeNull();
+        const allowed = state === 'completed' && action === 'reopen';
+        expect(nextState(state, action)).toBe(allowed ? 'running' : null);
       }
     }
   });
@@ -89,9 +91,12 @@ describe('nextState', () => {
         if (!next) {
           continue;
         }
-        expect(TERMINAL_STATES as readonly string[]).not.toContain(state);
+        const reopening = state === 'completed' && action === 'reopen';
+        if (!reopening) {
+          expect(TERMINAL_STATES as readonly string[]).not.toContain(state);
+        }
         if (next === 'running') {
-          expect(['start', 'claim_due', 'resume']).toContain(action);
+          expect(['start', 'claim_due', 'resume', 'reopen']).toContain(action);
         }
         expect(CAMPAIGN_STATES).toContain(next);
         reached.add(next);

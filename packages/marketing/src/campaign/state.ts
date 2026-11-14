@@ -21,7 +21,8 @@ export type CampaignAction =
   | 'resume'
   | 'cancel'
   | 'complete'
-  | 'fail';
+  | 'fail'
+  | 'reopen';
 
 export const TERMINAL_STATES = [
   'completed',
@@ -48,6 +49,8 @@ const TRANSITIONS: Partial<
     fail: 'failed',
   },
   paused: { resume: 'running', cancel: 'cancelled', fail: 'failed' },
+  // Only the operator's retry of uncertain sends reopens a finished campaign.
+  completed: { reopen: 'running' },
 };
 
 export function nextState(

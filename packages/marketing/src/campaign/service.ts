@@ -7,6 +7,7 @@ import type { FilterTree } from '../audience/contract';
 import { checkAudienceInput } from '../audience/definition';
 import type { AudienceSource } from '../audience/source';
 import { type createAudienceStore, sourceHttpError } from '../audience/store';
+import { getChannelSettings } from '../channels/settings';
 import type { MarketingConfig } from '../config';
 import type { Queryable, Sql } from '../engine/engine';
 import {
@@ -14,6 +15,7 @@ import {
   type CampaignPatch,
   zCampaignFields,
 } from './definition';
+import { daysNeeded, remainingQuota } from './pacing';
 import { zonedTimeToUtc } from './schedule-time';
 import {
   type CampaignAction,
@@ -78,6 +80,8 @@ export interface CampaignRow {
   materializeError: string | null;
   materializeAttempts: number;
   templateVersion: number | null;
+  dispatchError: string | null;
+  dispatchRetryAt: string | null;
   version: number;
   createdBy: string;
   createdAt: string;
@@ -92,9 +96,10 @@ interface CampaignContext {
   userId: string;
 }
 
-interface Confirmation {
+export interface Confirmation {
   count: number;
   channel: string;
+  spreadOverDays?: boolean;
 }
 
 interface CampaignDeps {
@@ -129,7 +134,7 @@ const SELECT_ROWS = `SELECT c.id::text, c.project_id, c.name, c.state, c.state_r
   c.send_at_local, c.timezone, c.if_late_minutes, c.quiet_hours_override, c.frequency_cap, c.confirm_threshold,
   c.count_preview, c.materialize_state, c.materialize_phase, c.materialize_cursor,
   c.materialize_lease_token::text, c.materialize_lease_until, c.materialize_retry_at, c.materialize_error,
-  c.materialize_attempts, c.template_version, c.version, c.created_by, c.created_at, c.updated_at, c.started_at, c.finished_at,
+  c.materialize_attempts, c.template_version, c.dispatch_error, c.dispatch_retry_at, c.version, c.created_by, c.created_at, c.updated_at, c.started_at, c.finished_at,
   json_build_object('queued', COALESCE(n.queued, 0), 'sent', COALESCE(n.sent, 0), 'failed', COALESCE(n.failed, 0),
     'skipped', COALESCE(n.skipped, 0), 'uncertain', COALESCE(n.uncertain, 0)) AS counters
   FROM marketing.campaigns c LEFT JOIN marketing.campaign_counters n ON n.campaign_id = c.id
@@ -165,7 +170,12 @@ function toRow(row: Record<string, unknown>): CampaignRow {
     camelCase(key),
     value instanceof Date ? value.toISOString() : value,
   ]);
-  return Object.fromEntries(entries) as CampaignRow;
+  const campaign = Object.fromEntries(entries) as CampaignRow;
+  // The dispatcher stamps the retry time on every claim to rotate campaigns; only an error means it is waiting.
+  if (!campaign.dispatchError) {
+    campaign.dispatchRetryAt = null;
+  }
+  return campaign;
 }
 
 // Prisma's raw errors drop the constraint name; the detail names the key, and only the one-active index is keyed on project_id alone.
@@ -381,6 +391,36 @@ export function createCampaignService(deps: CampaignDeps) {
     }
   }
 
+  async function checkQuota(
+    tx: Queryable,
+    ctx: CampaignContext,
+    campaign: CampaignRow,
+    confirm: Confirmation | undefined
+  ) {
+    const count = campaign.countPreview?.count ?? 0;
+    if (campaign.channel !== 'email' || confirm?.spreadOverDays === true) {
+      return;
+    }
+    const { settings } = await getChannelSettings(tx, ctx.projectId, 'email');
+    if (settings.dailyQuota === null) {
+      return;
+    }
+    const remainingToday = await remainingQuota(tx, {
+      projectId: ctx.projectId,
+      channel: 'email',
+      dailyQuota: settings.dailyQuota,
+      quotaTimezone: settings.quotaTimezone,
+      now: deps.now(),
+    });
+    if (count > remainingToday) {
+      throw new HttpError(409, 'quota_spread_required', undefined, {
+        count,
+        remainingToday,
+        daysNeeded: daysNeeded(count, remainingToday, settings.dailyQuota),
+      });
+    }
+  }
+
   // Holds the campaign and audience row locks until commit, so neither can change between the gates and the transition.
   async function passGates(
     tx: Queryable,
@@ -424,6 +464,7 @@ export function createCampaignService(deps: CampaignDeps) {
       throw new HttpError(409, notReady);
     }
     checkPreview(campaign, audience, confirm);
+    await checkQuota(tx, ctx, campaign, confirm);
     return { campaign, audience };
   }
 

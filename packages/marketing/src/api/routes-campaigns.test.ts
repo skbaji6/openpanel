@@ -146,6 +146,11 @@ const idRoutes = (id: string): RouteSpec[] => [
   ['POST', `/marketing/campaigns/${id}/resume`],
   ['POST', `/marketing/campaigns/${id}/cancel`],
   ['POST', `/marketing/campaigns/${id}/test-send`, { profileId: 'p' }],
+  ['POST', `/marketing/campaigns/${id}/retry-uncertain`],
+  ['GET', `/marketing/campaigns/${id}/recipients`],
+  ['GET', `/marketing/campaigns/${id}/skip-reasons`],
+  ['GET', `/marketing/campaigns/${id}/test-sends`],
+  ['POST', `/marketing/campaigns/${id}/estimate`],
 ];
 
 beforeAll(async () => {
@@ -401,5 +406,90 @@ describe('campaign routes', () => {
     ).json()) as Body;
     expect(row.state).toBe('missed');
     expect(row.stateReason).toBe('late');
+  });
+
+  it('retry-uncertain answers the retried count and the reopened campaign; recipients never carry contact data', async () => {
+    const draft = await createCampaign();
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET state = 'completed', materialize_state = 'done' WHERE id = $1::uuid`,
+      draft.id
+    );
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, status, reason)
+       VALUES ($1::uuid, 'u1', 'proj-a', 'uncertain', 'timeout'), ($1::uuid, 'u2', 'proj-a', 'sent', NULL)`,
+      draft.id
+    );
+    const base = `/marketing/campaigns/${draft.id}`;
+    const reasons = (await (
+      await call('GET', `${base}/skip-reasons`)
+    ).json()) as Body;
+    expect(reasons.reasons).toEqual([
+      { status: 'uncertain', reason: 'timeout', count: 1 },
+    ]);
+
+    const retried = await call('POST', `${base}/retry-uncertain`);
+    expect(retried.status).toBe(200);
+    const body = (await retried.json()) as Body & { campaign: Body };
+    expect(body.retried).toBe(1);
+    expect(body.campaign.state).toBe('running');
+    expectHidden(JSON.stringify(body));
+
+    const list = (await (
+      await call('GET', `${base}/recipients?status=pending&limit=10`)
+    ).json()) as { recipients: Body[]; nextCursor: string | null };
+    expect(list.recipients).toHaveLength(1);
+    expect(list.recipients[0]).toMatchObject({
+      profileId: 'u1',
+      status: 'pending',
+      reason: 'operator_retry',
+    });
+    expect(list.nextCursor).toBeNull();
+  });
+
+  it('a bad recipients query is 400 invalid_query', async () => {
+    const draft = await createCampaign();
+    for (const query of [
+      'status=bogus',
+      'limit=0',
+      'limit=501',
+      'limit=x',
+      'extra=1',
+    ]) {
+      const res = await call(
+        'GET',
+        `/marketing/campaigns/${draft.id}/recipients?${query}`
+      );
+      expect([query, res.status]).toEqual([query, 400]);
+      expect(((await res.json()) as Body).error).toBe('invalid_query');
+    }
+  });
+
+  it('estimate without a preview is 409 count_preview_required and with one answers the count', async () => {
+    const draft = await createCampaign();
+    const path = `/marketing/campaigns/${draft.id}/estimate`;
+    const early = await call('POST', path);
+    expect([early.status, ((await early.json()) as Body).error]).toEqual([
+      409,
+      'count_preview_required',
+    ]);
+    await preview(draft.id);
+    const estimate = (await (await call('POST', path)).json()) as Body;
+    expect(estimate).toMatchObject({
+      count: PRO_COUNT,
+      channel: 'push',
+      quota: null,
+    });
+  });
+
+  it('retry-uncertain on a draft is 409 invalid_transition', async () => {
+    const draft = await createCampaign();
+    const res = await call(
+      'POST',
+      `/marketing/campaigns/${draft.id}/retry-uncertain`
+    );
+    expect([res.status, ((await res.json()) as Body).error]).toEqual([
+      409,
+      'invalid_transition',
+    ]);
   });
 });

@@ -1,6 +1,15 @@
 import { z } from 'zod';
 import { zCampaignDraft, zCampaignPatch } from '../campaign/definition';
+import {
+  estimateCampaign,
+  listRecipients,
+  listTestSends,
+  retryUncertain,
+  skipReasons,
+  zRecipientQuery,
+} from '../campaign/operator';
 import type { CampaignRow, createCampaignService } from '../campaign/service';
+import type { Sql } from '../engine/engine';
 import {
   HttpError,
   json,
@@ -9,7 +18,7 @@ import {
   readBodyText,
   validate,
 } from './http';
-import { sourceErrorToHttp } from './routes-audiences';
+import { sourceErrorToHttp, validateQuery } from './routes-audiences';
 import { zIdentifier } from './routes-sync';
 
 const CREATED = 201;
@@ -22,6 +31,7 @@ type CampaignService = ReturnType<typeof createCampaignService>;
 const zConfirm = z.strictObject({
   count: z.number().int().min(0),
   channel: zCampaignPatch.shape.channel.unwrap(),
+  spreadOverDays: z.boolean().optional(),
 });
 const zGateBody = z.strictObject({ confirm: zConfirm.optional() });
 const zNoBody = z.strictObject({});
@@ -70,7 +80,18 @@ async function parseOptionalBody<T>(
   return validate(schema, data);
 }
 
-export function campaignRoutes(campaigns: CampaignService): Route[] {
+export function campaignRoutes(
+  campaigns: CampaignService,
+  operator: {
+    sql: Sql;
+    now: () => Date;
+    channelReady?: (
+      projectId: string,
+      channel: string,
+      template: unknown
+    ) => Promise<string | null>;
+  }
+): Route[] {
   const ctxOf = (ctx: { projectId: string; userId: string }) => ({
     projectId: ctx.projectId,
     userId: ctx.userId,
@@ -207,6 +228,72 @@ export function campaignRoutes(campaigns: CampaignService): Route[] {
     plainAction('/pause', (ctx, id) => campaigns.pause(ctx, id)),
     plainAction('/resume', (ctx, id) => campaigns.resume(ctx, id)),
     plainAction('/cancel', (ctx, id) => campaigns.cancel(ctx, id)),
+    {
+      method: 'POST',
+      pattern: campaignPath('/retry-uncertain'),
+      auth: 'dashboard',
+      async handle(ctx) {
+        await parseOptionalBody(ctx.req, zNoBody);
+        const id = ctx.params[0] as string;
+        const { retried } = await retryUncertain(operator.sql, ctx, id);
+        const row = await campaigns.get(ctxOf(ctx), id);
+        return json({ retried, campaign: toResponse(row) });
+      },
+    },
+    {
+      method: 'GET',
+      pattern: campaignPath('/recipients'),
+      auth: 'dashboard',
+      async handle(ctx) {
+        const query = validateQuery(
+          zRecipientQuery,
+          Object.fromEntries(ctx.url.searchParams)
+        );
+        return json(
+          await listRecipients(
+            operator.sql,
+            ctx,
+            ctx.params[0] as string,
+            query
+          )
+        );
+      },
+    },
+    {
+      method: 'GET',
+      pattern: campaignPath('/skip-reasons'),
+      auth: 'dashboard',
+      async handle(ctx) {
+        return json(
+          await skipReasons(operator.sql, ctx, ctx.params[0] as string)
+        );
+      },
+    },
+    {
+      method: 'GET',
+      pattern: campaignPath('/test-sends'),
+      auth: 'dashboard',
+      async handle(ctx) {
+        return json(
+          await listTestSends(operator.sql, ctx, ctx.params[0] as string)
+        );
+      },
+    },
+    {
+      method: 'POST',
+      pattern: campaignPath('/estimate'),
+      auth: 'dashboard',
+      async handle(ctx) {
+        await parseOptionalBody(ctx.req, zNoBody);
+        return json(
+          await estimateCampaign(
+            { ...operator, campaigns },
+            ctxOf(ctx),
+            ctx.params[0] as string
+          )
+        );
+      },
+    },
     {
       method: 'POST',
       pattern: campaignPath('/test-send'),

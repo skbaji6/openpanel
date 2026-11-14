@@ -835,3 +835,75 @@ describe('campaign service', () => {
     expect(queued).toMatchObject({ state: 'scheduled', templateVersion: null });
   });
 });
+
+describe('email quota gate', () => {
+  const QUOTA = 10;
+  const MEMBERS = 30;
+  const EXPECTED_DAYS = 3;
+
+  async function emailDraft(dailyQuota: number) {
+    await putChannelSettings(
+      sql,
+      PROJECT,
+      'email',
+      {
+        ...DEFAULT_CHANNEL_SETTINGS.email,
+        ratePerSecond: 5,
+        dailyQuota,
+        quotaTimezone: 'UTC',
+      },
+      0
+    );
+    const { campaigns, audiences } = makeDeps();
+    const audience = await dynamicAudience(audiences);
+    const draft = await campaigns.create(CTX, {
+      name: 'Mail',
+      channel: 'email',
+      template: PUSH_TEMPLATE,
+      audienceId: audience.id,
+    });
+    await campaigns.countPreview(CTX, draft.id);
+    return { campaigns, draft };
+  }
+
+  it('a start over the remaining quota without spreadOverDays is quota_spread_required; with it, it starts', async () => {
+    const { campaigns, draft } = await emailDraft(QUOTA);
+    const error = await caught(campaigns.start(CTX, draft.id, {}));
+    expect([error.status, error.code, error.details]).toEqual([
+      409,
+      'quota_spread_required',
+      { count: MEMBERS, remainingToday: QUOTA, daysNeeded: EXPECTED_DAYS },
+    ]);
+    const started = await campaigns.start(CTX, draft.id, {
+      confirm: { count: MEMBERS, channel: 'email', spreadOverDays: true },
+    });
+    expect(started.state).toBe('running');
+  });
+
+  it('a start within the remaining quota needs no spreadOverDays', async () => {
+    const { campaigns, draft } = await emailDraft(MEMBERS);
+    expect((await campaigns.start(CTX, draft.id, {})).state).toBe('running');
+  });
+
+  it('exposes dispatchRetryAt only while dispatchError is set', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    const stamp = '2026-11-03 11:00:00+00';
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.campaigns SET dispatch_retry_at = $2::timestamptz WHERE id = $1::uuid',
+      draft.id,
+      stamp
+    );
+    expect(await campaigns.get(CTX, draft.id)).toMatchObject({
+      dispatchError: null,
+      dispatchRetryAt: null,
+    });
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET dispatch_error = 'quota_exhausted' WHERE id = $1::uuid`,
+      draft.id
+    );
+    expect(await campaigns.get(CTX, draft.id)).toMatchObject({
+      dispatchError: 'quota_exhausted',
+      dispatchRetryAt: '2026-11-03T11:00:00.000Z',
+    });
+  });
+});
