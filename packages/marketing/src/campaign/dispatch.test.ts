@@ -55,7 +55,7 @@ import {
   runDispatchCycle,
   SEND_DEADLINE_MS,
 } from './dispatch';
-import { hookedSql, isMarkSendingResult } from './dispatch-harness';
+import { hookedSql, isMarkSendingResult } from './dispatch.test-helpers';
 import { createChannelBackoff, createRateBucket } from './pacing';
 import {
   CAP_LOCK_CHUNK,

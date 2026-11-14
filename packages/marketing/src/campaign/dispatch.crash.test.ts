@@ -43,13 +43,13 @@ import {
   statuses,
   USER,
   waitUntil,
-} from './dispatch-harness';
+} from './dispatch.test-helpers';
 import { startDispatchLane } from './dispatch-lane';
 import { retryUncertain } from './operator';
 import { SENDING_LEASE_MS } from './recipients';
 
 const BIG = process.env.MARKETING_BIG_TESTS === '1';
-// Ruling: the full sizes need MARKETING_BIG_TESTS=1; by default the same scenarios run smaller on this machine.
+// The full sizes take minutes and a lot of memory, so they run only when asked for; the default keeps each scenario.
 const REPLICA_RECIPIENTS = BIG ? 20_000 : 3000;
 const CANCEL_RECIPIENTS = BIG ? 5000 : 1000;
 const PAUSE_RECIPIENTS = 300;
@@ -280,6 +280,8 @@ describe('crashes', () => {
       const members = pushMembers(REPLICA_RECIPIENTS);
       const crashing = new Map<string, CrashKind>();
       const crashed: CrashKind[] = [];
+      // Crashes that really fired, as opposed to those decided at lookup.
+      const fired: CrashKind[] = [];
       let crashesOn = true;
       let cycles = 0;
       // A crash fires once: the batch's other rows may come back in a later, healthy batch.
@@ -297,11 +299,13 @@ describe('crashes', () => {
       const deliveries = recordingAdapter('push', {
         beforeSend: (items) => {
           if (crashOf(items, 'before')) {
+            fired.push('before');
             throw new CrashError('before the provider call');
           }
         },
         afterAccept: (items) => {
           if (crashOf(items, 'after')) {
+            fired.push('after');
             throw new CrashError('after the provider accepted');
           }
         },
@@ -318,6 +322,9 @@ describe('crashes', () => {
         crashed.push(kind);
         for (const profileId of profileIds) {
           crashing.set(profileId, kind);
+        }
+        if (kind === 'lease') {
+          fired.push('lease');
         }
         return kind === 'lease';
       });
@@ -342,6 +349,7 @@ describe('crashes', () => {
               for (const profileId of batch) {
                 crashing.delete(profileId);
               }
+              fired.push('outcomes');
               throw new CrashError('inside markOutcomes');
             }
           },
@@ -385,7 +393,7 @@ describe('crashes', () => {
       }
       await reapAt(deps);
 
-      expect(new Set(crashed)).toEqual(new Set(CRASH_KINDS));
+      expect(new Set(fired)).toEqual(new Set(CRASH_KINDS));
       const { violations, rows } = await settlement(
         id,
         REPLICA_RECIPIENTS,
@@ -415,6 +423,30 @@ function realTimeLaneDeps(source: AudienceSource, hooks: SqlHooks) {
   };
 }
 
+function countingLookups(inner: AudienceSource) {
+  const counted = { ...inner, done: 0 };
+  counted.lookup = async (ids, channel) => {
+    const entries = await inner.lookup(ids, channel);
+    counted.done += 1;
+    return entries;
+  };
+  return counted;
+}
+
+// Waits until the other loop has finished a lookup beyond this loop's batches and still holds that claim.
+async function otherLoopLookedUp(
+  campaignId: string,
+  source: { done: number },
+  ownBatches: number
+): Promise<number> {
+  let leased = 0;
+  await waitUntil(async () => {
+    leased = (await statuses(campaignId)).leased ?? 0;
+    return source.done > ownBatches && leased > 0;
+  }, 'the other loop to hold a looked-up claim');
+  return leased;
+}
+
 async function laneCampaign(count: number) {
   const members = pushMembers(count);
   const id = await insertRunningCampaign({
@@ -428,6 +460,37 @@ async function laneCampaign(count: number) {
 }
 
 describe('operator stops', () => {
+  it('a batch already marked sending when the cancel commits is still delivered once and ends sent', async () => {
+    const service = campaignService(null, clock.now);
+    let cancelled = false;
+    let id = '';
+    const deliveries = recordingAdapter('push', {
+      beforeSend: async () => {
+        if (!cancelled) {
+          cancelled = true;
+          await service.cancel(ctx(), id);
+        }
+      },
+    });
+    const campaign = await smallPushCampaign();
+    id = campaign.id;
+    const deps = dispatchDeps(
+      createFakeSource({ members: campaign.members }),
+      clock
+    );
+
+    await runDispatchCycle(deps);
+
+    expect(cancelled).toBe(true);
+    expect((await campaignSnapshot(id)).state).toBe('cancelled');
+    expect(deliveries).toHaveLength(SMALL);
+    expect((await settlement(id, SMALL, deliveries)).violations).toEqual(
+      NO_VIOLATIONS
+    );
+    expect(await statuses(id)).toEqual({ sent: SMALL });
+    expect((await campaignSnapshot(id)).sent).toBe(SMALL);
+  });
+
   it(
     `cancel during a running ${CANCEL_RECIPIENTS.toLocaleString('en')}-recipient send: no row is sent after the cancel's commit`,
     async () => {
@@ -437,15 +500,18 @@ describe('operator stops', () => {
       let batches = 0;
       let commitAt = 0;
       let commitSeq = 0;
+      let leasedAtCommit = 0;
+      const source = countingLookups(createFakeSource({ members }));
       // The cancel commits between two batches while the other loop holds a claimed, looked-up batch.
       const lane = startDispatchLane(
-        realTimeLaneDeps(createFakeSource({ members }), {
+        realTimeLaneDeps(source, {
           afterTransaction: async (result) => {
             if (!isMarkOutcomesResult(result)) {
               return;
             }
             batches += 1;
             if (batches === BATCHES_BEFORE_STOP) {
+              leasedAtCommit = await otherLoopLookedUp(id, source, batches);
               await service.cancel(ctx(), id);
               commitAt = Date.now();
               commitSeq = nextSequence();
@@ -466,6 +532,7 @@ describe('operator stops', () => {
         await lane.stop();
       }
 
+      expect(leasedAtCommit).toBeGreaterThan(0);
       expect(deliveries.filter((d) => d.seq > commitSeq)).toEqual([]);
       expect(deliveries.filter((d) => d.at > commitAt)).toEqual([]);
       const { violations, rows } = await settlement(
@@ -495,14 +562,17 @@ describe('operator stops', () => {
     let batches = 0;
     let pausedDeliveries = -1;
     let picksWhilePaused = 0;
+    let leasedAtPause = 0;
+    const source = countingLookups(createFakeSource({ members }));
     const lane = startDispatchLane(
-      realTimeLaneDeps(createFakeSource({ members }), {
+      realTimeLaneDeps(source, {
         afterTransaction: async (result) => {
           if (!isMarkOutcomesResult(result)) {
             return;
           }
           batches += 1;
           if (batches === 1) {
+            leasedAtPause = await otherLoopLookedUp(id, source, batches);
             await service.pause(ctx(), id);
             pausedDeliveries = deliveries.length;
           }
@@ -520,6 +590,7 @@ describe('operator stops', () => {
         () => picksWhilePaused >= PAUSED_POLLS,
         'the loops to poll while paused'
       );
+      expect(leasedAtPause).toBeGreaterThan(0);
       expect((await campaignSnapshot(id)).state).toBe('paused');
       expect(deliveries).toHaveLength(pausedDeliveries);
       await waitUntil(async () => {

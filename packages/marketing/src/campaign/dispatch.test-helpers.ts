@@ -484,7 +484,8 @@ export async function drain(deps: DispatchDeps, clock: Clock): Promise<void> {
 }
 
 const POLL_MS = 10;
-const WAIT_LIMIT_MS = 60_000;
+// Under the 30 s test timeout, so a stall reports what it waited for.
+const WAIT_LIMIT_MS = 25_000;
 
 export async function waitUntil(
   check: () => Promise<boolean> | boolean,

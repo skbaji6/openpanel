@@ -28,6 +28,7 @@ import { resetMarketingTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createEngine, lockProfiles } from './engine';
 import {
+  capLockKey,
   countRecentSends,
   effectiveCap,
   ledgerRef,
@@ -180,15 +181,20 @@ const CONCURRENCY_SENDS = 30;
 const INDEX_PLAN_ROWS = 20_000;
 const INDEX_PLAN_TIMEOUT_MS = 180_000;
 const LOCK_POLL_MS = 10;
+// The key lockProfiles hashes for the test profile.
+const PROFILE_LOCK_KEY = JSON.stringify([PROJECT, PROFILE]);
 
-// Resolves once a session of this database is blocked on an advisory lock: the tick reached the lock and waits.
-async function waitForAdvisoryLockWaiter(): Promise<void> {
+// Resolves once a session of this database waits for the advisory lock on `key` (an 8-byte lock: classid is
+// the high half of its hash, objid the low half): the code under test reached that lock and blocks on it.
+async function waitForAdvisoryLockWaiter(key: string): Promise<void> {
   const deadline = Date.now() + LOCK_WAIT_LIMIT_MS;
   while (Date.now() < deadline) {
     const [waiting] = await sql.$queryRawUnsafe<{ n: number }[]>(
-      `SELECT count(*)::int AS n FROM pg_locks
-       WHERE locktype = 'advisory' AND NOT granted
-         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`
+      `SELECT count(*)::int AS n FROM pg_locks l, (SELECT hashtextextended($1, 0) AS h) k
+       WHERE l.locktype = 'advisory' AND NOT l.granted AND l.objsubid = 1
+         AND l.classid::bigint = (k.h >> 32) & 4294967295 AND l.objid::bigint = k.h & 4294967295
+         AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+      key
     );
     if ((waiting?.n ?? 0) > 0) {
       return;
@@ -923,7 +929,14 @@ describe('runTick', () => {
     await isLocked;
     try {
       const running = tick();
-      await waitForAdvisoryLockWaiter();
+      await waitForAdvisoryLockWaiter(
+        capLockKey({
+          projectId: PROJECT,
+          profileId: PROFILE,
+          channel: 'email',
+          scope: 'channel',
+        })
+      );
       expect(await ledgerRefs()).toEqual([]);
       expect(calls).toHaveLength(0);
       release();
@@ -1120,7 +1133,7 @@ describe('runTick', () => {
         done = true;
         return result;
       });
-      await waitForAdvisoryLockWaiter();
+      await waitForAdvisoryLockWaiter(PROFILE_LOCK_KEY);
       expect(done).toBe(false);
       // The sent mark does not wait for the lock; completing the enrollment does.
       expect((await steps(enrollmentId))[0]?.status).toBe('sent');
@@ -1330,7 +1343,7 @@ describe('runTick', () => {
         done = true;
         return result;
       });
-      await waitForAdvisoryLockWaiter();
+      await waitForAdvisoryLockWaiter(PROFILE_LOCK_KEY);
       expect(done).toBe(false);
       expect((await steps(enrollmentId))[0]?.status).toBe('sending');
     } finally {

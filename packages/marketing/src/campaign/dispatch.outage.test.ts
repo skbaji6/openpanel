@@ -30,7 +30,7 @@ import {
   statuses,
   testClockBackoff,
   USER,
-} from './dispatch-harness';
+} from './dispatch.test-helpers';
 
 const SECOND_MS = 1000;
 const OUTAGE_MS = 60_000;
@@ -87,8 +87,12 @@ describe('outages', () => {
     const members = pushMembers(RECIPIENTS);
     const deliveries = recordingAdapter('push');
     let downFrom = Number.POSITIVE_INFINITY;
-    const isDown = () =>
-      clock.ms() >= downFrom && clock.ms() < downFrom + OUTAGE_MS;
+    let refusedLookups = 0;
+    const isDown = () => {
+      const down = clock.ms() >= downFrom && clock.ms() < downFrom + OUTAGE_MS;
+      refusedLookups += down ? 1 : 0;
+      return down;
+    };
     const id = await pushCampaign(members);
     const deps = dispatchDeps(
       createFakeSource({ members, down: isDown }),
@@ -115,10 +119,14 @@ describe('outages', () => {
 
     // Still down at the first retry, healthy at the second.
     clock.advance(SOURCE_RETRY_MS);
-    await runDispatchCycle(deps);
+    const refusedBefore = refusedLookups;
+    expect((await runDispatchCycle(deps)).claimed).toBeGreaterThan(0);
+    expect(refusedLookups).toBe(refusedBefore + 1);
     expect(deliveries).toHaveLength(sentBefore);
-    expect((await campaignSnapshot(id)).dispatch_error).toBe(
-      'source_unavailable'
+    state = await campaignSnapshot(id);
+    expect(state.dispatch_error).toBe('source_unavailable');
+    expect(state.dispatch_retry_at?.getTime()).toBe(
+      clock.ms() + SOURCE_RETRY_MS
     );
 
     await drain(deps, clock);

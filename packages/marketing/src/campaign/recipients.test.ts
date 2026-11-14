@@ -6,6 +6,7 @@ import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import type { Queryable } from '../engine/engine';
 import {
+  capLockKey,
   type EffectiveCap,
   ledgerRef,
   lockCap,
@@ -203,12 +204,17 @@ async function setAttempt(campaignId: string, profileId: string, n: number) {
   );
 }
 
-// Resolves once some session is blocked on an advisory lock; fails clearly if none ever is.
-async function waitForAdvisoryLockWaiter(): Promise<void> {
+// Resolves once a session of this database waits for the advisory lock on `key` (an 8-byte lock: classid is
+// the high half of its hash, objid the low half): the code under test reached that lock and blocks on it.
+async function waitForAdvisoryLockWaiter(key: string): Promise<void> {
   const deadline = Date.now() + LOCK_WAIT_LIMIT_MS;
   while (Date.now() < deadline) {
     const [waiting] = await sql.$queryRawUnsafe<{ n: number }[]>(
-      "SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+      `SELECT count(*)::int AS n FROM pg_locks l, (SELECT hashtextextended($1, 0) AS h) k
+       WHERE l.locktype = 'advisory' AND NOT l.granted AND l.objsubid = 1
+         AND l.classid::bigint = (k.h >> 32) & 4294967295 AND l.objid::bigint = k.h & 4294967295
+         AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+      key
     );
     if ((waiting?.n ?? 0) > 0) {
       return;
@@ -398,7 +404,14 @@ describe('campaign recipients', () => {
     );
     await locked;
     const sending = send(id, claimed.token, ['a'], CAP_ONE_PER_DAY);
-    await waitForAdvisoryLockWaiter();
+    await waitForAdvisoryLockWaiter(
+      capLockKey({
+        projectId: PROJECT,
+        profileId: 'a',
+        channel: CHANNEL,
+        scope: 'channel',
+      })
+    );
     finishJourney();
     await journey;
     const result = await sending;
