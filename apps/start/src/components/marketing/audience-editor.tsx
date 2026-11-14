@@ -1,14 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { UsersIcon } from 'lucide-react';
 import { useId, useState } from 'react';
 import { toast } from 'sonner';
 import {
   describeMarketingError,
-  MarketingApiError,
   useMarketingFetch,
   useMarketingQueryKey,
 } from './api';
-import { emptyGroup, filterProblems, normalizeFilter } from './audience-filter';
+import {
+  emptyGroup,
+  filterProblems,
+  nameProblems,
+  normalizeFilter,
+} from './audience-filter';
 import { AudienceList } from './audience-lists';
 import { AudienceVerify } from './audience-verify';
 import type {
@@ -18,12 +22,12 @@ import type {
   FilterTree,
 } from './campaign-contract';
 import { FilterBuilder } from './filter-builder';
+import { isVersionConflict, useAudienceRow } from './use-audience-row';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
 
-const VERSION_CONFLICT = 'version_conflict';
 const IN_USE_NOTE =
   'A campaign uses this audience, so it cannot be changed. You can still check it.';
 
@@ -63,6 +67,9 @@ function toBody(form: AudienceForm) {
     excludeFilter: normalizeFilter(form.excludeFilter),
   };
 }
+
+const definitionOf = (row: AudienceRow | undefined) =>
+  JSON.stringify(toBody(formFromRow(row)));
 
 function FilterSection({
   title,
@@ -112,21 +119,36 @@ function EditorForm({
   onSaved: (id: string) => void;
 }) {
   const marketingFetch = useMarketingFetch();
-  const queryKey = useMarketingQueryKey();
-  const client = useQueryClient();
+  const cache = useAudienceRow();
   const fieldId = useId();
   const [form, setForm] = useState<AudienceForm>(() => formFromRow(row));
+  const [loaded, setLoaded] = useState(() => definitionOf(row));
+  const [conflict, setConflict] = useState(false);
+  const [uploads, setUploads] = useState<Record<string, boolean>>({});
   const [showProblems, setShowProblems] = useState(false);
   const body = toBody(form);
-  const problems = [body.filter, body.excludeFilter].flatMap((tree) =>
-    tree && schema.dimensions ? filterProblems(tree, schema.dimensions) : []
-  );
-  if (body.name === '') {
-    problems.unshift('Give the audience a name');
-  }
-  const hasUnsavedChanges =
-    !row || JSON.stringify(body) !== JSON.stringify(toBody(formFromRow(row)));
+  const typed = JSON.stringify(body);
+  const problems = [
+    ...nameProblems(form.name),
+    ...[body.filter, body.excludeFilter].flatMap((tree) =>
+      tree && schema.dimensions ? filterProblems(tree, schema.dimensions) : []
+    ),
+  ];
+  const current = row ? definitionOf(row) : null;
+  const hasUnsavedChanges = typed !== current;
   const locked = row?.inUse === true;
+  const uploading = Object.values(uploads).some(Boolean);
+
+  // List changes and freezes bump the version without touching the definition, so only a
+  // changed definition counts: adopt it when nothing was typed, otherwise keep the typed values and warn.
+  if (current !== null && current !== loaded && !conflict) {
+    if (typed === loaded) {
+      setForm(formFromRow(row));
+      setLoaded(current);
+    } else {
+      setConflict(true);
+    }
+  }
 
   const save = useMutation({
     mutationFn: () => {
@@ -136,39 +158,41 @@ function EditorForm({
           body: JSON.stringify(body),
         });
       }
-      // The lists and freeze also bump the version, so it is read from the cache, not the form.
-      const expectedVersion =
-        client.getQueryData<AudienceRow>(queryKey('audiences', row.id))
-          ?.version ?? row.version;
       return marketingFetch<AudienceRow>(
         `audiences/${encodeURIComponent(row.id)}`,
-        { method: 'PUT', body: JSON.stringify({ ...body, expectedVersion }) }
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...body,
+            expectedVersion: cache.currentVersion(row),
+          }),
+        }
       );
     },
     onSuccess(saved) {
-      client.setQueryData(queryKey('audiences', saved.id), saved);
-      client.invalidateQueries({
-        queryKey: queryKey('audiences'),
-        exact: true,
-      });
+      setLoaded(definitionOf(saved));
+      setConflict(false);
+      cache.store(saved);
       toast.success('Audience saved');
       onSaved(saved.id);
     },
     onError(error) {
-      if (
-        error instanceof MarketingApiError &&
-        error.code === VERSION_CONFLICT
-      ) {
-        client.invalidateQueries({ queryKey: queryKey('audiences') });
-        toast.error(
-          'Someone else changed this audience. It was reloaded, so review it and save again.'
-        );
-        onClose();
+      if (row && isVersionConflict(error)) {
+        setConflict(true);
+        cache.reload(row.id);
         return;
       }
       toast.error(describeMarketingError(error));
     },
   });
+
+  const discardEdits = () => {
+    setForm(formFromRow(row));
+    setLoaded(definitionOf(row));
+    setConflict(false);
+  };
+  const setUploading = (list: string) => (busy: boolean) =>
+    setUploads((state) => ({ ...state, [list]: busy }));
 
   const submit = () => {
     setShowProblems(true);
@@ -182,6 +206,22 @@ function EditorForm({
       <h2 className="p-4 pb-0 font-medium text-lg">
         {row ? `Edit ${row.name}` : 'New audience'}
       </h2>
+      {conflict && (
+        <div
+          className="col mx-4 mt-4 gap-2 rounded border border-destructive p-3 text-sm"
+          role="alert"
+        >
+          <p>
+            Someone else changed this audience. Your edits are kept below;
+            review them against the latest version before saving again.
+          </p>
+          <div>
+            <Button onClick={discardEdits} type="button" variant="outline">
+              Discard my edits and load the latest version
+            </Button>
+          </div>
+        </div>
+      )}
       {locked && (
         <p className="px-4 pt-2 text-muted-foreground text-sm">{IN_USE_NOTE}</p>
       )}
@@ -199,7 +239,7 @@ function EditorForm({
             hint={
               form.mode === 'dynamic'
                 ? 'Re-checked when the campaign starts, so students who match later are included'
-                : 'Frozen now: the campaign sends to exactly the students in the snapshot'
+                : 'Students are fixed when you press Freeze now'
             }
             id={`${fieldId}-mode`}
             label="Mode"
@@ -230,8 +270,22 @@ function EditorForm({
           value={form.filter}
         />
       </fieldset>
-      {row && <AudienceList disabled={locked} list="include" row={row} />}
-      {row && <AudienceList disabled={locked} list="exclude" row={row} />}
+      {row && (
+        <AudienceList
+          disabled={locked}
+          list="include"
+          onBusyChange={setUploading('include')}
+          row={row}
+        />
+      )}
+      {row && (
+        <AudienceList
+          disabled={locked}
+          list="exclude"
+          onBusyChange={setUploading('exclude')}
+          row={row}
+        />
+      )}
       <fieldset className="col" disabled={locked}>
         <FilterSection
           hint="Students who match these conditions never receive the campaign."
@@ -245,7 +299,11 @@ function EditorForm({
         />
       </fieldset>
       {row ? (
-        <AudienceVerify hasUnsavedChanges={hasUnsavedChanges} row={row} />
+        <AudienceVerify
+          hasUnsavedChanges={hasUnsavedChanges}
+          key={row.version}
+          row={row}
+        />
       ) : (
         <p className="border-t p-4 text-muted-foreground text-xs">
           Save the audience to add specific students, leave students out by
@@ -264,7 +322,12 @@ function EditorForm({
           Back
         </Button>
         {!locked && (
-          <Button loading={save.isPending} onClick={submit} type="button">
+          <Button
+            disabled={uploading}
+            loading={save.isPending}
+            onClick={submit}
+            type="button"
+          >
             Save
           </Button>
         )}
@@ -298,8 +361,16 @@ export function AudienceEditor({
   if (audienceId === undefined) {
     return <EditorForm onClose={onClose} onSaved={onSaved} schema={schema} />;
   }
-  if (audience.isPending) {
-    return <FullPageLoadingState />;
+  if (audience.data) {
+    return (
+      <EditorForm
+        key={audience.data.id}
+        onClose={onClose}
+        onSaved={onSaved}
+        row={audience.data}
+        schema={schema}
+      />
+    );
   }
   if (audience.error) {
     return (
@@ -315,13 +386,5 @@ export function AudienceEditor({
       </div>
     );
   }
-  return (
-    <EditorForm
-      key={audience.data.id}
-      onClose={onClose}
-      onSaved={onSaved}
-      row={audience.data}
-      schema={schema}
-    />
-  );
+  return <FullPageLoadingState />;
 }

@@ -38,6 +38,10 @@ interface BuilderContext {
   remove: (path: FilterPath) => void;
 }
 
+// Includes the sibling count, so removing a row remounts its neighbours and drops their half-typed drafts.
+const siblingKey = (path: FilterPath, siblings: number) =>
+  `${path.join('-')}-of-${siblings}`;
+
 function inputTypeFor(dimension: Dimension): string {
   if (dimension.type === 'number') {
     return 'number';
@@ -152,6 +156,8 @@ function FreeValueInput({
       <Input
         aria-label={`Add a ${dimension.label} value`}
         id={id}
+        onBlur={add}
+        // A typed value that was never added would otherwise be lost on save.
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
@@ -265,11 +271,12 @@ function ConditionRow({
   const { dimensions, idPrefix, change, remove } = context;
   const dimension = dimensions.find((d) => d.key === condition.dimension);
   const baseId = `${idPrefix}-${path.join('-')}`;
+  const position = `condition ${path.map((index) => index + 1).join('.')}`;
   const setCondition = (next: Condition) => change(path, () => next);
   return (
     <div className="row flex-wrap items-start gap-2 rounded border p-2">
       <select
-        aria-label="Field"
+        aria-label={`Field, ${position}`}
         className={SELECT_CLASS}
         id={`${baseId}-field`}
         onChange={(event) => {
@@ -289,7 +296,7 @@ function ConditionRow({
       </select>
       {dimension && (
         <select
-          aria-label="Operator"
+          aria-label={`Operator, ${position}`}
           className={SELECT_CLASS}
           id={`${baseId}-op`}
           onChange={(event) => {
@@ -318,7 +325,7 @@ function ConditionRow({
         />
       )}
       <Button
-        aria-label="Remove condition"
+        aria-label={`Remove ${position}`}
         className="ml-auto"
         icon={XIcon}
         onClick={() => remove(path)}
@@ -378,14 +385,14 @@ function GroupEditor({
           <GroupEditor
             context={context}
             group={child}
-            key={childPath.join('-')}
+            key={siblingKey(childPath, group.children.length)}
             path={childPath}
           />
         ) : (
           <ConditionRow
             condition={child}
             context={context}
-            key={childPath.join('-')}
+            key={siblingKey(childPath, group.children.length)}
             path={childPath}
           />
         );

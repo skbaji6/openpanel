@@ -37,7 +37,8 @@ export const ERROR_LABELS: Record<string, string> = {
     'The message template is no longer available for sending.',
   invalid_send_time: 'The send time is not valid.',
   schedule_in_past: 'The send time is in the past.',
-  audience_in_use: 'This audience is used by a campaign and cannot be deleted.',
+  audience_in_use:
+    'This audience is used by a campaign and cannot be changed or deleted.',
   ids_limit: 'The list is too long. A list holds at most 20,000 students.',
   not_snapshot: 'Only snapshot audiences can be frozen.',
   snapshot_too_large: 'The audience is too large to freeze.',

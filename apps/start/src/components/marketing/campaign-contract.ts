@@ -57,8 +57,9 @@ export const MAX_IDS_PER_CHANGE = 2000;
 // The service rejects more than 200 distinct inputs per call (after trim and dedupe); the proxy body holds 1000.
 export const MAX_RESOLVE_DISTINCT_INPUTS = 200;
 export const MAX_RESOLVE_INPUT_LENGTH = 256;
-// A longer leave-out list is not sent to the audience API, so previews cannot drop those students.
-export const MAX_PREVIEW_EXCLUDE_IDS = 1000;
+// Also the largest leave-out list sent to the audience API, so previews cannot drop students past it.
+export const MAX_ID_CONDITION_VALUES = 1000;
+export const MAX_FILTER_STRING_LENGTH = 512;
 export const MAX_PREVIEW_LIMIT = 50;
 export const RESERVED_ID_DIMENSION = 'id';
 
@@ -75,8 +76,8 @@ const MAX_TIMEZONE_LENGTH = 64;
 const MAX_SUBJECT_LENGTH = 300;
 const MAX_BODY_LENGTH = 20_000;
 const MAX_URL_LENGTH = 2000;
-const MAX_AUDIENCE_NAME = 200;
-const MAX_ID_LENGTH = 256;
+export const MAX_AUDIENCE_NAME = 200;
+export const MAX_ID_LENGTH = 256;
 const MAX_VARIABLES = 20;
 const MAX_VARIABLE_VALUE_LENGTH = 500;
 const MAX_APPROVED_TEXT_LENGTH = 4096;

@@ -6,7 +6,10 @@ import {
   type FilterGroup,
   type FilterOp,
   type FilterTree,
+  MAX_AUDIENCE_NAME,
   MAX_FILTER_DEPTH,
+  MAX_FILTER_STRING_LENGTH,
+  MAX_ID_CONDITION_VALUES,
   RESERVED_ID_DIMENSION,
 } from './campaign-contract';
 
@@ -54,15 +57,19 @@ export const EXPLANATION_LABELS: Record<ExplanationReason, string> = {
 };
 
 const isGroup = (node: FilterTree): node is FilterGroup => 'children' in node;
+const isIdDimension = (dimension: Dimension) =>
+  dimension.key === RESERVED_ID_DIMENSION;
+
+// The service compares ids as strings whatever type the schema declares.
+const valueTypeOf = (dimension: Dimension): Dimension['type'] =>
+  isIdDimension(dimension) ? 'string' : dimension.type;
 
 export function emptyGroup(): FilterGroup {
   return { op: 'and', children: [] };
 }
 
 export function opsFor(dimension: Dimension): FilterOp[] {
-  return dimension.key === RESERVED_ID_DIMENSION
-    ? ID_OPS
-    : OPS_BY_TYPE[dimension.type];
+  return isIdDimension(dimension) ? ID_OPS : OPS_BY_TYPE[dimension.type];
 }
 
 export function emptyCondition(dimension: Dimension): Condition {
@@ -136,11 +143,12 @@ export function removeNode(tree: FilterTree, path: FilterPath): FilterTree {
 }
 
 export function coerceValue(dimension: Dimension, raw: string): FilterValue {
-  if (dimension.type === 'number') {
+  const type = valueTypeOf(dimension);
+  if (type === 'number') {
     const parsed = Number(raw);
     return raw.trim() !== '' && Number.isFinite(parsed) ? parsed : raw;
   }
-  if (dimension.type === 'boolean' && (raw === 'true' || raw === 'false')) {
+  if (type === 'boolean' && (raw === 'true' || raw === 'false')) {
     return raw === 'true';
   }
   return raw;
@@ -202,10 +210,43 @@ function conditionProblem(
   if (countProblem) {
     return `${name}: ${countProblem}`;
   }
-  const { check, noun } = VALUE_CHECKS[dimension.type];
+  const limitProblem = valueLimitProblem(condition, dimension);
+  if (limitProblem) {
+    return `${name}: ${limitProblem}`;
+  }
+  const { check, noun } = VALUE_CHECKS[valueTypeOf(dimension)];
   return condition.values.every(check)
     ? null
     : `${name}: values must be ${noun}`;
+}
+
+function valueLimitProblem(
+  condition: Condition,
+  dimension: Dimension
+): string | null {
+  if (
+    isIdDimension(dimension) &&
+    condition.values.length > MAX_ID_CONDITION_VALUES
+  ) {
+    return `at most ${formatCount(MAX_ID_CONDITION_VALUES)} values`;
+  }
+  const tooLong = condition.values.some(
+    (value) =>
+      typeof value === 'string' && value.length > MAX_FILTER_STRING_LENGTH
+  );
+  return tooLong
+    ? `a value is longer than ${MAX_FILTER_STRING_LENGTH} characters`
+    : null;
+}
+
+export function nameProblems(name: string): string[] {
+  const trimmed = name.trim();
+  if (trimmed === '') {
+    return ['Give the audience a name'];
+  }
+  return trimmed.length > MAX_AUDIENCE_NAME
+    ? [`The name is longer than ${MAX_AUDIENCE_NAME} characters`]
+    : [];
 }
 
 // Messages name schema labels only, never a value someone typed.

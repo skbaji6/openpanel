@@ -1,15 +1,15 @@
 import { useId, useState } from 'react';
-import {
-  describeMarketingError,
-  MarketingApiError,
-  useMarketingFetch,
-} from './api';
-import { formatCount, parseIdInput } from './audience-filter';
+import { describeMarketingError, useMarketingFetch } from './api';
+import { formatCount } from './audience-filter';
 import {
   addIdsInChunks,
   describePasteError,
   describeProgress,
+  describeSent,
+  listCapacityProblem,
+  looksLikeContacts,
   parseContactInput,
+  parseIdLines,
   resolveContacts,
 } from './audience-paste';
 import {
@@ -17,7 +17,7 @@ import {
   MAX_LIST_IDS,
   type ResolveResponse,
 } from './campaign-contract';
-import { useAudienceRow } from './use-audience-row';
+import { isVersionConflict, useAudienceRow } from './use-audience-row';
 import { WithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -26,8 +26,19 @@ import { showConfirm } from '@/modals';
 type IdList = 'include' | 'exclude';
 type PasteKind = 'ids' | 'contacts';
 
-const VERSION_CONFLICT = 'version_conflict';
 const MAX_LINES_SHOWN = 20;
+const CONFLICT_TEXT =
+  'Someone else changed this audience. It was reloaded; check the list and try again.';
+const CONTACTS_AS_IDS =
+  "These look like phone numbers or emails. Choose 'Phone numbers or emails' so they are matched to students and never stored.";
+const RESOLVE_FAILED_SUFFIX =
+  'The pasted contacts were cleared; paste them again to retry.';
+const KIND_HINTS: Record<PasteKind | 'none', string> = {
+  none: 'Choose what you are pasting first.',
+  ids: 'Paste student ids only. A phone number typed as digits would be stored as if it were an id.',
+  contacts:
+    'Matched by the audience API; only the matching student ids are kept, the contacts are not stored.',
+};
 const LIST_COPY: Record<IdList, { title: string; hint: string }> = {
   include: {
     title: 'Add specific students',
@@ -39,11 +50,14 @@ const LIST_COPY: Record<IdList, { title: string; hint: string }> = {
   },
 };
 
+const writeErrorText = (error: unknown) =>
+  isVersionConflict(error) ? CONFLICT_TEXT : describeMarketingError(error);
+
 interface Outcome {
   matched?: number;
   notFoundLines?: number[];
   tooLongLines?: number[];
-  added?: number;
+  sent?: number;
   error?: string;
 }
 
@@ -74,9 +88,7 @@ function OutcomeText({ outcome }: { outcome: Outcome }) {
           Skipped as too long on lines {describeLines(tooLong)}
         </p>
       )}
-      {outcome.added !== undefined && (
-        <p>{formatCount(outcome.added)} added to the list</p>
-      )}
+      {outcome.sent !== undefined && <p>{describeSent(outcome.sent)}</p>}
       {outcome.error && (
         <p className="text-destructive" role="alert">
           {outcome.error}
@@ -90,17 +102,19 @@ export function AudienceList({
   row,
   list,
   disabled,
+  onBusyChange,
 }: {
   row: AudienceRow;
   list: IdList;
   disabled: boolean;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const marketingFetch = useMarketingFetch();
-  const cache = useAudienceRow(row);
+  const cache = useAudienceRow();
   const fieldId = useId();
   // Pasted contacts live only here until resolved; they never reach the query cache, a URL or a toast.
   const [text, setText] = useState('');
-  const [kind, setKind] = useState<PasteKind>('ids');
+  const [kind, setKind] = useState<PasteKind | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const size = list === 'include' ? row.includeCount : row.excludeCount;
@@ -112,31 +126,35 @@ export function AudienceList({
       body: JSON.stringify({ list, ...body, expectedVersion }),
     });
 
-  const describeWriteError = (error: unknown) => {
-    if (error instanceof MarketingApiError && error.code === VERSION_CONFLICT) {
-      cache.reload();
-      return 'Someone else changed this audience. It was reloaded; check the list and try again.';
+  const reloadOnConflict = (error: unknown) => {
+    if (isVersionConflict(error)) {
+      cache.reload(row.id);
     }
-    return describeMarketingError(error);
   };
 
   const addIds = async (ids: string[], base: Outcome) => {
-    let added = 0;
+    const capacity = listCapacityProblem(size, ids.length);
+    if (capacity) {
+      setOutcome({ ...base, error: capacity });
+      return;
+    }
+    let sent = 0;
     try {
       await addIdsInChunks({
         ids,
-        version: cache.currentVersion(),
+        version: cache.currentVersion(row),
         post: (chunk, expectedVersion) =>
           changeIds({ add: chunk }, expectedVersion),
         onChunk: (saved, done) => {
-          added = done;
+          sent = done;
           cache.store(saved);
           setProgress(describeProgress('Adding', done, ids.length));
         },
       });
-      setOutcome({ ...base, added });
+      setOutcome({ ...base, sent });
     } catch (error) {
-      setOutcome({ ...base, added, error: describeWriteError(error) });
+      reloadOnConflict(error);
+      setOutcome({ ...base, sent, error: writeErrorText(error) });
     }
   };
 
@@ -154,7 +172,10 @@ export function AudienceList({
         setProgress(describeProgress('Checking', done, entries.length))
       );
     } catch (error) {
-      setOutcome({ error: describePasteError(error) });
+      setText('');
+      setOutcome({
+        error: `${describePasteError(error)} ${RESOLVE_FAILED_SUFFIX}`,
+      });
       return;
     }
     setText('');
@@ -165,28 +186,35 @@ export function AudienceList({
     });
   };
 
+  const addPastedIds = async () => {
+    if (looksLikeContacts(text)) {
+      setOutcome({ error: CONTACTS_AS_IDS });
+      return;
+    }
+    const { ids, tooLongLines } = parseIdLines(text);
+    setText('');
+    await addIds(ids, { tooLongLines });
+  };
+
   const add = async () => {
     setOutcome(null);
     setProgress('Working');
+    onBusyChange(true);
     try {
-      if (kind === 'contacts') {
-        await addContacts();
-        return;
-      }
-      const ids = parseIdInput(text);
-      setText('');
-      await addIds(ids, {});
+      await (kind === 'contacts' ? addContacts() : addPastedIds());
     } finally {
       setProgress(null);
+      onBusyChange(false);
     }
   };
 
   const clear = async () => {
     setOutcome(null);
     try {
-      cache.store(await changeIds({ clear: true }, cache.currentVersion()));
+      cache.store(await changeIds({ clear: true }, cache.currentVersion(row)));
     } catch (error) {
-      setOutcome({ error: describeWriteError(error) });
+      reloadOnConflict(error);
+      setOutcome({ error: writeErrorText(error) });
     }
   };
 
@@ -202,33 +230,38 @@ export function AudienceList({
       <p className="text-muted-foreground text-xs">{copy.hint}</p>
       <fieldset className="col gap-3" disabled={disabled || busy}>
         <WithLabel
-          hint="Phone numbers and emails are matched by the audience API; only the matching student ids are kept."
+          hint={KIND_HINTS[kind ?? 'none']}
           id={`${fieldId}-kind`}
           label="What are you pasting?"
         >
           <select
             className="h-8 self-start rounded-md border bg-background px-2 text-sm"
             id={`${fieldId}-kind`}
-            onChange={(event) =>
-              setKind(event.target.value === 'contacts' ? 'contacts' : 'ids')
-            }
-            value={kind}
+            onChange={(event) => {
+              const picked = event.target.value;
+              setKind(
+                picked === 'ids' || picked === 'contacts' ? picked : null
+              );
+            }}
+            value={kind ?? ''}
           >
+            <option value="">Choose</option>
             <option value="ids">Student ids</option>
             <option value="contacts">Phone numbers or emails</option>
           </select>
         </WithLabel>
         <WithLabel
           hint={
-            kind === 'ids'
-              ? 'One id per line, or separated by commas or spaces'
-              : 'One phone number or email per line, or separated by commas'
+            kind === 'contacts'
+              ? 'One phone number or email per line, or separated by commas'
+              : 'One id per line, or separated by commas or spaces'
           }
           id={`${fieldId}-paste`}
           label="Paste"
         >
           <Textarea
             autoComplete="off"
+            disabled={kind === null}
             id={`${fieldId}-paste`}
             onChange={(event) => setText(event.target.value)}
             rows={4}
@@ -238,7 +271,7 @@ export function AudienceList({
         </WithLabel>
         <div className="row items-center gap-2">
           <Button
-            disabled={text.trim() === ''}
+            disabled={kind === null || text.trim() === ''}
             loading={busy}
             onClick={add}
             type="button"

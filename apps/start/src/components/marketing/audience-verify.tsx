@@ -11,10 +11,10 @@ import {
   type AudiencePreview,
   type AudienceRow,
   type Explanation,
-  MAX_PREVIEW_EXCLUDE_IDS,
+  MAX_ID_CONDITION_VALUES,
   MAX_PREVIEW_LIMIT,
 } from './campaign-contract';
-import { useAudienceRow } from './use-audience-row';
+import { isVersionConflict, useAudienceRow } from './use-audience-row';
 import { InputWithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
 
@@ -87,7 +87,7 @@ function PreviewCheck({ path, row }: { path: string; row: AudienceRow }) {
       ),
   });
   const page = preview.data;
-  const excludeListTooLong = row.excludeCount > MAX_PREVIEW_EXCLUDE_IDS;
+  const excludeListTooLong = row.excludeCount > MAX_ID_CONDITION_VALUES;
   return (
     <div className="col gap-2">
       <div>
@@ -115,7 +115,7 @@ function PreviewCheck({ path, row }: { path: string; row: AudienceRow }) {
       {page && excludeListTooLong && (
         <p className="text-muted-foreground text-xs">
           The leave-out list is larger than the preview applies (
-          {formatCount(MAX_PREVIEW_EXCLUDE_IDS)}), so some of these students may
+          {formatCount(MAX_ID_CONDITION_VALUES)}), so some of these students may
           still be left out when sending.
         </p>
       )}
@@ -159,21 +159,34 @@ function ExplainCheck({ path }: { path: string }) {
   const marketingFetch = useMarketingFetch();
   const fieldId = useId();
   const [studentId, setStudentId] = useState('');
-  const explain = useMutation({
-    mutationFn: (id: string) =>
-      marketingFetch<Explanation>(`${path}/explain`, {
-        method: 'POST',
-        body: JSON.stringify({ id }),
-      }),
-  });
-  const result = explain.data;
+  // Local state, not a mutation, so the typed id is not kept in the query cache.
+  const [result, setResult] = useState<Explanation | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [pending, setPending] = useState(false);
+  const check = async (id: string) => {
+    setPending(true);
+    setError(null);
+    setResult(null);
+    try {
+      setResult(
+        await marketingFetch<Explanation>(`${path}/explain`, {
+          method: 'POST',
+          body: JSON.stringify({ id }),
+        })
+      );
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setPending(false);
+    }
+  };
   return (
     <form
       className="col gap-2"
       onSubmit={(event) => {
         event.preventDefault();
         if (studentId.trim() !== '') {
-          explain.mutate(studentId.trim());
+          check(studentId.trim());
         }
       }}
     >
@@ -186,7 +199,7 @@ function ExplainCheck({ path }: { path: string }) {
           onChange={(event) => setStudentId(event.target.value)}
           value={studentId}
         />
-        <Button loading={explain.isPending} type="submit" variant="outline">
+        <Button loading={pending} type="submit" variant="outline">
           Check
         </Button>
       </div>
@@ -204,19 +217,25 @@ function ExplainCheck({ path }: { path: string }) {
           </ul>
         </div>
       )}
-      <ErrorText error={explain.error} />
+      <ErrorText error={error} />
     </form>
   );
 }
 
 function FreezeCheck({ path, row }: { path: string; row: AudienceRow }) {
   const marketingFetch = useMarketingFetch();
-  const cache = useAudienceRow(row);
+  const cache = useAudienceRow();
   const freeze = useMutation({
     mutationFn: () =>
       marketingFetch<AudienceRow>(`${path}/freeze`, { method: 'POST' }),
     onSuccess: cache.store,
+    onError: (error) => {
+      if (isVersionConflict(error)) {
+        cache.reload(row.id);
+      }
+    },
   });
+  const freezeConflict = isVersionConflict(freeze.error);
   const neverFrozen = row.snapshotVersion === null;
   const changedSinceFreeze =
     !neverFrozen && row.snapshotVersion !== row.version;
@@ -254,7 +273,14 @@ function FreezeCheck({ path, row }: { path: string; row: AudienceRow }) {
           Freeze now
         </Button>
       </div>
-      <ErrorText error={freeze.error} />
+      {freezeConflict ? (
+        <p className="text-destructive text-sm" role="alert">
+          Someone else changed this audience while it was freezing. It was
+          reloaded; check it and freeze again.
+        </p>
+      ) : (
+        <ErrorText error={freeze.error} />
+      )}
     </div>
   );
 }

@@ -96,4 +96,10 @@ describe('error labels', () => {
       describeMarketingError(new MarketingApiError(403, 'forbidden', [], null))
     ).toBe('You do not have permission to do this');
   });
+
+  test('an audience in use cannot be changed either', () => {
+    expect(ERROR_LABELS.audience_in_use).toBe(
+      'This audience is used by a campaign and cannot be changed or deleted.'
+    );
+  });
 });

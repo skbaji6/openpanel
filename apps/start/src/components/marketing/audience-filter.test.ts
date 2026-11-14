@@ -8,6 +8,7 @@ import {
   emptyCondition,
   emptyGroup,
   filterProblems,
+  nameProblems,
   normalizeFilter,
   OP_LABELS,
   opsFor,
@@ -311,5 +312,49 @@ describe('describeCount', () => {
 
   test('one student', () => {
     expect(describeCount({ ...count, count: 1 })).toBe('1 student');
+  });
+});
+
+describe('fix round 1 edge cases', () => {
+  test('removeNode with an empty path leaves the tree alone', () => {
+    const tree: FilterGroup = { op: 'and', children: [city(['Pune'])] };
+    expect(removeNode(tree, [])).toEqual(tree);
+  });
+
+  test('an impossible calendar date is not a date', () => {
+    expect(
+      filterProblems(
+        { dimension: 'signup', op: 'eq', values: ['2024-02-30'] },
+        dimensions
+      )
+    ).toEqual(['signup: values must be dates']);
+  });
+
+  test('a text value longer than 512 characters', () => {
+    expect(filterProblems(city(['x'.repeat(513)]), dimensions)).toEqual([
+      'city: a value is longer than 512 characters',
+    ]);
+  });
+
+  test('the id dimension takes at most 1000 values and always strings', () => {
+    const idDimension = dimension('id', 'number');
+    const ids = Array.from({ length: 1001 }, (_, index) => `s${index}`);
+    expect(
+      filterProblems({ dimension: 'id', op: 'in', values: ids }, [idDimension])
+    ).toEqual(['id: at most 1,000 values']);
+    expect(coerceValue(idDimension, '42')).toBe('42');
+  });
+
+  test('audience names are required and at most 200 characters', () => {
+    expect(nameProblems('  ')).toEqual(['Give the audience a name']);
+    expect(nameProblems('x'.repeat(201))).toEqual([
+      'The name is longer than 200 characters',
+    ]);
+    expect(nameProblems('Final year')).toEqual([]);
+  });
+
+  test('parseIdInput handles CRLF and input made only of separators', () => {
+    expect(parseIdInput('a\r\nb\r\n')).toEqual(['a', 'b']);
+    expect(parseIdInput(' ,\r\n, ')).toEqual([]);
   });
 });

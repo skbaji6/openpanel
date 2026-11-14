@@ -4,7 +4,11 @@ import {
   addIdsInChunks,
   describePasteError,
   describeProgress,
+  describeSent,
+  listCapacityProblem,
+  looksLikeContacts,
   parseContactInput,
+  parseIdLines,
   resolveContacts,
 } from './audience-paste';
 import type { AudienceRow, ResolveResponse } from './campaign-contract';
@@ -141,5 +145,129 @@ describe('describePasteError', () => {
     expect(describePasteError(new Error('ada@example.com'))).toBe(
       'The check failed. Try again in a moment.'
     );
+  });
+});
+
+describe('looksLikeContacts', () => {
+  test('emails and +country numbers look like contacts', () => {
+    expect(looksLikeContacts('s1\nada@example.com')).toBe(true);
+    expect(looksLikeContacts('s1, +91 98765 43210')).toBe(true);
+  });
+
+  test('plain ids and digits-only ids do not', () => {
+    expect(looksLikeContacts('stu_1\nstu_2')).toBe(false);
+    expect(looksLikeContacts('9876543210, 0024')).toBe(false);
+  });
+});
+
+describe('parseIdLines', () => {
+  test('reports ids longer than 256 characters by line and does not keep them', () => {
+    expect(parseIdLines(`a b\r\n${'x'.repeat(257)}\na`)).toEqual({
+      ids: ['a', 'b'],
+      tooLongLines: [2],
+    });
+  });
+
+  test('empty paste and separators only', () => {
+    expect(parseIdLines('')).toEqual({ ids: [], tooLongLines: [] });
+    expect(parseIdLines(' ,\n,, ')).toEqual({ ids: [], tooLongLines: [] });
+  });
+});
+
+describe('parseContactInput edge cases', () => {
+  test('CRLF line endings keep line numbers', () => {
+    expect(parseContactInput('a@b.co\r\n\r\nc@d.co').entries).toEqual([
+      { value: 'a@b.co', line: 1 },
+      { value: 'c@d.co', line: 3 },
+    ]);
+  });
+
+  test('empty paste and separators only', () => {
+    expect(parseContactInput('')).toEqual({ entries: [], tooLongLines: [] });
+    expect(parseContactInput(' ,\n , ')).toEqual({
+      entries: [],
+      tooLongLines: [],
+    });
+  });
+});
+
+describe('list capacity and wording', () => {
+  test('refuses when the list would pass the limit, with the numbers', () => {
+    expect(listCapacityProblem(19_000, 1000)).toBeNull();
+    expect(listCapacityProblem(19_000, 1001)).toBe(
+      'The list has 19,000 students and holds at most 20,000, so 1,001 more cannot be added. Add at most 1,000.'
+    );
+  });
+
+  test('says how many were sent without claiming they were all new', () => {
+    expect(describeSent(2500)).toBe(
+      '2,500 sent to the list (ids already on it are not added twice)'
+    );
+  });
+});
+
+describe('chunk boundaries and failures', () => {
+  const entries = (count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      value: `u${index}@example.com`,
+      line: index + 1,
+    }));
+  const echo = async (inputs: string[]) => ({
+    ids: inputs,
+    unmatchedPositions: [],
+  });
+
+  test('exactly 200 entries is one call, 201 is two', async () => {
+    const sizes: number[] = [];
+    const record = async (inputs: string[]) => {
+      sizes.push(inputs.length);
+      return echo(inputs);
+    };
+    await resolveContacts(entries(200), record, () => undefined);
+    expect(sizes).toEqual([200]);
+    sizes.length = 0;
+    await resolveContacts(entries(201), record, () => undefined);
+    expect(sizes).toEqual([200, 1]);
+  });
+
+  test('a failure in the middle of resolving stops and rejects', async () => {
+    let calls = 0;
+    const progress: number[] = [];
+    await expect(
+      resolveContacts(
+        entries(450),
+        async (inputs) => {
+          calls += 1;
+          if (calls === 2) {
+            throw new Error('down');
+          }
+          return echo(inputs);
+        },
+        (done) => progress.push(done)
+      )
+    ).rejects.toThrow('down');
+    expect(calls).toBe(2);
+    expect(progress).toEqual([200]);
+  });
+
+  test('a failure in the middle of adding keeps the rows already saved', async () => {
+    const seen: number[] = [];
+    let calls = 0;
+    await expect(
+      addIdsInChunks({
+        ids: Array.from({ length: 4500 }, (_, index) => `id${index}`),
+        version: 1,
+        post: async (_chunk, expectedVersion) => {
+          calls += 1;
+          if (calls === 2) {
+            throw new Error('conflict');
+          }
+          return { version: expectedVersion + 1 } as AudienceRow;
+        },
+        onChunk: (_row, done) => seen.push(done),
+      })
+    ).rejects.toThrow('conflict');
+    expect(seen).toEqual([2000]);
+    expect(calls).toBe(2);
   });
 });

@@ -1,8 +1,10 @@
 import { MarketingApiError } from './api';
-import { chunkIds, formatCount } from './audience-filter';
+import { chunkIds, formatCount, parseIdInput } from './audience-filter';
 import {
   type AudienceRow,
+  MAX_ID_LENGTH,
   MAX_IDS_PER_CHANGE,
+  MAX_LIST_IDS,
   MAX_RESOLVE_DISTINCT_INPUTS,
   MAX_RESOLVE_INPUT_LENGTH,
   type ResolveResponse,
@@ -13,6 +15,9 @@ import { ERROR_LABELS } from './error-labels';
 const CONTACT_SEPARATORS = /[\n,]/;
 const LINE_BREAK = /\r?\n/;
 const PASTE_FAILED = 'The check failed. Try again in a moment.';
+const ID_TOKEN_SEPARATORS = /[\s,]+/;
+const EMAIL_MARK = '@';
+const PHONE_PREFIX = '+';
 
 export interface ContactEntry {
   value: string;
@@ -42,6 +47,49 @@ export function parseContactInput(text: string): {
     }
   }
   return { entries, tooLongLines };
+}
+
+// Digits-only phone numbers cannot be told from ids; the ids option warns about that instead.
+export function looksLikeContacts(text: string): boolean {
+  return (
+    text.includes(EMAIL_MARK) ||
+    text
+      .split(ID_TOKEN_SEPARATORS)
+      .some((token) => token.startsWith(PHONE_PREFIX))
+  );
+}
+
+export function parseIdLines(text: string): {
+  ids: string[];
+  tooLongLines: number[];
+} {
+  const ids = new Set<string>();
+  const tooLongLines: number[] = [];
+  for (const [index, lineText] of text.split(LINE_BREAK).entries()) {
+    for (const id of parseIdInput(lineText)) {
+      if (id.length > MAX_ID_LENGTH) {
+        tooLongLines.push(index + 1);
+      } else {
+        ids.add(id);
+      }
+    }
+  }
+  return { ids: [...ids], tooLongLines: [...new Set(tooLongLines)] };
+}
+
+export function listCapacityProblem(
+  currentSize: number,
+  adding: number
+): string | null {
+  if (currentSize + adding <= MAX_LIST_IDS) {
+    return null;
+  }
+  const room = Math.max(0, MAX_LIST_IDS - currentSize);
+  return `The list has ${formatCount(currentSize)} students and holds at most ${formatCount(MAX_LIST_IDS)}, so ${formatCount(adding)} more cannot be added. Add at most ${formatCount(room)}.`;
+}
+
+export function describeSent(count: number): string {
+  return `${formatCount(count)} sent to the list (ids already on it are not added twice)`;
 }
 
 export function describeProgress(

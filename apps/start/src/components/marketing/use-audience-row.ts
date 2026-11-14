@@ -1,23 +1,27 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useMarketingQueryKey } from './api';
+import { MarketingApiError, useMarketingQueryKey } from './api';
 import type { AudienceRow } from './campaign-contract';
 
+const VERSION_CONFLICT = 'version_conflict';
+
+export const isVersionConflict = (error: unknown) =>
+  error instanceof MarketingApiError && error.code === VERSION_CONFLICT;
+
 // Every write answers with the new row; keeping it in the cache keeps expectedVersion current.
-export function useAudienceRow(row: AudienceRow) {
+export function useAudienceRow() {
   const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
-  const rowKey = queryKey('audiences', row.id);
+  const keyOf = (id: string) => queryKey('audiences', id);
   return {
-    rowKey,
-    currentVersion: () =>
-      client.getQueryData<AudienceRow>(rowKey)?.version ?? row.version,
+    currentVersion: (row: AudienceRow) =>
+      client.getQueryData<AudienceRow>(keyOf(row.id))?.version ?? row.version,
     store: (saved: AudienceRow) => {
-      client.setQueryData(rowKey, saved);
+      client.setQueryData(keyOf(saved.id), saved);
       client.invalidateQueries({
         queryKey: queryKey('audiences'),
         exact: true,
       });
     },
-    reload: () => client.invalidateQueries({ queryKey: rowKey }),
+    reload: (id: string) => client.invalidateQueries({ queryKey: keyOf(id) }),
   };
 }

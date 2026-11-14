@@ -23,7 +23,13 @@ const route = getRouteApi(
   '/_app/$organizationId/$projectId/marketing/_tabs/audiences'
 );
 
-const NOT_ADMIN_NOTE = 'Only owners and admins can delete audiences';
+const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
+const NOT_ADMIN_NOTE_ID = 'audiences-not-admin-note';
+const UNREACHABLE_CODES = new Set([
+  'source_unavailable',
+  'source_auth_failed',
+  'source_error',
+]);
 const NOT_CONNECTED_CODES = new Set([
   'source_not_http',
   'source_not_configured',
@@ -127,7 +133,18 @@ function AudienceTable({
               <Button onClick={() => onOpen(row.id)} size="sm" variant="ghost">
                 Open
               </Button>
-              {isAdmin && <DeleteButton row={row} />}
+              {isAdmin ? (
+                <DeleteButton row={row} />
+              ) : (
+                <Button
+                  aria-describedby={NOT_ADMIN_NOTE_ID}
+                  disabled
+                  size="sm"
+                  variant="ghost"
+                >
+                  Delete
+                </Button>
+              )}
             </td>
           </tr>
         ))}
@@ -177,6 +194,9 @@ export function AudiencesPage() {
   const notConnected =
     schema.error instanceof MarketingApiError &&
     NOT_CONNECTED_CODES.has(schema.error.code);
+  const unreachable =
+    schema.error instanceof MarketingApiError &&
+    UNREACHABLE_CODES.has(schema.error.code);
   return (
     <div className="col gap-4">
       <div className="row items-center justify-between gap-2">
@@ -186,7 +206,9 @@ export function AudiencesPage() {
         </p>
         <div className="row items-center gap-3">
           {!isAdmin && (
-            <p className="text-muted-foreground text-xs">{NOT_ADMIN_NOTE}</p>
+            <p className="text-muted-foreground text-xs" id={NOT_ADMIN_NOTE_ID}>
+              {NOT_ADMIN_NOTE}
+            </p>
           )}
           <Button
             icon={PlusIcon}
@@ -200,6 +222,12 @@ export function AudiencesPage() {
         <p className="rounded border p-3 text-sm">
           Filters and checks need the audience API. Connect it on the{' '}
           <ConnectSourceLink /> first.
+        </p>
+      )}
+      {unreachable && (
+        <p className="rounded border p-3 text-sm" role="status">
+          The audience API cannot be reached right now. Saved audiences are
+          listed; counts and previews will not work until it is back.
         </p>
       )}
       {audiences.isPending && <FullPageLoadingState />}
