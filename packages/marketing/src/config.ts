@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from './channels/timeouts';
+import { SENDING_LEASE_MS } from './campaign/recipients';
 
 const SASL_MECHANISMS = ['plain', 'scram-sha-256', 'scram-sha-512'] as const;
 const TRUE_VALUES = new Set(['true', '1']);
@@ -7,10 +7,12 @@ const FALSE_VALUES = new Set(['false', '0']);
 // Connections a replica needs besides one per concurrent send and campaign loop: consumer batch, tick sweep/claim, HTTP.
 const DB_POOL_HEADROOM = 3;
 const MAX_CAMPAIGN_CONCURRENCY = 32;
-// A lease must outlast the lookup batch window, the adapter's send timeout and the ticker's mark retries.
-// A slower lookup is caught by the ticker's remaining-lease check instead.
+// Time a campaign claim keeps for pacing after the lookup; below it a slow rate never fits a token in.
+const DISPATCH_PACING_MARGIN_MS = 15_000;
+// A claim must outlast the lookup batch window, the campaign sending lease (which also covers the journey
+// ticker's send timeout and mark retries) and some pacing. A slower lookup is caught by the remaining-lease checks.
 const minLeaseSeconds = (lookupWindowMs: number) =>
-  (lookupWindowMs + SEND_TIMEOUT_MS + LEASE_MARGIN_MS) / 1000;
+  (lookupWindowMs + SENDING_LEASE_MS + DISPATCH_PACING_MARGIN_MS) / 1000;
 const WEB_PROTOCOLS = new Set(['http:', 'https:']);
 const TRAILING_SLASHES = /\/+$/;
 
@@ -145,7 +147,7 @@ const rawSchema = z
     if (raw.MARKETING_LEASE_SECONDS <= minLease) {
       issue(
         'MARKETING_LEASE_SECONDS',
-        `must be greater than ${minLease} (MARKETING_LOOKUP_WINDOW_MS plus the ${SEND_TIMEOUT_MS / 1000} s send timeout plus mark retries)`
+        `must be greater than ${minLease} (MARKETING_LOOKUP_WINDOW_MS plus the ${SENDING_LEASE_MS / 1000} s campaign sending lease plus ${DISPATCH_PACING_MARGIN_MS / 1000} s of pacing)`
       );
     }
     const hasUsername = raw.KAFKA_SASL_USERNAME !== undefined;

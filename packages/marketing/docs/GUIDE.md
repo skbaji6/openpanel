@@ -420,7 +420,7 @@ With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/
 | Campaign stays `scheduled` after Start | Another campaign of the project is running or paused; it starts when that one finishes or is cancelled. |
 | Campaign shows `missed` | No worker picked it up within `ifLateMinutes` (plus one minute) of its time, or another campaign held the slot that long. |
 | Campaign shows `materializeError: source_unavailable` | The audience source is down; it retries every 30 s and continues by itself. |
-| Worker will not start | A required variable is missing (the log names it), or `MARKETING_DB_POOL` is below `MARKETING_SEND_CONCURRENCY` + `MARKETING_CAMPAIGN_CONCURRENCY` + 3 (new: upgrades with a pool of 13 or 14 must raise it), or `MARKETING_LEASE_SECONDS` is not greater than `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. |
+| Worker will not start | A required variable is missing (the log names it), or `MARKETING_DB_POOL` is below `MARKETING_SEND_CONCURRENCY` + `MARKETING_CAMPAIGN_CONCURRENCY` + 3 (new: upgrades with a pool of 13 or 14 must raise it), or `MARKETING_LEASE_SECONDS` is not greater than `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 76 (raised from + 31: a lease of 34 to 78 s that booted before must be raised). |
 
 ## 14. Limits worth knowing
 

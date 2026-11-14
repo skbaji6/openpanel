@@ -80,6 +80,8 @@ import {
 import type { createCampaignService } from './service';
 
 const SOURCE_RETRY_MS = 30_000;
+const MS_PER_SECOND = 1000;
+const MIN_PACING_REST_MS = 1000;
 const MAX_DISPATCH_FAILURES = 5;
 // The last send may start here and still finish, at its own timeout, before the reaper can take the batch.
 // Every adapter bounds a send by SEND_TIMEOUT_MS.
@@ -693,6 +695,27 @@ async function recordOutcomes(
   }
 }
 
+// What the claim's lease leaves for waiting on tokens once the sending lease is set aside.
+const pacingBudgetMs = (deps: DispatchDeps, claim: Claim) =>
+  claim.leaseUntil.getTime() - deps.now().getTime() - SENDING_LEASE_MS;
+
+// A claim that could send nothing rests the campaign, or every loop would claim and look it up again at once.
+// shortcut: waits the time one token takes at the rate, an upper bound of the bucket's own wait; return that wait from acquireTokens if resting a little long matters.
+async function restUntilTokenDue(
+  deps: DispatchDeps,
+  campaign: DueCampaign,
+  prepared: Prepared
+): Promise<void> {
+  const rate = prepared.settings.ratePerSecond;
+  const tokenMs = rate === null ? 0 : Math.ceil(MS_PER_SECOND / rate);
+  await retryLater(
+    deps,
+    campaign.id,
+    later(deps.now(), Math.max(MIN_PACING_REST_MS, tokenMs)),
+    null
+  );
+}
+
 async function deliver(
   deps: DispatchDeps,
   campaign: DueCampaign,
@@ -701,6 +724,10 @@ async function deliver(
   result: DispatchResult
 ): Promise<void> {
   const { id, project_id: projectId, channel } = campaign;
+  if (pacingBudgetMs(deps, claim) <= 0) {
+    await restUntilTokenDue(deps, campaign, prepared);
+    return;
+  }
   let entries: LookupEntry[];
   try {
     entries = await withCampaignLane(prepared.source, {
@@ -738,21 +765,24 @@ async function deliver(
       'failed',
       sorted.failed
     );
-    const budgetMs =
-      claim.leaseUntil.getTime() - deps.now().getTime() - SENDING_LEASE_MS;
-    if (budgetMs <= 0 || sorted.items.length === 0) {
+    if (sorted.items.length === 0) {
       return;
     }
-    const granted = await acquireTokens(
-      deps.bucket,
-      `${projectId}:${channel}`,
-      prepared.settings.ratePerSecond,
-      sorted.items.length,
-      budgetMs,
-      deps.sleep
-    );
+    const budgetMs = pacingBudgetMs(deps, claim);
+    const granted =
+      budgetMs > 0
+        ? await acquireTokens(
+            deps.bucket,
+            `${projectId}:${channel}`,
+            prepared.settings.ratePerSecond,
+            sorted.items.length,
+            budgetMs,
+            deps.sleep
+          )
+        : 0;
     const paced = sorted.items.slice(0, granted);
     if (paced.length === 0) {
+      await restUntilTokenDue(deps, campaign, prepared);
       return;
     }
     await oneBatchAtATime(`${projectId}:${channel}`, async () => {

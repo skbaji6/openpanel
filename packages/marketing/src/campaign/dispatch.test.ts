@@ -655,6 +655,68 @@ describe('runDispatchCycle', () => {
     expect((await runDispatchCycle(depsFor(null))).campaignId).toBeNull();
   });
 
+  it('a rate too slow to fit a token in the lease rests the campaign instead of claiming and looking up again', async () => {
+    const members = pushMembers(3);
+    const sent = fakeChannel('push');
+    // One token per 1,000 s: the first comes from the full bucket, the next never fits in the lease.
+    const id = await setup({
+      channel: 'push',
+      members,
+      settings: { ratePerSecond: 0.001 },
+    });
+    let lookups = 0;
+    const inner = createFakeSource({ members });
+    const deps = depsFor({
+      ...inner,
+      lookup: (ids, channel) => {
+        lookups += 1;
+        return inner.lookup(ids, channel);
+      },
+    });
+
+    await runDispatchCycle(deps);
+    expect(sent).toHaveLength(1);
+    const waitingFrom = now.getTime();
+    await runDispatchCycle(deps);
+    expect(lookups).toBe(2);
+    expect(sent).toHaveLength(1);
+    expect((await campaign(id)).dispatch_retry_at?.getTime()).toBe(
+      waitingFrom + 1_000_000
+    );
+
+    expect((await runDispatchCycle(deps)).campaignId).toBeNull();
+    expect(lookups).toBe(2);
+    expect(await statuses(id)).toEqual({ sent: 1, pending: 2 });
+  });
+
+  it('a claim whose lease leaves no pacing time rests the campaign without a lookup', async () => {
+    const members = pushMembers(2);
+    const sent = fakeChannel('push');
+    const id = await setup({ channel: 'push', members });
+    let lookups = 0;
+    const inner = createFakeSource({ members });
+    const deps = depsFor(
+      {
+        ...inner,
+        lookup: (ids, channel) => {
+          lookups += 1;
+          return inner.lookup(ids, channel);
+        },
+      },
+      { cfg: { ...CFG, leaseSeconds: SENDING_LEASE_MS / SECOND_MS } }
+    );
+
+    const result = await runDispatchCycle(deps);
+
+    expect(result.claimed).toBe(2);
+    expect(lookups).toBe(0);
+    expect(sent).toHaveLength(0);
+    expect(await statuses(id)).toEqual({ pending: 2 });
+    expect((await campaign(id)).dispatch_retry_at?.getTime()).toBe(
+      at(SECOND_MS).getTime()
+    );
+  });
+
   it('turning quiet hours off wakes a campaign waiting for them', async () => {
     // 21:00 in Asia/Kolkata.
     now = new Date('2026-11-03T15:30:00.000Z');
