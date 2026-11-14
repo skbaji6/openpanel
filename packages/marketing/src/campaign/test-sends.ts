@@ -9,6 +9,7 @@ import {
 } from '../audience/errors';
 import { withCampaignLane } from '../audience/lane';
 import type { DeliveryOutcome } from '../channels/batch';
+import { phoneSecrets } from '../channels/msg91-http';
 import { getChannelSettings } from '../channels/settings';
 import { recordDeadTokens } from '../engine/dead-tokens';
 import { entryValues } from '../engine/ticker';
@@ -24,6 +25,7 @@ import {
   PROVIDER_CHANNELS,
   type Prepared,
   SEND_DEADLINE_MS,
+  safeProviderRef,
   sendWithDeadline,
   sortEntries,
 } from './dispatch';
@@ -185,7 +187,10 @@ async function deliver(
     }
     return finish(deps, row, 'failed', reason);
   }
-  redact.push(...entries.flatMap(entryValues));
+  redact.push(
+    ...entries.flatMap(entryValues),
+    ...entries.flatMap((entry) => phoneSecrets(entry.phone))
+  );
   redact.sort((a, b) => b.length - a.length);
 
   const { settings } = await getChannelSettings(deps.sql, projectId, channel);
@@ -270,7 +275,7 @@ async function deliver(
     row,
     final.status,
     final.reason,
-    outcome.providerRef ?? null
+    safeProviderRef(outcome.providerRef, redact) ?? null
   );
 }
 

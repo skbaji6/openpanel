@@ -138,6 +138,18 @@ describe('msg91 sms adapter', () => {
     ).toBe(true);
   });
 
+  it('a request id that echoes a phone or the auth key is not kept as the provider ref', async () => {
+    for (const echoed of [phoneOf(2), AUTH_KEY]) {
+      fake.script(SMS_PATH, () => ({
+        status: 200,
+        body: { type: 'success', message: echoed },
+      }));
+      const results = await run([item(1), item(2)]);
+      expect(count(results, 'sent')).toBe(2);
+      expect(results.every((r) => r.providerRef === undefined)).toBe(true);
+    }
+  });
+
   it('429 with Retry-After 7 is rate_limited 7,000 ms for every recipient', async () => {
     fake.script(SMS_PATH, responses.rateLimited(RETRY_AFTER_SECONDS));
     const results = await run(items(3));

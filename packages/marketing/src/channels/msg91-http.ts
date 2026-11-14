@@ -156,11 +156,17 @@ function outcomes(
   return items.map((item) => ({ profileId: item.profileId, ...rest }));
 }
 
-function requestIdOf(reading: Msg91Reading): { providerRef?: string } {
+// Stored with the recipient row, so an id that echoes a phone number or the key is dropped.
+function requestIdOf(
+  reading: Msg91Reading,
+  secrets: string[]
+): { providerRef?: string } {
   const id = reading.requestId;
-  return typeof id === 'string' && REQUEST_ID.test(id)
-    ? { providerRef: id }
-    : {};
+  const usable =
+    typeof id === 'string' &&
+    REQUEST_ID.test(id) &&
+    !secrets.some((secret) => id.includes(secret));
+  return usable ? { providerRef: id } : {};
 }
 
 export const digitsOf = (phone: string) => phone.replace(/\D/g, '');
@@ -289,6 +295,10 @@ export async function sendMsg91Groups(
         return outcomes(items, { outcome: 'uncertain', reason: posted.reason });
       }
       const { status, json } = posted;
+      const secrets = [
+        spec.authKey,
+        ...items.flatMap((item) => phoneSecrets(item.to.phone)),
+      ].filter(Boolean);
       if (status >= HTTP_OK_MIN && status < HTTP_REDIRECT_MIN) {
         const reading = spec.readSuccess(json);
         // Any 2xx shows the provider takes the template, so it disarms the breaker.
@@ -298,17 +308,20 @@ export async function sendMsg91Groups(
           const settled = items.map((item) => ({
             profileId: item.profileId,
             ...perItem(item),
-            ...requestIdOf(reading),
+            ...requestIdOf(reading, secrets),
           }));
           return settled;
         }
         if (reading.success) {
-          return outcomes(items, { outcome: 'sent', ...requestIdOf(reading) });
+          return outcomes(items, {
+            outcome: 'sent',
+            ...requestIdOf(reading, secrets),
+          });
         }
         return outcomes(items, {
           outcome: 'uncertain',
           reason: `msg91 ${status}`,
-          ...requestIdOf(reading),
+          ...requestIdOf(reading, secrets),
         });
       }
       if (status === HTTP_RATE_LIMITED) {
@@ -357,10 +370,6 @@ export async function sendMsg91Groups(
           reason: `msg91 ${status}`,
         });
       }
-      const secrets = [
-        spec.authKey,
-        ...items.flatMap((item) => phoneSecrets(item.to.phone)),
-      ].filter(Boolean);
       const reason = failureReason(status, json, secrets);
       if (rejected && items.length === 1) {
         state.singleRejections += 1;

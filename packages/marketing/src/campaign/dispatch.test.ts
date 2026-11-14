@@ -411,6 +411,39 @@ describe('runDispatchCycle', () => {
     expect((await runDispatchCycle(depsFor(null))).campaignId).toBeNull();
   });
 
+  it('a provider ref that echoes the phone is stored as null; an ordinary ref is kept', async () => {
+    const { templateId } = await providerTemplate('whatsapp');
+    const members = [phoneMember('echo'), phoneMember('plain')];
+    const refs = new Map([
+      ['echo', '919876543210'],
+      ['plain', 'req-000123'],
+    ]);
+    fakeBatch('whatsapp', (item) => ({
+      profileId: item.profileId,
+      outcome: 'sent',
+      providerRef: refs.get(item.profileId),
+    }));
+    const id = await setup({
+      channel: 'whatsapp',
+      members,
+      template: { templateId },
+      templateVersion: 1,
+    });
+
+    await runDispatchCycle(depsFor(createFakeSource({ members })));
+
+    const rows = await sql.$queryRawUnsafe<
+      { profile_id: string; status: string; provider_ref: string | null }[]
+    >(
+      'SELECT profile_id, status, provider_ref FROM marketing.campaign_recipients WHERE campaign_id = $1::uuid ORDER BY profile_id',
+      id
+    );
+    expect(rows).toEqual([
+      { profile_id: 'echo', status: 'sent', provider_ref: null },
+      { profile_id: 'plain', status: 'sent', provider_ref: 'req-000123' },
+    ]);
+  });
+
   it('a campaign whose preparation throws waits with dispatch_error, and a campaign of another project still sends', async () => {
     const members = pushMembers(3);
     const sent = fakeChannel('push');

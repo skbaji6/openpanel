@@ -19,6 +19,7 @@ import type {
   DeliveryOutcome,
   ProviderMessage,
 } from '../channels/batch';
+import { phoneSecrets } from '../channels/msg91-http';
 import { getBatchAdapter } from '../channels/registry';
 import {
   type CampaignChannel,
@@ -205,6 +206,12 @@ export interface Claim {
 type Rendered =
   | { ok: true; message: RenderedMessage | ProviderMessage }
   | { ok: false; reason: 'missing_variable' | 'render_failed' };
+
+// A provider ref is the provider's own string and may echo the request, so one holding a secret is dropped.
+export const safeProviderRef = (ref: string | undefined, redact: string[]) =>
+  ref === undefined || redact.some((secret) => ref.includes(secret))
+    ? undefined
+    : ref;
 
 const later = (now: Date, ms: number) => new Date(now.getTime() + ms);
 
@@ -621,11 +628,14 @@ async function recordOutcomes(
   result: DispatchResult
 ): Promise<void> {
   const { id, project_id: projectId, channel } = campaign;
-  const stored = outcomes.map((outcome) =>
-    outcome.reason === undefined
-      ? outcome
-      : { ...outcome, reason: redactSecrets(outcome.reason, redact) }
-  );
+  const stored = outcomes.map((outcome) => ({
+    ...outcome,
+    reason:
+      outcome.reason === undefined
+        ? undefined
+        : redactSecrets(outcome.reason, redact),
+    providerRef: safeProviderRef(outcome.providerRef, redact),
+  }));
   const now = deps.now();
   await markOutcomes(deps.sql, {
     campaignId: id,
@@ -743,7 +753,11 @@ async function deliver(
   await deps.sql.$executeRawUnsafe(SOURCE_OK, projectId, deps.now());
 
   const redact = [
-    ...new Set([...prepared.secrets, ...entries.flatMap(entryValues)]),
+    ...new Set([
+      ...prepared.secrets,
+      ...entries.flatMap(entryValues),
+      ...entries.flatMap((entry) => phoneSecrets(entry.phone)),
+    ]),
   ].sort((a, b) => b.length - a.length);
   try {
     const sorted = await sortEntries(
