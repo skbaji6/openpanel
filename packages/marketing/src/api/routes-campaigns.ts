@@ -235,7 +235,12 @@ export function campaignRoutes(
       async handle(ctx) {
         await parseOptionalBody(ctx.req, zNoBody);
         const id = ctx.params[0] as string;
-        const { retried } = await retryUncertain(operator.sql, ctx, id);
+        const { retried } = await retryUncertain(
+          operator.sql,
+          ctx,
+          id,
+          operator.now()
+        );
         const row = await campaigns.get(ctxOf(ctx), id);
         return json({ retried, campaign: toResponse(row) });
       },

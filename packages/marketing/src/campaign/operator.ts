@@ -21,6 +21,9 @@ const TEST_SENDS_LIMIT = 50;
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 const RETRYABLE = new Set<CampaignState>(['running', 'paused', 'completed']);
 const zCampaignId = z.uuid();
+const CENTS = 100;
+// Prices are decimals: 0.1 × 3 is 0.30000000000000004 in floating point.
+const roundToCents = (amount: number) => Math.round(amount * CENTS) / CENTS;
 
 export const zRecipientQuery = z.strictObject({
   status: z.enum(RECIPIENT_STATUSES).optional(),
@@ -88,14 +91,14 @@ async function requireCampaign(
 export async function retryUncertain(
   sql: Sql,
   ctx: OperatorContext,
-  campaignId: string
+  campaignId: string,
+  now: Date
 ): Promise<{ retried: number }> {
   return await sql.$transaction(async (tx) => {
     const { state } = await requireCampaign(tx, ctx, campaignId, true);
     if (!RETRYABLE.has(state)) {
       throw new HttpError(409, 'invalid_transition');
     }
-    const now = new Date();
     const changed = await tx.$queryRawUnsafe<{ profile_id: string }[]>(
       `UPDATE marketing.campaign_recipients
        SET status = 'pending', reason = 'operator_retry', attempt = 0, due_at = $2::timestamptz,
@@ -327,7 +330,7 @@ export async function estimateCampaign(
       ratePerSecond === null ? null : Math.ceil(count / ratePerSecond),
     cost: pricePerMessage
       ? {
-          amount: count * pricePerMessage.amount,
+          amount: roundToCents(count * pricePerMessage.amount),
           currency: pricePerMessage.currency,
         }
       : null,

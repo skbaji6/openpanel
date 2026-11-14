@@ -167,7 +167,7 @@ describe('retryUncertain', () => {
     await insertUncertain(id, ['a', 'b', 'c']);
     await insertRecipients(id, [{ id: 'd', status: 'sent' }]);
 
-    expect(await retryUncertain(sql, CTX, id)).toEqual({ retried: 3 });
+    expect(await retryUncertain(sql, CTX, id, NOW)).toEqual({ retried: 3 });
 
     expect(await stateOf(id)).toBe('running');
     expect(await ledgerCount()).toBe(0);
@@ -187,12 +187,10 @@ describe('retryUncertain', () => {
       }))
     );
 
-    // The retry stamps due_at with the real clock.
-    const later = new Date(Date.now() + LEASE_MS);
     const claimed = await claimRecipients(sql, {
       campaignId: id,
       limit: 500,
-      now: later,
+      now: NOW,
       leaseMs: LEASE_MS,
     });
     expect(claimed.profileIds.sort()).toEqual(['a', 'b', 'c']);
@@ -202,7 +200,7 @@ describe('retryUncertain', () => {
       channel: 'push',
       token: claimed.token,
       profileIds: claimed.profileIds,
-      now: later,
+      now: NOW,
       cap: null,
     });
     await markOutcomes(sql, {
@@ -213,14 +211,14 @@ describe('retryUncertain', () => {
         outcome: 'sent' as const,
         providerRef: 'ref',
       })),
-      now: later,
-      retryAt: later,
+      now: NOW,
+      retryAt: NOW,
     });
     expect(await ledgerCount()).toBe(3);
     expect(await campaigns.completeIfDone(id)).toBe(true);
     expect(await stateOf(id)).toBe('completed');
     // A second retry finds nothing, so it neither resends nor reopens.
-    expect(await retryUncertain(sql, CTX, id)).toEqual({ retried: 0 });
+    expect(await retryUncertain(sql, CTX, id, NOW)).toEqual({ retried: 0 });
     expect(await stateOf(id)).toBe('completed');
   });
 
@@ -229,7 +227,7 @@ describe('retryUncertain', () => {
     await insertUncertain(id, ['a']);
     await insertCampaign({ state: 'running' });
 
-    expect(await codeOf(retryUncertain(sql, CTX, id))).toEqual([
+    expect(await codeOf(retryUncertain(sql, CTX, id, NOW))).toEqual([
       409,
       'another_campaign_active',
     ]);
@@ -241,7 +239,7 @@ describe('retryUncertain', () => {
   it('on a draft is invalid_transition', async () => {
     const id = await insertCampaign({ state: 'draft' });
     await insertUncertain(id, ['a']);
-    expect(await codeOf(retryUncertain(sql, CTX, id))).toEqual([
+    expect(await codeOf(retryUncertain(sql, CTX, id, NOW))).toEqual([
       409,
       'invalid_transition',
     ]);
@@ -251,9 +249,9 @@ describe('retryUncertain', () => {
   it('is not_found for another project or a malformed id', async () => {
     const id = await insertCampaign();
     expect(
-      await codeOf(retryUncertain(sql, { projectId: 'other' }, id))
+      await codeOf(retryUncertain(sql, { projectId: 'other' }, id, NOW))
     ).toEqual([404, 'not_found']);
-    expect(await codeOf(retryUncertain(sql, CTX, 'nope'))).toEqual([
+    expect(await codeOf(retryUncertain(sql, CTX, 'nope', NOW))).toEqual([
       404,
       'not_found',
     ]);
@@ -265,7 +263,7 @@ describe('retryUncertain', () => {
     await insertRecipients(id, [
       { id: 'f', status: 'failed', reason: 'rejected' },
     ]);
-    expect(await retryUncertain(sql, CTX, id)).toEqual({ retried: 1 });
+    expect(await retryUncertain(sql, CTX, id, NOW)).toEqual({ retried: 1 });
     expect(await stateOf(id)).toBe('running');
     const failed = await listRecipients(sql, CTX, id, {
       status: 'failed',
@@ -412,6 +410,27 @@ describe('estimateCampaign', () => {
     });
     expect(cost).toBeNull();
     expect(issues).toEqual([]);
+  });
+
+  it('rounds the cost to cents: 3 messages at 0.1 cost 0.3', async () => {
+    await putChannelSettings(
+      sql,
+      PROJECT,
+      'sms',
+      {
+        ...DEFAULT_CHANNEL_SETTINGS.sms,
+        ratePerSecond: SMS_RATE,
+        pricePerMessage: { amount: 0.1, currency: 'INR' },
+      },
+      0
+    );
+    const id = await insertCampaign({
+      state: 'draft',
+      channel: 'sms',
+      count: 3,
+    });
+    const { cost } = await estimateCampaign(deps, CTX, id);
+    expect(cost).toEqual({ amount: 0.3, currency: 'INR' });
   });
 
   it('reports unsettled channel settings as issues', async () => {
