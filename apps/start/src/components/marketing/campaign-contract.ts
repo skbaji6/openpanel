@@ -99,7 +99,7 @@ const WHATSAPP_SLOT = /^(header|body|button)_[1-9][0-9]?$/;
 const ANY_PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
 const PROFILE_PLACEHOLDER = /^profile\.[A-Za-z0-9_]+$/;
 
-function isTimeZone(value: string): boolean {
+export function isTimeZone(value: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: value });
     return true;
@@ -123,7 +123,7 @@ function parsedUrl(value: string): URL | null {
 
 const noVariables = (value: string) => !value.includes('{{');
 
-const zImageUrl = z
+export const zImageUrl = z
   .string()
   .trim()
   .max(MAX_URL_LENGTH)

@@ -1,4 +1,8 @@
-import type { CampaignChannel, ChannelSettings } from './campaign-contract';
+import {
+  type CampaignChannel,
+  type ChannelSettings,
+  isTimeZone,
+} from './campaign-contract';
 import { labelSettingsIssue } from './reason-labels';
 
 export type CredentialKind =
@@ -231,15 +235,6 @@ const MAX_CONCURRENCY = 200;
 const MAX_RATE_PER_SECOND = 10_000;
 const MAX_PRICE = 1000;
 const MAX_DAILY_QUOTA = 10_000_000;
-
-function isTimeZone(value: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export function settingsProblems(
   form: SettingsForm,
