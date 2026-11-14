@@ -411,6 +411,45 @@ describe('runDispatchCycle', () => {
     expect((await runDispatchCycle(depsFor(null))).campaignId).toBeNull();
   });
 
+  it('a campaign whose preparation throws waits with dispatch_error, and a campaign of another project still sends', async () => {
+    const members = pushMembers(3);
+    const sent = fakeChannel('push');
+    // A rate of 0.1 per second claims one recipient per cycle, so the healthy campaign needs several picks.
+    const healthy = await setup({
+      channel: 'push',
+      members,
+      settings: { ratePerSecond: 0.1 },
+    });
+    project = `dispatch-broken-${randomUUID()}`;
+    const broken = await setup({ channel: 'push', members });
+    // A stored settings row the strict schema rejects makes every prepare throw.
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.channel_settings SET settings = settings || '{"unknown": 1}'::jsonb WHERE project_id = $1`,
+      project
+    );
+    const deps = depsFor(createFakeSource({ members }));
+
+    const thrown: unknown[] = [];
+    for (let cycle = 0; cycle < MAX_CYCLES; cycle++) {
+      if ((await campaign(healthy)).state === 'completed') {
+        break;
+      }
+      await runDispatchCycle(deps).catch((error: unknown) => {
+        thrown.push(error);
+      });
+    }
+
+    expect((await campaign(healthy)).state).toBe('completed');
+    expect(sent).toHaveLength(3);
+    expect(thrown).toHaveLength(1);
+    expect(await campaign(broken)).toMatchObject({
+      state: 'running',
+      dispatch_error: 'dispatch_error',
+      dispatch_retry_at: new Date(START.getTime() + CHANNEL_RETRY_MS),
+    });
+    expect(await statuses(broken)).toEqual({ pending: 3 });
+  });
+
   it('1,200 push recipients finish completed with counters sent 1,200 and each profile sent once', async () => {
     const members = pushMembers(1200);
     const sent = fakeChannel('push');

@@ -814,7 +814,19 @@ export async function runDispatchCycle(
   if (!campaign) {
     return result;
   }
-  const prepared = await prepare(deps, campaign, now);
+  let prepared: Prepared | null;
+  try {
+    prepared = await prepare(deps, campaign, now);
+  } catch (error) {
+    // Without a retry time the broken campaign stays first in the pick and starves every other one.
+    await retryLater(
+      deps,
+      campaign.id,
+      later(now, CHANNEL_ERROR_BACKOFF_MS),
+      'dispatch_error'
+    );
+    throw error;
+  }
   if (!prepared) {
     return result;
   }
