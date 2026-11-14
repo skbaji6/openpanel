@@ -23,12 +23,49 @@ const MAX_DISPLAY_NAME_LENGTH = 200;
 const MAPPING_MESSAGE =
   'Every {{1}}, {{2}}... in the approved text needs a body_1, body_2... variable and the other way round';
 
+export interface FormVariable {
+  id?: string;
+  slot: string;
+  value: string;
+}
+export type TemplateForm = Omit<TemplateInput, 'variables'> & {
+  variables: FormVariable[];
+};
+
+let rowCounter = 0;
+const newRowId = () => {
+  rowCounter += 1;
+  return `row-${rowCounter}`;
+};
+
+// Stable React keys: the slot is editable, so it cannot be the key.
+export function withRowIds(variables: FormVariable[]): FormVariable[] {
+  return variables.map((v) => ({ ...v, id: v.id ?? newRowId() }));
+}
+
+function firstFreeSlot(prefix: string, variables: FormVariable[]): string {
+  const taken = new Set(variables.map((v) => v.slot));
+  let n = 1;
+  while (taken.has(`${prefix}${n}`)) {
+    n += 1;
+  }
+  return `${prefix}${n}`;
+}
+
+export const nextSlot = (
+  kind: 'header' | 'button',
+  variables: FormVariable[]
+) => firstFreeSlot(`${kind}_`, variables);
+
+export const nextSmsSlot = (variables: FormVariable[]) =>
+  firstFreeSlot('var', variables);
+
 export interface TemplateProblem {
   path: string;
   message: string;
 }
 
-export function emptyTemplate(channel: ProviderTemplateChannel): TemplateInput {
+export function emptyTemplate(channel: ProviderTemplateChannel): TemplateForm {
   const providerRef =
     channel === 'sms'
       ? { flowId: '' }
@@ -53,17 +90,18 @@ export function whatsappSlotsFor(approvedText: string): string[] {
 // Keeps the values already typed for body slots that still exist; header and button rows stay as they are.
 export function syncWhatsappVariables(
   approvedText: string,
-  current: TemplateInput['variables']
-): TemplateInput['variables'] {
-  const typed = new Map(current.map((v) => [v.slot, v.value]));
+  current: FormVariable[]
+): FormVariable[] {
+  const existing = new Map(current.map((v) => [v.slot, v]));
   const generated = whatsappSlotsFor(approvedText).map((slot) => ({
+    id: existing.get(slot)?.id ?? newRowId(),
     slot,
-    value: typed.get(slot) ?? '',
+    value: existing.get(slot)?.value ?? '',
   }));
   return [...generated, ...current.filter((v) => !BODY_SLOT.test(v.slot))];
 }
 
-export function traitsOf(variables: TemplateInput['variables']): string[] {
+export function traitsOf(variables: FormVariable[]): string[] {
   const traits = new Set<string>();
   for (const variable of variables) {
     for (const match of variable.value.matchAll(ANY_PLACEHOLDER)) {
@@ -76,11 +114,11 @@ export function traitsOf(variables: TemplateInput['variables']): string[] {
   return [...traits];
 }
 
-function refOf(input: TemplateInput): Record<string, string | undefined> {
+function refOf(input: TemplateForm): Record<string, string | undefined> {
   return input.providerRef as Record<string, string | undefined>;
 }
 
-function providerProblems(input: TemplateInput): TemplateProblem[] {
+function providerProblems(input: TemplateForm): TemplateProblem[] {
   const ref = refOf(input);
   const problems: TemplateProblem[] = [];
   const check = (
@@ -118,7 +156,7 @@ function providerProblems(input: TemplateInput): TemplateProblem[] {
   return problems;
 }
 
-function mappingMatches(input: TemplateInput): boolean {
+function mappingMatches(input: TemplateForm): boolean {
   const numbers = [...input.approvedText.matchAll(NUMBERED_PLACEHOLDER)].map(
     (m) => m[1] ?? ''
   );
@@ -138,7 +176,7 @@ function mappingMatches(input: TemplateInput): boolean {
   );
 }
 
-function variableProblems(input: TemplateInput): TemplateProblem[] {
+function variableProblems(input: TemplateForm): TemplateProblem[] {
   const problems: TemplateProblem[] = [];
   const slotPattern = input.channel === 'sms' ? SMS_SLOT : WHATSAPP_SLOT;
   const seen = new Set<string>();
@@ -176,7 +214,7 @@ function variableProblems(input: TemplateInput): TemplateProblem[] {
   return problems;
 }
 
-export function templateProblems(input: TemplateInput): TemplateProblem[] {
+export function templateProblems(input: TemplateForm): TemplateProblem[] {
   const problems: TemplateProblem[] = [];
   const nameLength = input.displayName.trim().length;
   if (nameLength === 0 || nameLength > MAX_DISPLAY_NAME_LENGTH) {
@@ -206,7 +244,7 @@ export function templateProblems(input: TemplateInput): TemplateProblem[] {
   return problems;
 }
 
-export function toTemplateBody(form: TemplateInput): TemplateInput {
+export function toTemplateBody(form: TemplateForm): TemplateInput {
   const kept = Object.fromEntries(
     Object.entries(refOf(form)).filter(
       ([, value]) => value !== undefined && value !== ''
@@ -215,6 +253,7 @@ export function toTemplateBody(form: TemplateInput): TemplateInput {
   return {
     ...form,
     displayName: form.displayName.trim(),
+    variables: form.variables.map(({ slot, value }) => ({ slot, value })),
     providerRef: kept as TemplateInput['providerRef'],
   };
 }

@@ -9,10 +9,15 @@ import {
 } from './api';
 import type { TemplateInput, TemplateRow } from './campaign-contract';
 import {
+  type FormVariable,
+  nextSlot,
+  nextSmsSlot,
   syncWhatsappVariables,
+  type TemplateForm,
   templateProblems,
   toTemplateBody,
   traitsOf,
+  withRowIds,
 } from './template-form';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
@@ -29,14 +34,14 @@ type PreviewResult =
 
 type Ref = Record<string, string | undefined>;
 
-export function formFromRow(row: TemplateRow): TemplateInput {
+export function formFromRow(row: TemplateRow): TemplateForm {
   return {
     channel: row.channel,
     displayName: row.displayName,
     category: row.category,
     providerRef: row.providerRef as TemplateInput['providerRef'],
     approvedText: row.approvedText,
-    variables: row.variables.map((v) => ({ ...v })),
+    variables: withRowIds(row.variables),
   };
 }
 
@@ -45,7 +50,7 @@ function ProviderFields({
   setRef,
   errorOf,
 }: {
-  form: TemplateInput;
+  form: TemplateForm;
   setRef: (key: string, value: string) => void;
   errorOf: (path: string) => string | undefined;
 }) {
@@ -89,72 +94,94 @@ function ProviderFields({
   );
 }
 
+const isBodySlot = (slot: string) => slot.startsWith('body_');
+
 function VariableRows({
   form,
   isWhatsapp,
   errorOf,
   onChange,
 }: {
-  form: TemplateInput;
+  form: TemplateForm;
   isWhatsapp: boolean;
   errorOf: (path: string) => string | undefined;
-  onChange: (variables: TemplateInput['variables']) => void;
+  onChange: (variables: FormVariable[]) => void;
 }) {
-  const update = (
-    index: number,
-    patch: Partial<{ slot: string; value: string }>
-  ) =>
+  const [extraKind, setExtraKind] = useState<'header' | 'button'>('header');
+  const update = (index: number, patch: Partial<FormVariable>) =>
     onChange(
       form.variables.map((v, i) => (i === index ? { ...v, ...patch } : v))
     );
+  const add = (slot: string) =>
+    onChange(withRowIds([...form.variables, { slot, value: '' }]));
   return (
     <div className="col gap-3">
       <p className="text-muted-foreground text-xs">
         {isWhatsapp
-          ? 'One row per {{n}} in the approved text. Each value is plain text and {{profile.<trait>}} placeholders, for example {{profile.first_name}}'
+          ? 'One body row per {{n}} in the approved text. Header and button variables are added separately. Each value is plain text and {{profile.<trait>}} placeholders, for example {{profile.first_name}}'
           : 'The names the flow expects, for example var1. Each value is plain text and {{profile.<trait>}} placeholders'}
       </p>
-      {form.variables.map((variable, index) => (
-        <div
-          className="grid grid-cols-[10rem_1fr_auto] items-start gap-2"
-          key={isWhatsapp ? variable.slot : index}
-        >
-          <InputWithLabel
-            disabled={isWhatsapp && variable.slot.startsWith('body_')}
-            error={errorOf(`variables.${index}.slot`)}
-            label="Variable"
-            onChange={(event) => update(index, { slot: event.target.value })}
-            value={variable.slot}
-          />
-          <InputWithLabel
-            error={errorOf(`variables.${index}.value`)}
-            label="Value"
-            onChange={(event) => update(index, { value: event.target.value })}
-            value={variable.value}
-          />
-          {!isWhatsapp && (
-            <Button
-              className="mt-6"
-              onClick={() =>
-                onChange(form.variables.filter((_, i) => i !== index))
-              }
-              type="button"
-              variant="ghost"
-            >
-              Remove
-            </Button>
-          )}
+      {form.variables.map((variable, index) => {
+        const generated = isWhatsapp && isBodySlot(variable.slot);
+        return (
+          <div
+            className="grid grid-cols-[10rem_1fr_auto] items-start gap-2"
+            key={variable.id}
+          >
+            <InputWithLabel
+              disabled={generated}
+              error={errorOf(`variables.${index}.slot`)}
+              label={`Variable ${index + 1}`}
+              onChange={(event) => update(index, { slot: event.target.value })}
+              value={variable.slot}
+            />
+            <InputWithLabel
+              error={errorOf(`variables.${index}.value`)}
+              label={`Value for ${variable.slot}`}
+              onChange={(event) => update(index, { value: event.target.value })}
+              value={variable.value}
+            />
+            {!generated && (
+              <Button
+                aria-label={`Remove ${variable.slot}`}
+                className="mt-6"
+                onClick={() =>
+                  onChange(form.variables.filter((_, i) => i !== index))
+                }
+                type="button"
+                variant="ghost"
+              >
+                Remove
+              </Button>
+            )}
+          </div>
+        );
+      })}
+      {isWhatsapp ? (
+        <div className="row items-center gap-2">
+          <select
+            aria-label="Kind of variable to add"
+            className="h-8 rounded-md border bg-background px-2 text-sm"
+            onChange={(event) =>
+              setExtraKind(event.target.value as 'header' | 'button')
+            }
+            value={extraKind}
+          >
+            <option value="header">Header</option>
+            <option value="button">Button</option>
+          </select>
+          <Button
+            onClick={() => add(nextSlot(extraKind, form.variables))}
+            type="button"
+            variant="outline"
+          >
+            Add header or button variable
+          </Button>
         </div>
-      ))}
-      {!isWhatsapp && (
+      ) : (
         <div>
           <Button
-            onClick={() =>
-              onChange([
-                ...form.variables,
-                { slot: `var${form.variables.length + 1}`, value: '' },
-              ])
-            }
+            onClick={() => add(nextSmsSlot(form.variables))}
             type="button"
             variant="outline"
           >
@@ -166,13 +193,7 @@ function VariableRows({
   );
 }
 
-function PreviewPanel({
-  row,
-  form,
-}: {
-  row: TemplateRow;
-  form: TemplateInput;
-}) {
+function PreviewPanel({ row, form }: { row: TemplateRow; form: TemplateForm }) {
   const marketingFetch = useMarketingFetch();
   const traits = traitsOf(form.variables);
   const [sample, setSample] = useState<Record<string, string>>({});
@@ -246,14 +267,19 @@ export function TemplateEditor({
   onClose,
 }: {
   row?: TemplateRow;
-  initial: TemplateInput;
+  initial: TemplateForm;
   isAdmin: boolean;
   onClose: () => void;
 }) {
   const marketingFetch = useMarketingFetch();
   const queryKey = useMarketingQueryKey();
   const client = useQueryClient();
-  const [form, setForm] = useState<TemplateInput>(initial);
+  const [form, setForm] = useState<TemplateForm>(initial);
+  const [loaded, setLoaded] = useState({
+    version: row?.currentVersion,
+    initial,
+  });
+  const [conflict, setConflict] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const isWhatsapp = form.channel === 'whatsapp';
   const problems = templateProblems(form);
@@ -261,6 +287,23 @@ export function TemplateEditor({
     showProblems ? problems.find((p) => p.path === path)?.message : undefined;
   const refresh = () =>
     client.invalidateQueries({ queryKey: queryKey('templates') });
+
+  // A refetch can change the version under an open editor: adopt it when
+  // nothing was typed, otherwise keep the typed values and warn.
+  const versionMoved =
+    row !== undefined && row.currentVersion !== loaded.version;
+  if (row && versionMoved && !conflict) {
+    const untouched =
+      JSON.stringify(toTemplateBody(form)) ===
+      JSON.stringify(toTemplateBody(loaded.initial));
+    if (untouched) {
+      const fresh = formFromRow(row);
+      setForm(fresh);
+      setLoaded({ version: row.currentVersion, initial: fresh });
+    } else {
+      setConflict(true);
+    }
+  }
 
   const save = useMutation({
     mutationFn: () => {
@@ -283,6 +326,10 @@ export function TemplateEditor({
       });
     },
     onSuccess(saved) {
+      client.setQueryData(
+        queryKey('templates', 'one', saved.templateId),
+        saved
+      );
       client.setQueryData<{ templates: TemplateRow[] }>(
         queryKey('templates', form.channel),
         (current) => {
@@ -309,11 +356,8 @@ export function TemplateEditor({
         error instanceof MarketingApiError &&
         error.code === VERSION_CONFLICT
       ) {
+        setConflict(true);
         refresh();
-        toast.error(
-          'Someone else changed this template. It was reloaded, so review it and save again.'
-        );
-        onClose();
         return;
       }
       toast.error(describeMarketingError(error));
@@ -340,6 +384,33 @@ export function TemplateEditor({
         }
       }}
     >
+      {conflict && (
+        <div
+          className="col mx-4 mt-4 gap-2 rounded border border-destructive p-3 text-sm"
+          role="alert"
+        >
+          <p>
+            Someone else changed this template. Review the latest version below
+            before saving again.
+          </p>
+          {row && (
+            <div>
+              <Button
+                onClick={() => {
+                  const fresh = formFromRow(row);
+                  setForm(fresh);
+                  setLoaded({ version: row.currentVersion, initial: fresh });
+                  setConflict(false);
+                }}
+                type="button"
+                variant="outline"
+              >
+                Discard my edits and load the latest version
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
       <h2 className="p-4 pb-0 font-medium text-lg">
         {row
           ? `Edit ${row.displayName}`

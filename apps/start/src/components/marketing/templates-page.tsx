@@ -67,7 +67,17 @@ export function TemplatesPage() {
   const { isAdmin } = useMarketingRole();
   const search = route.useSearch();
   const navigate = route.useNavigate();
-  const channel: ProviderTemplateChannel = search.channel ?? 'sms';
+  const linked = useQuery({
+    queryKey: queryKey('templates', 'one', search.id ?? ''),
+    queryFn: () =>
+      marketingFetch<TemplateRow>(
+        `templates/${encodeURIComponent(search.id ?? '')}`
+      ),
+    enabled: Boolean(search.id),
+    retry: false,
+  });
+  const channel: ProviderTemplateChannel =
+    linked.data?.channel ?? search.channel ?? 'sms';
   const templates = useQuery({
     queryKey: queryKey('templates', channel),
     queryFn: () =>
@@ -86,17 +96,28 @@ export function TemplatesPage() {
       />
     );
   }
-  const editing = search.id
-    ? templates.data?.templates.find((row) => row.templateId === search.id)
-    : undefined;
-  if (editing) {
+  if (search.id && linked.isPending) {
+    return <FullPageLoadingState />;
+  }
+  if (search.id && linked.error) {
+    return (
+      <FullPageEmptyState
+        description={describeMarketingError(linked.error)}
+        icon={MessageSquareTextIcon}
+        title="Template not found"
+      >
+        <Button onClick={close}>Back to templates</Button>
+      </FullPageEmptyState>
+    );
+  }
+  if (search.id && linked.data) {
     return (
       <TemplateEditor
-        initial={formFromRow(editing)}
+        initial={formFromRow(linked.data)}
         isAdmin={isAdmin}
-        key={`${editing.templateId}-${editing.currentVersion}`}
+        key={linked.data.templateId}
         onClose={close}
-        row={editing}
+        row={linked.data}
       />
     );
   }
