@@ -246,7 +246,7 @@ The reasons the reference service and the conformance suite use, per channel:
 | `no_valid_phone` | `sms`, `whatsapp` | No phone number of 8 to 15 digits. |
 | `no_active_device` | `push` | No active device with a token. |
 
-The contract does not enforce reason strings. The plugin records a reason only if it matches `/^[a-z0-9_.-]{1,64}$/` and otherwise stores `unknown`, so a free-text reason never reaches its database. The suite warns (`lookup_reasons`) when your reason differs from the list above. The contract reserves `suppressed` and a consent-style unreachable reason (for example `opted_out`) for opt-out handling; the plugin does not act on `consent` yet, see `CUTOVER_BACKEND_JOURNEYS.md`.
+The contract does not enforce reason strings. The plugin records a reason only if it matches `/^[a-z0-9_.-]{1,64}$/` and otherwise stores `unknown`, so a free-text reason never reaches its database. The suite warns (`lookup_reasons`) when your reason differs from the list above. The contract reserves `suppressed` and a consent-style unreachable reason (for example `opted_out`) for opt-out handling; the plugin acts on `consent` for campaigns when the channel's `requireConsent` setting is on (`consent.whatsapp` for WhatsApp, `consent.sms_promotional` for promotional SMS; otherwise the person is skipped as `consent`) and ignores it when the setting is off, see `CUTOVER_BACKEND_JOURNEYS.md`.
 
 ## Semantics that tests rely on
 

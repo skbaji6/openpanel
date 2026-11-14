@@ -17,8 +17,36 @@ import { createServer } from '../api/server';
 import type { FilterTree, Schema } from '../audience/contract';
 import { createFakeSource, type FakeMember } from '../audience/fake-source';
 import { createSourceResolver } from '../audience/resolver';
+import {
+  campaignService,
+  createClock,
+  dispatchDeps,
+  drain,
+  insertRunningCampaign,
+} from '../campaign/dispatch.test-helpers';
 import { runMaterializeTick } from '../campaign/materialize-runner';
-import { getAdapter, registerAdapter } from '../channels/registry';
+import { retryUncertain } from '../campaign/operator';
+import { runTestSendTick } from '../campaign/test-sends';
+import { perRecipientBatch } from '../channels/batch';
+import { createPooledEmailAdapter } from '../channels/email';
+import { createFakeFcm } from '../channels/fakes/fcm';
+import {
+  extractPhones,
+  SMS_PATH,
+  startFakeMsg91,
+  WHATSAPP_PATH,
+} from '../channels/fakes/msg91-server';
+import { startFakeSmtp } from '../channels/fakes/smtp-server';
+import { createMsg91SmsAdapter } from '../channels/msg91-sms';
+import { createMsg91WhatsAppAdapter } from '../channels/msg91-whatsapp';
+import { createPushAdapter } from '../channels/push';
+import {
+  getAdapter,
+  registerAdapter,
+  registerBatchAdapter,
+  unregisterBatchAdapter,
+} from '../channels/registry';
+import { CAMPAIGN_CHANNELS } from '../channels/settings';
 import type {
   ChannelAdapter,
   ChannelId,
@@ -31,6 +59,7 @@ import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import { redactSecrets } from '../redact';
 import type { RuleDefinition } from '../rules/rule.schema';
+import { createTemplateRegistry } from '../templates/registry';
 import { createEngine } from './engine';
 import { recipientValues, runTick } from './ticker';
 
@@ -39,7 +68,14 @@ const CANARY_EMAIL = 'pii-canary@example.test';
 const CANARY_PHONE = '919999900001';
 const CANARY_TOKEN = 'canary-fcm-token-1';
 const CANARY_NAME = 'Canary Student';
-const CANARIES = [CANARY_EMAIL, CANARY_PHONE, CANARY_TOKEN, CANARY_NAME];
+const CANARY_AUTH_KEY = 'msg91-pii-canary-auth-key-0123456789';
+const CANARIES = [
+  CANARY_EMAIL,
+  CANARY_PHONE,
+  CANARY_TOKEN,
+  CANARY_NAME,
+  CANARY_AUTH_KEY,
+];
 // A plaintext value in a bytea column shows up as hex in row_to_json.
 const CANARY_FORMS = CANARIES.flatMap((canary) => [
   canary.toLowerCase(),
@@ -613,6 +649,270 @@ describe('personal data from an http audience source', () => {
     expect(recipients?.ids).toEqual(['canary-1', 'plain-1']);
 
     expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
+  });
+  describe('every channel through the dispatch engine', () => {
+    // One running campaign per project, so each channel gets its own.
+    const projectOf = (channel: string) => `project-pii-${channel}`;
+    const RATE_PER_SECOND = 1000;
+    const EMAIL_QUOTA = 100_000;
+    const BAD_REQUEST = 400;
+    const OK = 200;
+    const FAKE_SERVICE_ACCOUNT = JSON.stringify({
+      project_id: 'pii-test',
+      client_email: 'pii@pii-test.example.test',
+      private_key: 'not-a-real-key',
+    });
+    const canaryMember = (id: string, email = CANARY_EMAIL): FakeMember => ({
+      id,
+      values: {},
+      displayName: CANARY_NAME,
+      contact: { phone: CANARY_PHONE, email },
+      traits: { firstName: CANARY_NAME },
+      devices: [{ token: CANARY_TOKEN, platform: 'android' }],
+    });
+
+    afterEach(() => {
+      for (const channel of CAMPAIGN_CHANNELS) {
+        unregisterBatchAdapter(channel);
+      }
+    });
+
+    async function setChannelConfig(channel: string, config: unknown) {
+      await sql.$executeRawUnsafe(
+        'UPDATE marketing.channel_configs SET config_encrypted = $3 WHERE project_id = $1 AND channel = $2',
+        projectOf(channel),
+        channel,
+        encryptCredential(ENCRYPTION_KEY, JSON.stringify(config))
+      );
+    }
+
+    async function providerTemplate(
+      channel: 'sms' | 'whatsapp',
+      now: () => Date
+    ): Promise<string> {
+      const row = await createTemplateRegistry({ sql, now }).create(
+        { projectId: projectOf(channel), userId: 'u1' },
+        channel === 'sms'
+          ? {
+              channel,
+              displayName: 'Offer',
+              category: 'service',
+              providerRef: { flowId: 'flowpii' },
+              approvedText: 'Hello ##name##',
+              variables: [{ slot: 'name', value: '{{profile.firstName}}' }],
+            }
+          : {
+              channel,
+              displayName: 'Offer',
+              category: 'service',
+              providerRef: {
+                templateName: 'promo',
+                namespace: 'ns-placeholder',
+                language: 'en',
+              },
+              approvedText: 'Hello {{1}}',
+              variables: [{ slot: 'body_1', value: '{{profile.firstName}}' }],
+            }
+      );
+      return row.templateId;
+    }
+
+    async function outcomes(campaignId: string): Promise<string[]> {
+      const rows = await sql.$queryRawUnsafe<
+        { status: string; reason: string }[]
+      >(
+        `SELECT status, coalesce(reason, '') AS reason FROM marketing.campaign_recipients
+         WHERE campaign_id = $1::uuid ORDER BY profile_id`,
+        campaignId
+      );
+      return rows.map((row) => `${row.status}:${row.reason}`);
+    }
+
+    it('push, sms, whatsapp, email and webhook campaigns, a test send, an uncertain retry and a preview leave no canary behind', async () => {
+      const testClock = createClock();
+      const msg91 = await startFakeMsg91();
+      const smtp = await startFakeSmtp({
+        reply: (command) =>
+          command.startsWith('RCPT TO') && command.includes(CANARY_EMAIL)
+            ? `550 5.1.1 <${CANARY_EMAIL}> user unknown`
+            : undefined,
+      });
+      try {
+        const fcm = createFakeFcm();
+        // Deadlines are computed on the test clock, so every adapter reads it too.
+        const nowMs = testClock.ms;
+        registerBatchAdapter(
+          perRecipientBatch(createPushAdapter({ sendMulticast: fcm }), nowMs)
+        );
+        registerBatchAdapter(createPooledEmailAdapter({ now: nowMs }));
+        registerBatchAdapter(createMsg91SmsAdapter({ now: nowMs }));
+        registerBatchAdapter(createMsg91WhatsAppAdapter({ now: nowMs }));
+
+        // One 400 that quotes the phone and the auth key, as a provider echoing the request might.
+        msg91.script(SMS_PATH, (body) => ({
+          status: BAD_REQUEST,
+          body: {
+            type: 'error',
+            message: `invalid mobile ${extractPhones(body).join(',')} for authkey ${CANARY_AUTH_KEY}`,
+          },
+        }));
+        // The connection drops after the request was written, so the row is uncertain.
+        msg91.script(WHATSAPP_PATH, 'reset');
+
+        const members = [
+          canaryMember('c-push'),
+          canaryMember('c-sms'),
+          canaryMember('c-wa'),
+          canaryMember('c-email'),
+          canaryMember('c-email-ok', 'second@example.test'),
+          canaryMember('c-hook'),
+        ];
+        const source = createFakeSource({ members });
+        const deps = dispatchDeps(source, testClock);
+        const smsTemplate = await providerTemplate('sms', testClock.now);
+        const whatsappTemplate = await providerTemplate(
+          'whatsapp',
+          testClock.now
+        );
+        const now = testClock.now();
+        const rated = { ratePerSecond: RATE_PER_SECOND };
+        const pushId = await insertRunningCampaign({
+          project: projectOf('push'),
+          now,
+          channel: 'push',
+          recipients: ['c-push'],
+          template: { subject: 'Hi', body: 'Hello {{profile.firstName}}' },
+        });
+        const smsId = await insertRunningCampaign({
+          project: projectOf('sms'),
+          now,
+          channel: 'sms',
+          recipients: ['c-sms'],
+          template: { templateId: smsTemplate },
+          templateVersion: 1,
+          settings: rated,
+        });
+        const whatsappId = await insertRunningCampaign({
+          project: projectOf('whatsapp'),
+          now,
+          channel: 'whatsapp',
+          recipients: ['c-wa'],
+          template: { templateId: whatsappTemplate },
+          templateVersion: 1,
+          settings: rated,
+        });
+        const emailId = await insertRunningCampaign({
+          project: projectOf('email'),
+          now,
+          channel: 'email',
+          recipients: ['c-email', 'c-email-ok'],
+          template: {
+            subject: 'Hi {{profile.firstName}}',
+            body: 'Hello {{profile.firstName}}',
+          },
+          settings: { ...rated, dailyQuota: EMAIL_QUOTA },
+        });
+        await insertRunningCampaign({
+          project: projectOf('webhook'),
+          now,
+          channel: 'webhook',
+          recipients: ['c-hook'],
+          template: { body: 'Hello {{profile.firstName}}' },
+        });
+        await setChannelConfig('push', {
+          serviceAccountJson: FAKE_SERVICE_ACCOUNT,
+        });
+        await setChannelConfig('sms', {
+          authKey: CANARY_AUTH_KEY,
+          baseUrl: msg91.baseUrl,
+        });
+        await setChannelConfig('whatsapp', {
+          authKey: CANARY_AUTH_KEY,
+          integratedNumber: '910000000000',
+          baseUrl: msg91.baseUrl,
+        });
+        await setChannelConfig('email', {
+          host: '127.0.0.1',
+          port: smtp.port,
+          secure: false,
+          from: 'Shop <shop@example.test>',
+        });
+        await setChannelConfig('webhook', { secret: 's' });
+        registerBatchAdapter(
+          perRecipientBatch(capturingAdapter('webhook'), nowMs)
+        );
+
+        await campaignService(source, testClock.now).requestTestSend(
+          { projectId: projectOf('push'), userId: 'u1' },
+          pushId,
+          'c-push'
+        );
+        expect((await runTestSendTick(deps)).sent).toBe(1);
+
+        await drain(deps, testClock);
+        msg91.script(WHATSAPP_PATH, () => ({
+          status: OK,
+          body: { status: 'success', hasError: false, request_id: 'req-1' },
+        }));
+        expect(await outcomes(whatsappId)).toEqual(['uncertain:network']);
+        const retried = await retryUncertain(
+          sql,
+          { projectId: projectOf('whatsapp') },
+          whatsappId,
+          testClock.now()
+        );
+        expect(retried.retried).toBe(1);
+        await drain(deps, testClock);
+
+        const preview = await createServer({
+          cfg: { ...CFG, proxySecret: PROXY_SECRET },
+          sql,
+          redis,
+          sources: deps.sources,
+          now: () => testClock.ms(),
+        }).fetch(
+          new Request(
+            `http://marketing.internal/marketing/templates/${smsTemplate}/preview`,
+            {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-marketing-proxy-secret': PROXY_SECRET,
+                'x-marketing-project-id': projectOf('sms'),
+                'x-marketing-user-id': 'u1',
+                'x-marketing-csrf': '1',
+              },
+              body: JSON.stringify({
+                sample: { profile: { firstName: CANARY_NAME } },
+              }),
+            }
+          )
+        );
+        expect(await preview.json()).toMatchObject({
+          ok: true,
+          variables: [{ slot: 'name', value: CANARY_NAME }],
+        });
+
+        // Every path above was really taken with the canaries as the recipient.
+        expect(await outcomes(smsId)).toEqual(['failed:msg91 400']);
+        expect(await outcomes(emailId)).toEqual(['failed:smtp 550', 'sent:']);
+        expect(await outcomes(whatsappId)).toEqual(['sent:']);
+        expect(msg91.requests.some((r) => r.authkey === CANARY_AUTH_KEY)).toBe(
+          true
+        );
+        expect(fcm.delivered.get(CANARY_TOKEN)).toBeGreaterThanOrEqual(2);
+        expect(
+          smtp.sessions.some((session) =>
+            session.recipients.some((to) => to.includes(CANARY_EMAIL))
+          )
+        ).toBe(true);
+
+        expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
+      } finally {
+        await msg91.close();
+        await smtp.close();
+      }
+    });
   });
 });
 

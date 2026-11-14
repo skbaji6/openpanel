@@ -1,6 +1,6 @@
 # @openpanel/marketing
 
-Journey messages for OpenPanel: a separate worker that consumes the events Kafka topic and sends email, push and webhook journey messages. It also keeps audiences and campaigns: an audience selects people from an `http` audience source, and a campaign materialises that audience into a recipient list (sending campaigns is the send engine's job and is not part of this version; see "Audiences and campaigns"). Its tables live in the Postgres schema `marketing`.
+Journey messages for OpenPanel: a separate worker that consumes the events Kafka topic and sends email, push and webhook journey messages. It also keeps audiences and campaigns: an audience selects people from an `http` audience source, and a campaign materialises that audience into a recipient list and a send engine delivers it over push, email, webhook, SMS or WhatsApp (see "Audiences and campaigns" and the guide, section 10). Its tables live in the Postgres schema `marketing`.
 
 New here? Start with the [setup and integration guide](docs/GUIDE.md). This README is the reference.
 
@@ -109,7 +109,7 @@ Tables: `marketing.campaigns`, `marketing.campaign_recipients` (one row per reci
 |---|---|---|
 | `draft` | Editable (`PATCH` with `expectedVersion`) and deletable | `schedule`, `start`, `count-preview` |
 | `scheduled` | Waiting for its send time, or a queued start waiting for the project's slot | `unschedule` (back to draft), `start`, `cancel`, `count-preview`; the scheduler starts it or marks it `missed` |
-| `running` | Materialising, then (send engine) sending; holds the project's slot | `pause`, `cancel`; completes or fails |
+| `running` | Materialising, then sending; holds the project's slot | `pause`, `cancel`; completes or fails |
 | `paused` | Stopped by an operator; **keeps the slot** and keeps materialising, resumes where it stopped | `resume`, `cancel` |
 | `completed`, `cancelled`, `failed`, `missed` | Final | none |
 
@@ -121,7 +121,7 @@ Cancel (and a failed campaign) records every recipient not yet being sent as `sk
 2. `schedule` only: `sendAtLocal` (`YYYY-MM-DDTHH:mm`, in the campaign's `timezone`, default `Asia/Kolkata`) is set and valid (`invalid_send_time`) and not in the past (`schedule_in_past`).
 3. A snapshot audience is frozen at its current version (`audience_snapshot_stale`).
 4. The filter and exclude filter are still valid against the live schema (`invalid_filter`; needs the `http` source: `source_not_http`).
-5. The channel is ready (`channel_not_ready`).
+5. The channel is ready: it has a stored credential (`channel_not_configured`), its settings pass (`rate_required` for sms, whatsapp and email; `quota_required` for email), and for sms and whatsapp the template exists, is enabled, maps its variables and belongs to the channel (`template_not_found`, `template_disabled`, `template_mapping_missing`, `template_channel_mismatch`). `channel_not_ready` is only the default of a service built without that check; the worker never answers it.
 6. A count preview exists, at most 15 minutes old, made for the current campaign and audience versions (`count_preview_required`).
 7. When the preview count is above the campaign's threshold (`MARKETING_CONFIRM_THRESHOLD` when it was created), the body carries `{ "confirm": { "count", "channel" } }` equal to the preview's count and the campaign's channel (`confirmation_required`, with `details: { count, channel }`; `confirmation_mismatch`).
 
@@ -141,7 +141,13 @@ Cancel (and a failed campaign) records every recipient not yet being sent as `sk
 | `POST /marketing/campaigns/{id}/count-preview` | none | the count (as for an audience); also stored on the campaign with `campaignVersion` and `audienceVersion` |
 | `POST /marketing/campaigns/{id}/start`, `/schedule` | none, or `{ confirm: { count, channel } }` | the campaign |
 | `POST /marketing/campaigns/{id}/unschedule`, `/pause`, `/resume`, `/cancel` | none | the campaign |
-| `POST /marketing/campaigns/{id}/test-send` | `{ profileId }` | `{ id }`: recorded only in this version; at most 10 per campaign per hour (`test_send_limit`) |
+| `POST /marketing/campaigns/{id}/test-send` | `{ profileId }` | `{ id }`: sent by the next test-send tick; at most 10 per campaign per hour (`test_send_limit`) |
+| `POST /marketing/campaigns/{id}/retry-uncertain` | none | `{ retried, campaign }` |
+| `POST /marketing/campaigns/{id}/estimate` | none | `{ count, channel, ratePerSecond, estimatedSeconds, cost, quota, issues }` |
+| `GET /marketing/campaigns/{id}/recipients?status=&cursor=&limit=` | none | `{ recipients, nextCursor }` |
+| `GET /marketing/campaigns/{id}/skip-reasons`, `/test-sends` | none | reason counts; test sends |
+
+Channel credentials and settings (`GET|PUT /marketing/channels/{channel}` and `/settings`) and templates (`/marketing/templates...`) are described in the guide, section 10.1 and 10.2. Rows of a campaign can end `sent`, `failed`, `skipped` or `uncertain`; `campaign_counters.queued` counts rows materialised as pending and never decreases. A campaign row also carries `dispatchError` and `dispatchRetryAt` (guide, 10.4).
 
 Action routes accept an empty body; a body with fields the action does not take is `invalid_body`. Responses never carry the materialiser's lease token, lease time, cursor or retry time.
 
@@ -184,16 +190,18 @@ Error bodies are `{ "error": "<code>", "issues"?: [{ "path", "message" }], "deta
 | 502 | `source_error` | The source's answer broke the contract |
 | 503 | `source_unavailable` | The source is down or busy |
 | 409 | `not_draft`, `invalid_transition` | Edit or delete of a non-draft; an action the state does not allow |
-| 409 | `missing_audience`, `audience_snapshot_stale`, `channel_not_ready`, `schedule_in_past` | Gates 1 to 5 |
+| 409 | `missing_audience`, `audience_snapshot_stale`, `schedule_in_past`, `channel_not_configured`, `rate_required`, `quota_required`, `template_not_found`, `template_disabled`, `template_mapping_missing`, `template_channel_mismatch` | Gates 1 to 5 |
+| 409 | `quota_spread_required` | An email campaign larger than today's remaining quota; resend `confirm` with `spreadOverDays: true` |
 | 409 | `count_preview_required`, `confirmation_required`, `confirmation_mismatch` | Gates 6 and 7 |
 | 429 | `test_send_limit` | 10 test sends per campaign per hour |
 
-Campaign `stateReason` values: `late` (missed), `materialize_failed`, `materialize_restart_after_sending`.
+Campaign `stateReason` values: `late` (missed), `materialize_failed`, `materialize_restart_after_sending`, `source_not_http`, `source_error`, `template_unavailable`, `template_not_found`. `dispatchError` values: `source_unavailable`, `source_auth_failed`, `channel_auth_failed`, `channel_not_configured`, `quota_exhausted`.
 
 ### Known limits
 
-- SMS and WhatsApp campaigns can be drafted but cannot start or be scheduled (`channel_not_ready`) until the send engine adds the channel registry.
-- Nothing is sent yet: dispatch, the frequency cap, quiet hours, opt-out and suppression checks, email quota and test sends belong to the send engine. `quietHoursOverride` and `frequencyCap` are stored only.
+- MSG91 has not been called for real (no access yet): the WhatsApp per-recipient response shape, whether a 400 or 422 can partly accept a request and the 100-recipient limit are unverified (guide, 10.2).
+- No email provider is configured yet: email is built and tested against a fake SMTP server only, and opt-out handling for campaigns beyond the unsubscribe link is deferred (guide, 10.3).
+- Campaign sends are at most once; `uncertain` rows are re-sent only by an operator (guide, 10.6).
 - Confirmation is checked when a start is queued, not again when the queued campaign starts.
 - A paused campaign keeps the project's slot, so other campaigns of the project queue (or, if scheduled, can be missed) until it is resumed and finishes, or is cancelled.
 - A source outage never pauses a campaign; it shows as `materializeError` while the campaign stays `running`.
@@ -251,6 +259,12 @@ Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --n
 ### Plugin upgrade notes
 
 - **Campaign sending (config now fails at startup).** Each replica now runs `MARKETING_CAMPAIGN_CONCURRENCY` campaign send loops (new optional variable, default 2), a reaper for expired recipient leases and the test-send job, every `MARKETING_TICK_MS`. `MARKETING_DB_POOL` must now be at least `MARKETING_SEND_CONCURRENCY` + `MARKETING_CAMPAIGN_CONCURRENCY` + 3, or the worker refuses to start. The defaults (10 + 2 + 3 = 15) still boot; a pool of 13 or 14 that booted before must be raised. Like the journey ticker, campaign sends and test sends only run when the signed unsubscribe link is configured.
+- **Send engine: migrations 0014 and 0015.** 0014 (`channel_settings_templates`) only creates the tables for channel settings and SMS/WhatsApp templates. 0015 (`send_ledger_dispatch`) adds the send ledger and dispatch columns, **backfills 400 days of journey sends into `marketing.send_ledger`** from `marketing.steps`, and builds an index on `marketing.campaign_recipients (lease_token)` **without `CONCURRENTLY`**, which blocks writes to that table while it builds; on an install with a large recipient table expect the first start to take longer, and start with no campaign running.
+- **Rolling deploys undercount frequency caps.** Journey sends now write a ledger row. While old replicas still run during a rolling deploy they send journey steps without one, so frequency caps count too few sends for that overlap; stop the old replicas first if that matters.
+- **The journey frequency cap now reads the shared ledger** (journeys and campaigns together) instead of counting steps; `caps` gains `scope: "channel" | "all"` (default `"channel"`).
+- **Channels need a configuration row to start a campaign.** Push, email and webhook campaigns now answer `channel_not_configured` until the channel has a stored credential; email also needs `ratePerSecond` and `dailyQuota` in its channel settings (`rate_required`, `quota_required`).
+- **New channels: SMS and WhatsApp (MSG91).** Credentials are `{ authKey, baseUrl? }` for `sms` and `{ authKey, integratedNumber, baseUrl? }` for `whatsapp`, set through `PUT /marketing/channels/{channel}`; both need `ratePerSecond` and an approved template (guide, 10.2).
+- **Redis 5 or newer is required** (the pacing scripts read the server clock and then write).
 - Migration 0005 adds `marketing.enrollments.end_reason`. Journeys that ended before it have no end reason, so after the upgrade they count as not converted: "Completed after send" and conversion start low and only count journeys that end afterwards.
 - **Failure texts are redacted.** Recipient values (email, device tokens, longer attribute values) are replaced by `[redacted]` in stored and logged send-failure reasons, for stored projects too.
 - **Lease rule (config now fails at startup).** `MARKETING_LEASE_SECONDS` must exceed `MARKETING_LOOKUP_WINDOW_MS` / 1000 + 31. With the default 2,000 ms window that is more than 33, so configs of 32 or 33 s that used to boot are now rejected; raise it (the default 120 is fine).
