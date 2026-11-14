@@ -329,34 +329,107 @@ describe('startDispatchLane', () => {
   });
 });
 
+async function stuckCampaign(start: Date): Promise<string> {
+  project = `lane-${randomUUID()}`;
+  const id = await insertCampaign(['done', 'stuck']);
+  await sql.$executeRawUnsafe(
+    `UPDATE marketing.campaign_recipients SET status = 'sent', sent_at = $2
+     WHERE campaign_id = $1::uuid AND profile_id = 'done'`,
+    id,
+    start
+  );
+  await sql.$executeRawUnsafe(
+    `UPDATE marketing.campaign_recipients SET status = 'sending', attempt = 1,
+       lease_token = $2::uuid, lease_until = $3
+     WHERE campaign_id = $1::uuid AND profile_id = 'stuck'`,
+    id,
+    randomUUID(),
+    new Date(start.getTime() + SENDING_LEASE_MS)
+  );
+  return id;
+}
+
 describe('runReapTick', () => {
   it('a campaign whose only remaining row is reaped to uncertain becomes completed', async () => {
-    const id = await insertCampaign(['done', 'stuck']);
     const start = new Date();
-    await sql.$executeRawUnsafe(
-      `UPDATE marketing.campaign_recipients SET status = 'sent', sent_at = $2
-       WHERE campaign_id = $1::uuid AND profile_id = 'done'`,
-      id,
-      start
-    );
-    await sql.$executeRawUnsafe(
-      `UPDATE marketing.campaign_recipients SET status = 'sending', attempt = 1,
-         lease_token = $2::uuid, lease_until = $3
-       WHERE campaign_id = $1::uuid AND profile_id = 'stuck'`,
-      id,
-      randomUUID(),
-      new Date(start.getTime() + SENDING_LEASE_MS)
-    );
+    const id = await stuckCampaign(start);
     const reapAt = new Date(start.getTime() + SENDING_LEASE_MS + 1000);
 
     const result = await runReapTick({
       sql,
       campaigns: campaignService(null),
       now: () => reapAt,
+      secrets: [],
     });
 
     expect(result).toEqual({ released: 0, uncertain: 1, completed: 1 });
     expect(await statuses(id)).toEqual({ sent: 1, uncertain: 1 });
     expect(await campaignState(id)).toBe('completed');
+  });
+
+  it('one campaign that fails to complete does not strand the others', async () => {
+    const start = new Date();
+    const first = await stuckCampaign(start);
+    const second = await stuckCampaign(start);
+    const reapAt = new Date(start.getTime() + SENDING_LEASE_MS + 1000);
+    const service = campaignService(null);
+    const attempted: string[] = [];
+    const errors: string[] = [];
+    const logged = spyOn(console, 'error').mockImplementation(
+      (...args: unknown[]) => {
+        errors.push(args.map(String).join(' '));
+      }
+    );
+    let result: Awaited<ReturnType<typeof runReapTick>>;
+    try {
+      result = await runReapTick({
+        sql,
+        campaigns: {
+          ...service,
+          completeIfDone: async (campaignId) => {
+            attempted.push(campaignId);
+            if (attempted.length === 1) {
+              throw new Error(`database hiccup near ${SECRET}`);
+            }
+            return await service.completeIfDone(campaignId);
+          },
+        },
+        now: () => reapAt,
+        secrets: [SECRET],
+      });
+    } finally {
+      logged.mockRestore();
+    }
+
+    expect(new Set(attempted)).toEqual(new Set([first, second]));
+    expect(result.completed).toBe(1);
+    const [thrown, other] = attempted;
+    expect(await campaignState(thrown ?? '')).toBe('running');
+    expect(await campaignState(other ?? '')).toBe('completed');
+    const line = errors.find((text) => text.includes('database hiccup'));
+    expect(line).toBeDefined();
+    expect(line).not.toContain(SECRET);
+  });
+
+  it('the sweep completes a running campaign with no unfinished rows the reaper did not touch', async () => {
+    const finished = await insertCampaign(['a', 'b']);
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaign_recipients SET status = 'uncertain', reason = 'lease_expired'
+       WHERE campaign_id = $1::uuid`,
+      finished
+    );
+    project = `lane-${randomUUID()}`;
+    const unfinished = await insertCampaign(['c']);
+
+    const result = await runReapTick({
+      sql,
+      campaigns: campaignService(null),
+      now: () => new Date(),
+      secrets: [],
+    });
+
+    expect(result).toEqual({ released: 0, uncertain: 0, completed: 1 });
+    expect(await campaignState(finished)).toBe('completed');
+    expect(await campaignState(unfinished)).toBe('running');
   });
 });

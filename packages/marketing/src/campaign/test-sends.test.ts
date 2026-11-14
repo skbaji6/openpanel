@@ -11,6 +11,12 @@ import { randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
+import {
+  SourceAuthError,
+  SourceBusyError,
+  SourceProtocolError,
+  SourceUnavailableError,
+} from '../audience/errors';
 import { createFakeSource, type FakeMember } from '../audience/fake-source';
 import type { AudienceSource } from '../audience/source';
 import { createAudienceStore } from '../audience/store';
@@ -35,7 +41,7 @@ import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import { createTemplateRegistry } from '../templates/registry';
-import type { DispatchDeps } from './dispatch';
+import { type DispatchDeps, SEND_DEADLINE_MS } from './dispatch';
 import { createChannelBackoff, createRateBucket } from './pacing';
 import { SENDING_LEASE_MS } from './recipients';
 import { createCampaignService } from './service';
@@ -468,5 +474,117 @@ describe('runTestSendTick', () => {
     });
     expect(errors.join('\n')).toContain('socket closed');
     expect(errors.join('\n')).not.toContain(NORMALISED_PHONE);
+  });
+  it('a slow send does not fail the test send behind it', async () => {
+    const sent = fakeBatch('push', (item) => {
+      if (item.profileId === 'p1') {
+        // Longer than a whole send deadline, so a shared claim time would leave p2 no budget.
+        now = new Date(now.getTime() + SEND_DEADLINE_MS + 5000);
+      }
+      return { profileId: item.profileId, outcome: 'sent' };
+    });
+    const campaignId = await setupCampaign({ channel: 'push' });
+    const first = await requestTestSend(campaignId, 'p1');
+    now = new Date(now.getTime() + 1);
+    const second = await requestTestSend(campaignId, 'p2');
+
+    expect(
+      await runTestSendTick(
+        depsFor(createFakeSource({ members: [member('p1'), member('p2')] }))
+      )
+    ).toEqual({ sent: 2, failed: 0, skipped: 0 });
+
+    expect(sent.map((item) => item.profileId)).toEqual(['p1', 'p2']);
+    expect((await testSend(first)).status).toBe('sent');
+    expect((await testSend(second)).status).toBe('sent');
+  });
+
+  it('a lookup that fails before any provider call fails the test send at once', async () => {
+    const cases: [Error, string][] = [
+      [new SourceUnavailableError('down'), 'source_unavailable'],
+      [new SourceBusyError('busy'), 'source_unavailable'],
+      [new SourceProtocolError('bad'), 'source_unavailable'],
+      [new SourceAuthError('denied'), 'source_auth_failed'],
+    ];
+    const sent = fakeBatch('push');
+    const campaignId = await setupCampaign({ channel: 'push' });
+    const inner = createFakeSource({ members: [member('p1')] });
+    for (const [error, reason] of cases) {
+      const id = await requestTestSend(campaignId, 'p1');
+      await runTestSendTick(
+        depsFor({
+          ...inner,
+          lookup: () => Promise.reject(error),
+        })
+      );
+      expect(await testSend(id)).toMatchObject({ status: 'failed', reason });
+    }
+    expect(sent).toHaveLength(0);
+  });
+
+  it('a template read that fails for another reason leaves the test send sending', async () => {
+    const sent = fakeBatch('sms');
+    const templateId = await smsTemplate();
+    const campaignId = await setupCampaign({
+      channel: 'sms',
+      template: { templateId },
+    });
+    const id = await requestTestSend(campaignId, 'p1');
+    const deps = depsFor(createFakeSource({ members: [member('p1')] }));
+    deps.registry = {
+      ...deps.registry,
+      get: () => Promise.reject(new Error('connection reset')),
+    };
+    const logged = spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await runTestSendTick(deps);
+    } finally {
+      logged.mockRestore();
+    }
+
+    expect(sent).toHaveLength(0);
+    expect((await testSend(id)).status).toBe('sending');
+  });
+
+  it('a test send of a cancelled or failed campaign is skipped with the state', async () => {
+    const sent = fakeBatch('push');
+    const deps = depsFor(createFakeSource({ members: [member('p1')] }));
+    for (const state of ['cancelled', 'failed']) {
+      project = `test-sends-${randomUUID()}`;
+      const campaignId = await setupCampaign({ channel: 'push' });
+      const id = await requestTestSend(campaignId, 'p1');
+      await sql.$executeRawUnsafe(
+        'UPDATE marketing.campaigns SET state = $2, finished_at = $3 WHERE id = $1::uuid',
+        campaignId,
+        state,
+        now
+      );
+      await runTestSendTick(deps);
+      expect(await testSend(id)).toMatchObject({
+        status: 'skipped',
+        reason: state,
+      });
+    }
+    expect(sent).toHaveLength(0);
+  });
+
+  it("an opted-out profile's test send is skipped opted_out", async () => {
+    const sent = fakeBatch('push');
+    const campaignId = await setupCampaign({ channel: 'push' });
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.opt_outs (project_id, profile_id, channel) VALUES ($1, 'p1', 'push')`,
+      project
+    );
+    const id = await requestTestSend(campaignId, 'p1');
+
+    await runTestSendTick(
+      depsFor(createFakeSource({ members: [member('p1')] }))
+    );
+
+    expect(sent).toHaveLength(0);
+    expect(await testSend(id)).toMatchObject({
+      status: 'skipped',
+      reason: 'opted_out',
+    });
   });
 });

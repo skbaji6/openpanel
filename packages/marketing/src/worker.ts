@@ -261,7 +261,7 @@ export async function startWorker(
     // Not gated on the unsubscribe renderer: none of these jobs sends anything.
     started.push(
       every(cfg.tickMs, 'reap campaign leases', secrets, () =>
-        runReapTick({ sql, campaigns, now })
+        runReapTick({ sql, campaigns, now, secrets })
       ),
       every(cfg.tickMs, 'campaign schedules', secrets, () =>
         runScheduleTick({ sql, now: () => new Date(), pinTemplate })

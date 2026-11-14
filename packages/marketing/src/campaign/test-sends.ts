@@ -1,5 +1,12 @@
 import { z } from 'zod';
+import { HttpError } from '../api/http';
 import type { LookupEntry } from '../audience/contract';
+import {
+  SourceAuthError,
+  SourceBusyError,
+  SourceProtocolError,
+  SourceUnavailableError,
+} from '../audience/errors';
 import { withCampaignLane } from '../audience/lane';
 import type { DeliveryOutcome } from '../channels/batch';
 import { getChannelSettings } from '../channels/settings';
@@ -25,23 +32,26 @@ import { SENDING_LEASE_MS } from './recipients';
 
 const CLAIM_LIMIT = 10;
 const LOG_PREFIX = 'marketing test sends:';
+const NOT_FOUND = 404;
+const ENDED_CAMPAIGN_STATES = new Set(['cancelled', 'failed']);
 
 // A send that outlived its lease may have reached the provider, so it is never retried.
 const EXPIRE_SQL = `UPDATE marketing.campaign_test_sends
   SET status = 'failed', reason = 'uncertain', lease_until = NULL
   WHERE status = 'sending' AND lease_until < $1::timestamptz`;
 // Params: lease end. Marked sending before anything else, so a crash can never send it twice.
+// One row per claim, so each test send gets its own lease and deadline.
 const CLAIM_SQL = `
   WITH picked AS MATERIALIZED (
     SELECT id FROM marketing.campaign_test_sends WHERE status = 'pending'
-    ORDER BY created_at LIMIT ${CLAIM_LIMIT}
+    ORDER BY created_at LIMIT 1
     FOR UPDATE SKIP LOCKED
   )
   UPDATE marketing.campaign_test_sends t SET status = 'sending', lease_until = $1::timestamptz
   FROM picked p, marketing.campaigns c
   WHERE t.id = p.id AND c.id = t.campaign_id AND t.status = 'pending'
-  RETURNING t.id::text AS test_send_id, t.profile_id, c.id::text AS id, c.project_id, c.channel, c.template,
-    c.template_version, c.quiet_hours_override, c.frequency_cap`;
+  RETURNING t.id::text AS test_send_id, t.profile_id, c.id::text AS id, c.project_id, c.state, c.channel,
+    c.template, c.template_version, c.quiet_hours_override, c.frequency_cap`;
 // Params: id, status, reason, provider ref, sent at.
 const FINISH_SQL = `UPDATE marketing.campaign_test_sends
   SET status = $2, reason = $3, provider_ref = $4, sent_at = $5::timestamptz, lease_until = NULL
@@ -52,6 +62,7 @@ type Final = 'sent' | 'failed' | 'skipped';
 interface ClaimedTestSend extends DueCampaign {
   test_send_id: string;
   profile_id: string;
+  state: string;
 }
 
 type TemplateChoice =
@@ -102,9 +113,24 @@ async function chooseTemplate(
             row.template_version
           );
     return { ok: true, version };
-  } catch {
-    return { ok: false, reason: 'template_not_found' };
+  } catch (error) {
+    if (error instanceof HttpError && error.status === NOT_FOUND) {
+      return { ok: false, reason: 'template_not_found' };
+    }
+    throw error;
   }
+}
+
+// Only errors raised before any provider call: nothing was sent, so the test send can end at once.
+function lookupFailureReason(error: unknown): string | null {
+  if (error instanceof SourceAuthError) {
+    return 'source_auth_failed';
+  }
+  const unavailable =
+    error instanceof SourceUnavailableError ||
+    error instanceof SourceBusyError ||
+    error instanceof SourceProtocolError;
+  return unavailable ? 'source_unavailable' : null;
 }
 
 function finalOf(outcome: DeliveryOutcome, redact: string[]) {
@@ -126,6 +152,9 @@ async function deliver(
   redact: string[]
 ): Promise<Final | null> {
   const { project_id: projectId, channel, profile_id: profileId } = row;
+  if (ENDED_CAMPAIGN_STATES.has(row.state)) {
+    return finish(deps, row, 'skipped', row.state);
+  }
   const [configRow] = await deps.sql.$queryRawUnsafe<
     { config_encrypted: string }[]
   >(CONFIG_SQL, projectId, channel);
@@ -142,11 +171,20 @@ async function deliver(
   if (!source) {
     return finish(deps, row, 'failed', 'source_not_http');
   }
-  const entries: LookupEntry[] = await withCampaignLane(source, {
-    redis: deps.redis,
-    projectId,
-    sourceConcurrency: deps.cfg.sourceConcurrency,
-  }).lookup([profileId], lookupChannelOf(channel));
+  let entries: LookupEntry[];
+  try {
+    entries = await withCampaignLane(source, {
+      redis: deps.redis,
+      projectId,
+      sourceConcurrency: deps.cfg.sourceConcurrency,
+    }).lookup([profileId], lookupChannelOf(channel));
+  } catch (error) {
+    const reason = lookupFailureReason(error);
+    if (!reason) {
+      throw error;
+    }
+    return finish(deps, row, 'failed', reason);
+  }
   redact.push(...entries.flatMap(entryValues));
   redact.sort((a, b) => b.length - a.length);
 
@@ -240,20 +278,23 @@ async function deliver(
 export async function runTestSendTick(
   deps: DispatchDeps
 ): Promise<{ sent: number; failed: number; skipped: number }> {
-  const claimedAt = deps.now();
   const counts = {
     sent: 0,
     failed: await deps.sql.$executeRawUnsafe(
       EXPIRE_SQL,
-      claimedAt.toISOString()
+      deps.now().toISOString()
     ),
     skipped: 0,
   };
-  const rows = await deps.sql.$queryRawUnsafe<ClaimedTestSend[]>(
-    CLAIM_SQL,
-    new Date(claimedAt.getTime() + SENDING_LEASE_MS).toISOString()
-  );
-  for (const row of rows) {
+  for (let claimed = 0; claimed < CLAIM_LIMIT; claimed++) {
+    const claimedAt = deps.now();
+    const [row] = await deps.sql.$queryRawUnsafe<ClaimedTestSend[]>(
+      CLAIM_SQL,
+      new Date(claimedAt.getTime() + SENDING_LEASE_MS).toISOString()
+    );
+    if (!row) {
+      break;
+    }
     const redact: string[] = [];
     try {
       const final = await deliver(deps, row, claimedAt, redact);
