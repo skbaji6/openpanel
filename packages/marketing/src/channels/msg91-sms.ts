@@ -3,18 +3,21 @@ import { zSmsProviderRef } from '../templates/registry';
 import type { BatchChannelAdapter, BatchItem, DeliveryOutcome } from './batch';
 import {
   MSG91_SMS_BASE_URL,
+  msg91BaseUrl,
   sendMsg91Groups,
-  zMsg91BaseUrl,
 } from './msg91-http';
 
 export const MSG91_SMS_MAX_RECIPIENTS = 100;
 const FLOW_PATH = '/api/v5/flow';
 const NO_PHONE_REASON = 'no_phone';
 
-export const zMsg91SmsConfig = z.strictObject({
-  authKey: z.string().min(8).max(128),
-  baseUrl: zMsg91BaseUrl.optional(),
-});
+// Allow-listed hosts (MARKETING_WEBHOOK_ALLOW_HOSTS) may stand in for MSG91, as a local fake does.
+export const msg91SmsConfigSchema = (allowHosts: readonly string[] = []) =>
+  z.strictObject({
+    authKey: z.string().min(8).max(128),
+    baseUrl: msg91BaseUrl(allowHosts).optional(),
+  });
+export const zMsg91SmsConfig = msg91SmsConfigSchema();
 export type Msg91SmsConfig = z.infer<typeof zMsg91SmsConfig>;
 
 type SmsRef = z.infer<typeof zSmsProviderRef>;
@@ -45,11 +48,11 @@ function readSuccess(json: unknown) {
 }
 
 export function createMsg91SmsAdapter(
-  opts: { timeoutMs?: number; now?: () => number } = {}
+  opts: { timeoutMs?: number; now?: () => number; allowHosts?: string[] } = {}
 ): BatchChannelAdapter<Msg91SmsConfig> {
   return {
     id: 'sms',
-    configSchema: zMsg91SmsConfig,
+    configSchema: msg91SmsConfigSchema(opts.allowHosts),
     maxBatch: MSG91_SMS_MAX_RECIPIENTS,
     async sendBatch(items, config, sendOpts) {
       const groups = new Map<string, { ref: SmsRef; items: BatchItem[] }>();

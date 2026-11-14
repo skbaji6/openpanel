@@ -8,10 +8,10 @@ import type {
 } from './batch';
 import {
   digitsOf,
+  msg91BaseUrl,
   phoneSecrets,
   providerReason,
   sendMsg91Groups,
-  zMsg91BaseUrl,
 } from './msg91-http';
 
 export const MSG91_WHATSAPP_BASE_URL = 'https://api.msg91.com';
@@ -20,11 +20,14 @@ const BULK_PATH = '/api/v5/whatsapp/whatsapp-outbound-message/bulk/';
 const NO_PHONE_REASON = 'no_phone';
 const URL_BUTTON_SLOT = /^button_/;
 
-export const zMsg91WhatsAppConfig = z.strictObject({
-  authKey: z.string().min(8).max(128),
-  integratedNumber: z.string().regex(/^[0-9]{8,15}$/),
-  baseUrl: zMsg91BaseUrl.optional(),
-});
+// Allow-listed hosts (MARKETING_WEBHOOK_ALLOW_HOSTS) may stand in for MSG91, as a local fake does.
+export const msg91WhatsAppConfigSchema = (allowHosts: readonly string[] = []) =>
+  z.strictObject({
+    authKey: z.string().min(8).max(128),
+    integratedNumber: z.string().regex(/^[0-9]{8,15}$/),
+    baseUrl: msg91BaseUrl(allowHosts).optional(),
+  });
+export const zMsg91WhatsAppConfig = msg91WhatsAppConfigSchema();
 export type Msg91WhatsAppConfig = z.infer<typeof zMsg91WhatsAppConfig>;
 
 type WhatsAppRef = z.infer<typeof zWhatsAppProviderRef>;
@@ -117,11 +120,11 @@ function readResponse(json: unknown, secrets: string[]) {
 }
 
 export function createMsg91WhatsAppAdapter(
-  opts: { timeoutMs?: number; now?: () => number } = {}
+  opts: { timeoutMs?: number; now?: () => number; allowHosts?: string[] } = {}
 ): BatchChannelAdapter<Msg91WhatsAppConfig> {
   return {
     id: 'whatsapp',
-    configSchema: zMsg91WhatsAppConfig,
+    configSchema: msg91WhatsAppConfigSchema(opts.allowHosts),
     maxBatch: MSG91_WHATSAPP_MAX_RECIPIENTS,
     async sendBatch(items, config, sendOpts) {
       const groups = new Map<

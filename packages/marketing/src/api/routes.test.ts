@@ -10,6 +10,8 @@ import {
 } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { decryptCredential } from '@openpanel/shared/server';
+import { MSG91_SMS_BASE_URL } from '../channels/msg91-http';
+import { MSG91_WHATSAPP_BASE_URL } from '../channels/msg91-whatsapp';
 import { registerDefaultAdapters } from '../channels/registry';
 import { loadConfig } from '../config';
 import { sql } from '../db/client';
@@ -901,7 +903,7 @@ describe('dashboard routes', () => {
   it('PUT channels/sms stores the config encrypted and GET masks authKey but shows baseUrl', async () => {
     const config = {
       authKey: 'msg91-secret-key-123',
-      baseUrl: 'http://127.0.0.1:9',
+      baseUrl: MSG91_SMS_BASE_URL,
     };
     const put = await dashboard('PUT', '/marketing/channels/sms', { config });
     expect(put.status).toBe(200);
@@ -953,7 +955,7 @@ describe('dashboard routes', () => {
     const config = {
       authKey: 'msg91-secret-key-123',
       integratedNumber: '918700000001',
-      baseUrl: 'http://127.0.0.1:9',
+      baseUrl: MSG91_WHATSAPP_BASE_URL,
     };
     const put = await dashboard('PUT', '/marketing/channels/whatsapp', {
       config,

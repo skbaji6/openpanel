@@ -745,8 +745,12 @@ describe('personal data from an http audience source', () => {
           perRecipientBatch(createPushAdapter({ sendMulticast: fcm }), nowMs)
         );
         registerBatchAdapter(createPooledEmailAdapter({ now: nowMs }));
-        registerBatchAdapter(createMsg91SmsAdapter({ now: nowMs }));
-        registerBatchAdapter(createMsg91WhatsAppAdapter({ now: nowMs }));
+        // The fake MSG91 listens on loopback, which a base url may only name when allow-listed.
+        const allowHosts = [new URL(msg91.baseUrl).hostname];
+        registerBatchAdapter(createMsg91SmsAdapter({ now: nowMs, allowHosts }));
+        registerBatchAdapter(
+          createMsg91WhatsAppAdapter({ now: nowMs, allowHosts })
+        );
 
         // One 400 that quotes the phone and the auth key, as a provider echoing the request might.
         msg91.script(SMS_PATH, (body) => ({

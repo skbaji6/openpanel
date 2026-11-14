@@ -5,7 +5,6 @@ import { SEND_TIMEOUT_MS } from './timeouts';
 
 export const MSG91_SMS_BASE_URL = 'https://control.msg91.com';
 
-const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost']);
 const HTTP_OK_MIN = 200;
 const HTTP_REDIRECT_MIN = 300;
 const HTTP_BAD_REQUEST = 400;
@@ -28,37 +27,47 @@ const NOT_SENT_ERROR_CODES = new Set([
   'ENOTFOUND',
   'EAI_AGAIN',
 ]);
-const BASE_URL_MESSAGE = 'must be an https origin (http only for localhost)';
+// Requests carry phone numbers and the auth key, so they may only go to MSG91 itself.
+const MSG91_HOST_SUFFIX = '.msg91.com';
+const BASE_URL_MESSAGE =
+  'must be an https origin on a msg91.com host (or an allow-listed host)';
 
-function toOrigin(value: string): string | null {
+function toOrigin(value: string, allowHosts: Set<string>): string | null {
   try {
     const url = new URL(value);
-    const secure =
-      url.protocol === 'https:' ||
-      (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname));
+    const isMsg91 =
+      url.protocol === 'https:' &&
+      url.hostname.endsWith(MSG91_HOST_SUFFIX) &&
+      url.hostname.length > MSG91_HOST_SUFFIX.length;
+    const isAllowListed =
+      (url.protocol === 'https:' || url.protocol === 'http:') &&
+      allowHosts.has(url.hostname);
     const bare =
       !(url.username || url.password || url.search || url.hash) &&
       url.pathname === '/' &&
       !value.includes('?') &&
       !value.includes('#');
-    return secure && bare ? url.origin : null;
+    return (isMsg91 || isAllowListed) && bare ? url.origin : null;
   } catch {
     return null;
   }
 }
 
 // Stored as an origin, so appending a path can never produce a double slash.
-export const zMsg91BaseUrl = z
-  .string()
-  .max(200)
-  .transform((value, ctx) => {
-    const origin = toOrigin(value);
-    if (origin === null) {
-      ctx.addIssue({ code: 'custom', message: BASE_URL_MESSAGE });
-      return z.NEVER;
-    }
-    return origin;
-  });
+export function msg91BaseUrl(allowHosts: readonly string[] = []) {
+  const hosts = new Set(allowHosts.map((host) => host.toLowerCase()));
+  return z
+    .string()
+    .max(200)
+    .transform((value, ctx) => {
+      const origin = toOrigin(value, hosts);
+      if (origin === null) {
+        ctx.addIssue({ code: 'custom', message: BASE_URL_MESSAGE });
+        return z.NEVER;
+      }
+      return origin;
+    });
+}
 
 export type Msg91Post =
   | {

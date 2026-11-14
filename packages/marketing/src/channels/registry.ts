@@ -35,8 +35,9 @@ export function registerDefaultAdapters(options: {
   registerAdapter(createEmailAdapter());
   registerAdapter(createPushAdapter());
   registerBatchAdapter(createPooledEmailAdapter());
-  registerBatchAdapter(createMsg91SmsAdapter());
-  registerBatchAdapter(createMsg91WhatsAppAdapter());
+  const allowHosts = options.webhookAllowHosts;
+  registerBatchAdapter(createMsg91SmsAdapter({ allowHosts }));
+  registerBatchAdapter(createMsg91WhatsAppAdapter({ allowHosts }));
 }
 
 export function registerBatchAdapter<C>(adapter: BatchChannelAdapter<C>): void {

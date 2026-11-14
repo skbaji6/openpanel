@@ -14,8 +14,13 @@ import {
   SMS_PATH,
   startFakeMsg91,
 } from './fakes/msg91-server';
-import { sendMsg91Groups } from './msg91-http';
-import { createMsg91SmsAdapter, zMsg91SmsConfig } from './msg91-sms';
+import { MSG91_SMS_BASE_URL, sendMsg91Groups } from './msg91-http';
+import {
+  createMsg91SmsAdapter,
+  msg91SmsConfigSchema,
+  zMsg91SmsConfig,
+} from './msg91-sms';
+import { MSG91_WHATSAPP_BASE_URL } from './msg91-whatsapp';
 
 const AUTH_KEY = 'msg91-auth-key-0123456789';
 const CONCURRENCY = 2;
@@ -518,25 +523,67 @@ describe('msg91 sms adapter', () => {
 });
 
 describe('msg91 base url', () => {
+  const msg91Host = new URL(MSG91_SMS_BASE_URL).hostname;
+  const allowingFake = msg91SmsConfigSchema(['127.0.0.1']);
+
   it.each([
-    ['https://h.example/', 'https://h.example'],
-    ['https://h.example', 'https://h.example'],
-    ['http://127.0.0.1:8080/', 'http://127.0.0.1:8080'],
+    [`${MSG91_SMS_BASE_URL}/`, MSG91_SMS_BASE_URL],
+    [MSG91_SMS_BASE_URL, MSG91_SMS_BASE_URL],
+    [MSG91_WHATSAPP_BASE_URL, MSG91_WHATSAPP_BASE_URL],
   ])('%s is normalised to its origin', (input, origin) => {
     const parsed = zMsg91SmsConfig.parse({ authKey: AUTH_KEY, baseUrl: input });
     expect(parsed.baseUrl).toBe(origin);
   });
 
   it.each([
-    'https://h.example/x',
-    'https://h.example?x',
-    'https://h.example/?',
-    'https://u@h.example',
-    'http://h.example',
-    'ftp://h.example',
+    `${MSG91_SMS_BASE_URL}/x`,
+    `${MSG91_SMS_BASE_URL}?x`,
+    `${MSG91_SMS_BASE_URL}/?`,
+    `https://u@${msg91Host}`,
+    `http://${msg91Host}`,
+    `ftp://${msg91Host}`,
+    'https://evil.example',
+    'http://127.0.0.1',
+    'https://127.0.0.1',
+    'https://[::1]',
+    `https://${msg91Host}.evil.example`,
+    `https://${msg91Host.split('.').slice(1).join('.')}`,
   ])('%s is rejected', (input) => {
     expect(
       zMsg91SmsConfig.safeParse({ authKey: AUTH_KEY, baseUrl: input }).success
     ).toBe(false);
+  });
+
+  it('an allow-listed host passes, over http too, and only when allow-listed', () => {
+    expect(
+      allowingFake.parse({
+        authKey: AUTH_KEY,
+        baseUrl: 'http://127.0.0.1:8080/',
+      }).baseUrl
+    ).toBe('http://127.0.0.1:8080');
+    expect(
+      zMsg91SmsConfig.safeParse({
+        authKey: AUTH_KEY,
+        baseUrl: 'http://127.0.0.1:8080',
+      }).success
+    ).toBe(false);
+    expect(
+      allowingFake.safeParse({
+        authKey: AUTH_KEY,
+        baseUrl: 'https://evil.example',
+      }).success
+    ).toBe(false);
+  });
+
+  it('the adapter checks the base url with the allow list it was built with', () => {
+    const config = { authKey: AUTH_KEY, baseUrl: fake.baseUrl };
+    expect(createMsg91SmsAdapter().configSchema.safeParse(config).success).toBe(
+      false
+    );
+    expect(
+      createMsg91SmsAdapter({
+        allowHosts: ['127.0.0.1'],
+      }).configSchema.safeParse(config).success
+    ).toBe(true);
   });
 });
