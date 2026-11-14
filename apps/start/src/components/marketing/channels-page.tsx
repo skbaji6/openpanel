@@ -8,14 +8,16 @@ import {
   useMarketingQueryKey,
 } from './api';
 import { AudienceSourceCard } from './audience-source-card';
+import { CAMPAIGN_CHANNELS, type CampaignChannel } from './campaign-contract';
+import { CREDENTIAL_FIELDS, type CredentialField } from './channel-settings';
+import { ChannelSettingsCard } from './channel-settings-card';
 import {
   type ApiIssue,
-  CHANNELS,
-  type Channel,
   type ChannelConfigResponse,
   type CreatedApiKey,
   SECRET_MASK,
 } from './contract';
+import { useMarketingRole } from './use-marketing-role';
 import CopyInput from '@/components/forms/copy-input';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import {
@@ -30,61 +32,21 @@ import { Textarea } from '@/components/ui/textarea';
 const DEFAULT_SMTP_PORT = '587';
 const MAX_WEBHOOK_SECRETS = 2;
 
-type FieldKind = 'text' | 'number' | 'boolean' | 'secret' | 'secretLines';
-
-interface FieldSpec {
-  name: string;
-  label: string;
-  kind: FieldKind;
-  hint?: string;
-  optional?: boolean;
-}
-
-// Mirrors each adapter's config shape; only the non-secret fields are returned in clear by the service.
-const CHANNEL_FIELDS: Record<Channel, FieldSpec[]> = {
-  email: [
-    { name: 'host', label: 'SMTP host', kind: 'text' },
-    { name: 'port', label: 'SMTP port', kind: 'number' },
-    {
-      name: 'secure',
-      label: 'Use TLS from the start (port 465)',
-      kind: 'boolean',
-    },
-    { name: 'user', label: 'SMTP user', kind: 'text', optional: true },
-    { name: 'pass', label: 'SMTP password', kind: 'secret', optional: true },
-    { name: 'from', label: 'From address', kind: 'text' },
-  ],
-  webhook: [
-    { name: 'url', label: 'URL', kind: 'text', hint: 'Must be https.' },
-    {
-      name: 'secrets',
-      label: 'Signing secrets',
-      kind: 'secretLines',
-      hint: 'One per line, at most two: the first signs, the second is accepted during rotation.',
-    },
-  ],
-  push: [
-    {
-      name: 'serviceAccountJson',
-      label: 'Firebase service account JSON',
-      kind: 'secret',
-    },
-  ],
-};
-
-const CHANNEL_TITLES: Record<Channel, string> = {
+const CHANNEL_TITLES: Record<CampaignChannel, string> = {
   email: 'Email (SMTP)',
   webhook: 'Webhook',
   push: 'Push (Firebase Cloud Messaging)',
+  sms: 'SMS (MSG91)',
+  whatsapp: 'WhatsApp (MSG91)',
 };
 
 type FormValues = Record<string, string | boolean>;
 
-function isSecret(field: FieldSpec): boolean {
-  return field.kind === 'secret' || field.kind === 'secretLines';
+function isSecret(field: CredentialField): boolean {
+  return field.secret;
 }
 
-function inputType(field: FieldSpec): string {
+function inputType(field: CredentialField): string {
   if (isSecret(field)) {
     return 'password';
   }
@@ -92,32 +54,32 @@ function inputType(field: FieldSpec): string {
 }
 
 function initialValues(
-  channel: Channel,
+  channel: CampaignChannel,
   config: Record<string, unknown> | null
 ) {
   const values: FormValues = {};
   const kept = new Set<string>();
-  for (const field of CHANNEL_FIELDS[channel]) {
-    const stored = config?.[field.name];
+  for (const field of CREDENTIAL_FIELDS[channel]) {
+    const stored = config?.[field.key];
     if (isSecret(field)) {
       if (stored === SECRET_MASK) {
-        kept.add(field.name);
+        kept.add(field.key);
       }
-      values[field.name] = '';
+      values[field.key] = '';
     } else if (field.kind === 'boolean') {
-      values[field.name] = stored === true;
+      values[field.key] = stored === true;
     } else if (field.kind === 'number') {
-      values[field.name] =
+      values[field.key] =
         typeof stored === 'number' ? String(stored) : DEFAULT_SMTP_PORT;
     } else {
-      values[field.name] = typeof stored === 'string' ? stored : '';
+      values[field.key] = typeof stored === 'string' ? stored : '';
     }
   }
   return { values, kept };
 }
 
 function fieldValue(
-  field: FieldSpec,
+  field: CredentialField,
   value: string | boolean,
   isKept: boolean
 ): unknown {
@@ -138,14 +100,14 @@ function fieldValue(
       .filter(Boolean)
       .slice(0, MAX_WEBHOOK_SECRETS);
   }
-  return field.optional && text === '' ? undefined : text;
+  return !field.required && text === '' ? undefined : text;
 }
 
 function ChannelForm({
   channel,
   loaded,
 }: {
-  channel: Channel;
+  channel: CampaignChannel;
   loaded: ChannelConfigResponse;
 }) {
   const marketingFetch = useMarketingFetch();
@@ -155,15 +117,15 @@ function ChannelForm({
   const [initial] = useState(() => initialValues(channel, loaded.config));
   const [values, setValues] = useState(initial.values);
   const [serverIssues, setServerIssues] = useState<ApiIssue[]>([]);
-  const fields = CHANNEL_FIELDS[channel];
+  const fields = CREDENTIAL_FIELDS[channel];
 
   // The service only keeps a masked secret while every public field is unchanged.
   const publicChanged = fields.some(
     (field) =>
-      !isSecret(field) && values[field.name] !== initial.values[field.name]
+      !isSecret(field) && values[field.key] !== initial.values[field.key]
   );
-  const mustReenter = (field: FieldSpec) =>
-    initial.kept.has(field.name) && publicChanged && values[field.name] === '';
+  const mustReenter = (field: CredentialField) =>
+    initial.kept.has(field.key) && publicChanged && values[field.key] === '';
   const blocked = fields.some(mustReenter);
 
   const save = useMutation({
@@ -171,11 +133,11 @@ function ChannelForm({
       const config = Object.fromEntries(
         fields
           .map((field) => [
-            field.name,
+            field.key,
             fieldValue(
               field,
-              values[field.name] ?? '',
-              initial.kept.has(field.name)
+              values[field.key] ?? '',
+              initial.kept.has(field.key)
             ),
           ])
           .filter(([, value]) => value !== undefined)
@@ -196,11 +158,11 @@ function ChannelForm({
     },
   });
 
-  const errorFor = (field: FieldSpec) => {
+  const errorFor = (field: CredentialField) => {
     if (mustReenter(field)) {
       return 'Re-enter this secret because other settings changed';
     }
-    return serverIssues.find((issue) => issue.path === `config.${field.name}`)
+    return serverIssues.find((issue) => issue.path === `config.${field.key}`)
       ?.message;
   };
 
@@ -219,44 +181,44 @@ function ChannelForm({
       <div className="col gap-4 p-4">
         {fields.map((field) => {
           const error = errorFor(field);
-          const savedHint = initial.kept.has(field.name)
+          const savedHint = initial.kept.has(field.key)
             ? 'Saved. Leave empty to keep it.'
             : undefined;
           if (field.kind === 'boolean') {
             return (
               <label
                 className="row items-center gap-2 text-sm"
-                htmlFor={`${formId}-${field.name}`}
-                key={field.name}
+                htmlFor={`${formId}-${field.key}`}
+                key={field.key}
               >
                 <Switch
-                  checked={values[field.name] === true}
-                  id={`${formId}-${field.name}`}
-                  onCheckedChange={(checked) => setValue(field.name, checked)}
+                  checked={values[field.key] === true}
+                  id={`${formId}-${field.key}`}
+                  onCheckedChange={(checked) => setValue(field.key, checked)}
                 />
                 {field.label}
               </label>
             );
           }
           const isMultiline =
-            field.kind === 'secretLines' || field.name === 'serviceAccountJson';
+            field.kind === 'secretLines' || field.kind === 'secretJson';
           if (isMultiline) {
             return (
               <WithLabel
                 error={error}
-                hint={savedHint ?? field.hint}
-                id={`${formId}-${field.name}`}
-                key={field.name}
+                hint={savedHint ?? field.help}
+                id={`${formId}-${field.key}`}
+                key={field.key}
                 label={field.label}
               >
                 <Textarea
                   autoComplete="off"
-                  id={`${formId}-${field.name}`}
-                  onChange={(event) => setValue(field.name, event.target.value)}
+                  id={`${formId}-${field.key}`}
+                  onChange={(event) => setValue(field.key, event.target.value)}
                   placeholder={savedHint ? SECRET_MASK : undefined}
                   rows={4}
                   spellCheck={false}
-                  value={String(values[field.name] ?? '')}
+                  value={String(values[field.key] ?? '')}
                 />
               </WithLabel>
             );
@@ -265,13 +227,13 @@ function ChannelForm({
             <InputWithLabel
               autoComplete={isSecret(field) ? 'new-password' : 'off'}
               error={error}
-              hint={savedHint ?? field.hint}
-              key={field.name}
+              hint={savedHint ?? field.help}
+              key={field.key}
               label={field.label}
-              onChange={(event) => setValue(field.name, event.target.value)}
+              onChange={(event) => setValue(field.key, event.target.value)}
               placeholder={savedHint ? SECRET_MASK : undefined}
               type={inputType(field)}
-              value={String(values[field.name] ?? '')}
+              value={String(values[field.key] ?? '')}
             />
           );
         })}
@@ -285,37 +247,47 @@ function ChannelForm({
   );
 }
 
-function ChannelCard({ channel }: { channel: Channel }) {
+function ChannelCard({ channel }: { channel: CampaignChannel }) {
   const marketingFetch = useMarketingFetch();
   const queryKey = useMarketingQueryKey();
+  const { isAdmin } = useMarketingRole();
   const config = useQuery({
     queryKey: queryKey('channels', channel),
     queryFn: () => marketingFetch<ChannelConfigResponse>(`channels/${channel}`),
     retry: false,
+    enabled: isAdmin,
   });
   return (
-    <section aria-label={CHANNEL_TITLES[channel]} className="card">
-      <IntegrationCardHeader className="items-center justify-between">
-        <h2 className="title">{CHANNEL_TITLES[channel]}</h2>
-        {config.data && (
-          <Badge variant={config.data.configured ? 'success' : 'outline'}>
-            {config.data.configured ? 'Configured' : 'Not configured'}
-          </Badge>
+    <div className="col gap-4">
+      <section aria-label={CHANNEL_TITLES[channel]} className="card">
+        <IntegrationCardHeader className="items-center justify-between">
+          <h2 className="title">{CHANNEL_TITLES[channel]}</h2>
+          {config.data && (
+            <Badge variant={config.data.configured ? 'success' : 'outline'}>
+              {config.data.configured ? 'Configured' : 'Not configured'}
+            </Badge>
+          )}
+        </IntegrationCardHeader>
+        {!isAdmin && (
+          <p className="p-4 text-muted-foreground text-sm">
+            Only owners and admins can see and change credentials.
+          </p>
         )}
-      </IntegrationCardHeader>
-      {config.error && (
-        <p className="p-4 text-destructive text-sm">
-          {describeMarketingError(config.error)}
-        </p>
-      )}
-      {config.data && (
-        <ChannelForm
-          channel={channel}
-          key={config.dataUpdatedAt}
-          loaded={config.data}
-        />
-      )}
-    </section>
+        {config.error && (
+          <p className="p-4 text-destructive text-sm">
+            {describeMarketingError(config.error)}
+          </p>
+        )}
+        {config.data && (
+          <ChannelForm
+            channel={channel}
+            key={config.dataUpdatedAt}
+            loaded={config.data}
+          />
+        )}
+      </section>
+      <ChannelSettingsCard channel={channel} title={CHANNEL_TITLES[channel]} />
+    </div>
   );
 }
 
@@ -381,7 +353,7 @@ function ApiKeysCard() {
 export function ChannelsPage() {
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-      {CHANNELS.map((channel) => (
+      {CAMPAIGN_CHANNELS.map((channel) => (
         <ChannelCard channel={channel} key={channel} />
       ))}
       <ApiKeysCard />
