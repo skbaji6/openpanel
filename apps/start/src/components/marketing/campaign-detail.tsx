@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { MegaphoneIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -21,6 +21,7 @@ import {
 } from './campaign-launch-panel';
 import { CampaignRecipients } from './campaign-recipients';
 import {
+  ALREADY_RECEIVED,
   actionsFor,
   outcomeLine,
   progressOf,
@@ -28,7 +29,7 @@ import {
   waitingLine,
 } from './campaign-status';
 import { CAMPAIGN_POLL_MS } from './polling';
-import { labelRecipientReason } from './reason-labels';
+import { labelRecipientReason, labelRecipientStatus } from './reason-labels';
 import {
   campaignLoadErrorTitle,
   useAudiences,
@@ -135,19 +136,19 @@ const ACTION_TO_SERVER = {
 
 function Actions({ row }: { row: CampaignRow }) {
   const { isAdmin } = useMarketingRole();
-  const actions = actionsFor(row.state, true, row.counters);
+  const actions = actionsFor(row.state, isAdmin, row.counters);
+  const adminHasActions = actionsFor(row.state, true, row.counters).length > 0;
+  if (!isAdmin && adminHasActions) {
+    return <p className="text-muted-foreground text-xs">{NOT_ADMIN_NOTE}</p>;
+  }
   if (actions.length === 0) {
     return null;
   }
-  if (!isAdmin) {
-    return <p className="text-muted-foreground text-xs">{NOT_ADMIN_NOTE}</p>;
-  }
-  const visible = actions;
-  const showUncertainNote = visible.includes('retryUncertain');
+  const showUncertainNote = actions.includes('retryUncertain');
   return (
     <div className="col gap-2">
       <div className="row flex-wrap items-center gap-2">
-        {visible.map((action) => {
+        {actions.map((action) => {
           if (action === 'unschedule') {
             return <UnscheduleButton campaign={row} key={action} />;
           }
@@ -172,10 +173,20 @@ function Actions({ row }: { row: CampaignRow }) {
   );
 }
 
-function Counters({ row }: { row: CampaignRow }) {
-  const { total, done, percent } = progressOf(row.counters);
+function Counters({
+  row,
+  preSkipped,
+}: {
+  row: CampaignRow;
+  preSkipped: number;
+}) {
+  const { total, done, percent } = progressOf(
+    row.counters,
+    row.state,
+    preSkipped
+  );
   const counters: [string, number][] = [
-    ['Queued', row.counters.queued],
+    ['To send', total],
     ['Sent', row.counters.sent],
     ['Failed', row.counters.failed],
     ['Skipped', row.counters.skipped],
@@ -186,9 +197,10 @@ function Counters({ row }: { row: CampaignRow }) {
       <Progress
         aria-label={`${done} of ${total} done`}
         size="lg"
-        value={percent}
+        // 0 would render a stray "0" inside the bar
+        value={percent || undefined}
       />
-      <dl className="grid grid-cols-5 gap-2 text-sm">
+      <dl className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
         {counters.map(([label, value]) => (
           <div className="col" key={label}>
             <dt className="text-muted-foreground">{label}</dt>
@@ -200,18 +212,27 @@ function Counters({ row }: { row: CampaignRow }) {
   );
 }
 
-function SkipReasons({ row }: { row: CampaignRow }) {
+function useSkipReasons(row: CampaignRow) {
   const marketingFetch = useMarketingFetch();
   const queryKey = useMarketingQueryKey();
-  const reasons = useQuery({
-    queryKey: queryKey('campaigns', row.id, 'skip-reasons'),
+  return useQuery({
+    // The state is in the key so the table is reloaded when the campaign settles.
+    queryKey: queryKey('campaigns', row.id, 'skip-reasons', row.state),
     queryFn: () =>
       marketingFetch<SkipReasonsResponse>(
         `campaigns/${encodeURIComponent(row.id)}/skip-reasons`
       ),
+    placeholderData: keepPreviousData,
     retry: false,
     refetchInterval: shouldPoll(row) ? CAMPAIGN_POLL_MS : false,
   });
+}
+
+function SkipReasons({
+  reasons,
+}: {
+  reasons: ReturnType<typeof useSkipReasons>;
+}) {
   if (reasons.error) {
     return (
       <p className="text-destructive text-sm" role="alert">
@@ -236,7 +257,7 @@ function SkipReasons({ row }: { row: CampaignRow }) {
         <TableBody>
           {reasons.data.reasons.map((item) => (
             <TableRow key={`${item.status}:${item.reason}`}>
-              <TableCell>{item.status}</TableCell>
+              <TableCell>{labelRecipientStatus(item.status)}</TableCell>
               <TableCell>{labelRecipientReason(item.reason)}</TableCell>
               <TableCell>{item.count}</TableCell>
             </TableRow>
@@ -250,31 +271,20 @@ function SkipReasons({ row }: { row: CampaignRow }) {
 const formatTime = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString() : 'Not yet';
 
-export function CampaignDetail({
-  campaignId,
+function CampaignBody({
+  row,
+  refreshError,
   onClose,
 }: {
-  campaignId: string;
+  row: CampaignRow;
+  refreshError: unknown;
   onClose: () => void;
 }) {
-  const campaign = useCampaign(campaignId);
   const audiences = useAudiences();
-
-  if (campaign.isPending) {
-    return <FullPageLoadingState />;
-  }
-  if (campaign.error && !campaign.data) {
-    return (
-      <FullPageEmptyState
-        description={describeMarketingError(campaign.error)}
-        icon={MegaphoneIcon}
-        title={campaignLoadErrorTitle(campaign.error)}
-      >
-        <Button onClick={onClose}>Back to campaigns</Button>
-      </FullPageEmptyState>
-    );
-  }
-  const row = campaign.data;
+  const skipReasons = useSkipReasons(row);
+  const preSkipped = (skipReasons.data?.reasons ?? [])
+    .filter((item) => item.reason === ALREADY_RECEIVED)
+    .reduce((sum, item) => sum + item.count, 0);
   const badge = STATE_BADGE[row.state];
   const audienceName =
     audienceLabel(row.audienceId, {
@@ -295,11 +305,11 @@ export function CampaignDetail({
         <h2 className="font-medium text-lg">{row.name}</h2>
         <Badge variant={badge.variant}>{badge.label}</Badge>
       </div>
-      {campaign.error && (
+      {refreshError ? (
         <p className="text-destructive text-sm" role="alert">
-          Could not refresh: {describeMarketingError(campaign.error)}
+          Could not refresh: {describeMarketingError(refreshError)}
         </p>
-      )}
+      ) : null}
       <dl className="grid grid-cols-[10rem_1fr] gap-2 text-sm">
         {facts.map(([label, value]) => (
           <div className="contents" key={label}>
@@ -308,7 +318,7 @@ export function CampaignDetail({
           </div>
         ))}
       </dl>
-      <Counters row={row} />
+      <Counters preSkipped={preSkipped} row={row} />
       {status && <p className="text-sm">{status}</p>}
       <div className="row items-center gap-2">
         <Actions row={row} />
@@ -316,8 +326,40 @@ export function CampaignDetail({
           Back to campaigns
         </Button>
       </div>
-      <SkipReasons row={row} />
+      <SkipReasons reasons={skipReasons} />
       <CampaignRecipients campaignId={row.id} />
     </div>
+  );
+}
+
+export function CampaignDetail({
+  campaignId,
+  onClose,
+}: {
+  campaignId: string;
+  onClose: () => void;
+}) {
+  const campaign = useCampaign(campaignId);
+
+  if (campaign.isPending) {
+    return <FullPageLoadingState />;
+  }
+  if (campaign.error && !campaign.data) {
+    return (
+      <FullPageEmptyState
+        description={describeMarketingError(campaign.error)}
+        icon={MegaphoneIcon}
+        title={campaignLoadErrorTitle(campaign.error)}
+      >
+        <Button onClick={onClose}>Back to campaigns</Button>
+      </FullPageEmptyState>
+    );
+  }
+  return (
+    <CampaignBody
+      onClose={onClose}
+      refreshError={campaign.error}
+      row={campaign.data}
+    />
   );
 }

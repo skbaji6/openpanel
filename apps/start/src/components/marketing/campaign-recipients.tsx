@@ -6,7 +6,7 @@ import {
   useMarketingQueryKey,
 } from './api';
 import { RECIPIENT_STATUSES, type RecipientsPage } from './campaign-contract';
-import { labelRecipientReason } from './reason-labels';
+import { labelRecipientReason, labelRecipientStatus } from './reason-labels';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -78,7 +78,7 @@ export function CampaignRecipients({ campaignId }: { campaignId: string }) {
                   <SelectItem value={ALL_STATUSES}>All statuses</SelectItem>
                   {RECIPIENT_STATUSES.map((option) => (
                     <SelectItem key={option} value={option}>
-                      {option}
+                      {labelRecipientStatus(option)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -128,7 +128,7 @@ export function CampaignRecipients({ campaignId }: { campaignId: string }) {
             {rows.map((row) => (
               <TableRow key={row.profileId}>
                 <TableCell>{row.profileId}</TableCell>
-                <TableCell>{row.status}</TableCell>
+                <TableCell>{labelRecipientStatus(row.status)}</TableCell>
                 <TableCell>
                   {row.reason ? labelRecipientReason(row.reason) : ''}
                 </TableCell>

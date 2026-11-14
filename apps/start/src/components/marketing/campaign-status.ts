@@ -50,45 +50,84 @@ export function actionsFor(
   }
 }
 
-export function progressOf(counters: CampaignCounters): {
+export const ALREADY_RECEIVED = 'already_received';
+
+// `queued` is fixed after the list is built and leaves out recipients skipped as already received,
+// so those are added back to get the real total.
+export function progressOf(
+  counters: CampaignCounters,
+  state: CampaignState,
+  preSkipped = 0
+): {
   total: number;
   done: number;
   percent: number;
 } {
-  const total = counters.queued;
-  const done = counters.sent + counters.failed + counters.skipped;
+  const total = counters.queued + preSkipped;
+  const done =
+    counters.sent + counters.failed + counters.uncertain + counters.skipped;
+  if (state === 'completed') {
+    return { total, done, percent: PERCENT };
+  }
   const percent =
     total > 0 ? Math.min(PERCENT, Math.round((done / total) * PERCENT)) : 0;
   return { total, done, percent };
 }
 
-export function formatClock(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone,
-  }).format(new Date(iso));
+export function formatRetryTime(
+  iso: string,
+  now: number,
+  timeZone?: string
+): string {
+  const target = new Date(iso);
+  const part = (options: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat('en-GB', {
+      ...options,
+      timeZone,
+    }).formatToParts(target);
+  const clock = part({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+    .filter(
+      (p) => p.type === 'hour' || p.type === 'minute' || p.type === 'literal'
+    )
+    .map((p) => p.value)
+    .join('');
+  const zone =
+    part({ timeZoneName: 'short' }).find((p) => p.type === 'timeZoneName')
+      ?.value ?? '';
+  const day = (date: Date | number) =>
+    new Intl.DateTimeFormat('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      timeZone,
+    }).format(date);
+  const sameDay = day(target) === day(now);
+  const when = sameDay ? clock : `${day(target)}, ${clock}`;
+  return `${when} ${zone}`.trim();
 }
 
-export function waitingLine(row: CampaignRow, now: number): string | null {
-  if (row.state === 'running') {
-    const retryAt = row.dispatchRetryAt;
-    const inFuture = retryAt !== null && new Date(retryAt).getTime() > now;
-    if (row.dispatchError) {
-      const label = labelDispatchError(row.dispatchError);
-      return retryAt && inFuture
-        ? `${label}, until ${formatClock(retryAt, row.timezone)}`
-        : label;
-    }
-    if (retryAt) {
-      return "Pacing to the channel's rate";
-    }
-  }
+export function waitingLine(
+  row: CampaignRow,
+  now: number,
+  timeZone?: string
+): string | null {
   const building =
     BUILDING_STATES.includes(row.state) &&
-    row.materializeState === 'in_progress';
-  return building ? 'Building the recipient list' : null;
+    (row.materializeState === 'in_progress' ||
+      row.materializeState === 'not_started');
+  if (building) {
+    return row.materializeError
+      ? `Building the recipient list. ${labelDispatchError(row.materializeError)}`
+      : 'Building the recipient list';
+  }
+  if (row.state !== 'running' || !row.dispatchError) {
+    return null;
+  }
+  const label = labelDispatchError(row.dispatchError);
+  const retryAt = row.dispatchRetryAt;
+  if (!retryAt || new Date(retryAt).getTime() <= now) {
+    return label;
+  }
+  return `${label}, until ${formatRetryTime(retryAt, now, timeZone)}`;
 }
 
 export function outcomeLine(row: CampaignRow): string | null {

@@ -36,6 +36,7 @@ const RECIPIENT_REASONS: Record<string, string> = {
   max_attempts: 'Gave up after too many attempts',
   lease_expired: 'Sending was interrupted and could not be confirmed',
   operator_retry: 'Retried by an operator',
+  unknown: 'No reason was recorded',
   rate_limited: 'Provider asked us to slow down; will retry',
   channel_error: 'Channel provider error; will retry',
   failed: 'Campaign failed before sending',
@@ -128,3 +129,16 @@ export const labelTestSendStatus = (status: string): string =>
 
 export const labelTestSendReason = (reason: string): string =>
   TEST_SEND_REASONS[reason] ?? labelRecipientReason(reason);
+
+const RECIPIENT_STATUS_LABELS: Record<string, string> = {
+  pending: 'Waiting',
+  leased: 'Picked up',
+  sending: 'Sending',
+  sent: 'Sent',
+  uncertain: 'Uncertain',
+  failed: 'Failed',
+  skipped: 'Skipped',
+};
+
+export const labelRecipientStatus = (status: string): string =>
+  RECIPIENT_STATUS_LABELS[status] ?? status;
