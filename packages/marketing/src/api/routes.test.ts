@@ -927,6 +927,28 @@ describe('dashboard routes', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('PUT channels/sms wakes a running sms campaign waiting on the channel', async () => {
+    const id = randomUUID();
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.campaigns (id, project_id, name, state, channel, template, confirm_threshold,
+         created_by, materialize_state, started_at, dispatch_retry_at, dispatch_error)
+       VALUES ($1::uuid, 'proj-a', 'c', 'running', 'sms', '{}'::jsonb, 5000, 'user-1', 'done', now(),
+         now() + interval '1 hour', 'channel_not_configured')`,
+      id
+    );
+    const put = await dashboard('PUT', '/marketing/channels/sms', {
+      config: { authKey: 'msg91-secret-key-123' },
+    });
+    expect(put.status).toBe(200);
+    const [row] = await sql.$queryRawUnsafe<
+      { dispatch_retry_at: Date | null; dispatch_error: string | null }[]
+    >(
+      'SELECT dispatch_retry_at, dispatch_error FROM marketing.campaigns WHERE id = $1::uuid',
+      id
+    );
+    expect(row).toEqual({ dispatch_retry_at: null, dispatch_error: null });
+  });
+
   it('PUT channels/whatsapp stores the config; GET masks authKey but shows integratedNumber and baseUrl', async () => {
     const config = {
       authKey: 'msg91-secret-key-123',

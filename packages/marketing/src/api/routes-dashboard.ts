@@ -6,6 +6,7 @@ import {
 } from '@openpanel/shared/server';
 import { z } from 'zod';
 import { configSchemaFor } from '../channels/registry';
+import { wakeWaitingCampaigns } from '../channels/settings';
 import type { MarketingConfig } from '../config';
 import {
   lockProfiles,
@@ -545,6 +546,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
           channel,
           encryptCredential(cfg.encryptionKey, JSON.stringify(parsed.data))
         );
+        await wakeWaitingCampaigns(sql, ctx.projectId, channel);
         return json({
           channel,
           configured: true,

@@ -181,7 +181,22 @@ export async function putChannelSettings(
   if (!row) {
     throw new HttpError(409, 'version_conflict');
   }
+  await wakeWaitingCampaigns(sql, projectId, channel);
   return { settings, version: row.version };
+}
+
+// A wait for quiet hours, the quota or credentials may be over once the operator changed them.
+export async function wakeWaitingCampaigns(
+  sql: Queryable,
+  projectId: string,
+  channel: string
+): Promise<void> {
+  await sql.$executeRawUnsafe(
+    `UPDATE marketing.campaigns SET dispatch_retry_at = NULL, dispatch_error = NULL
+     WHERE project_id = $1 AND channel = $2 AND state IN ('running', 'paused')`,
+    projectId,
+    channel
+  );
 }
 
 type QuietHoursOverride = NonNullable<z.infer<typeof zQuietHoursOverride>>;

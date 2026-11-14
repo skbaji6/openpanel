@@ -497,6 +497,27 @@ describe('campaign service', () => {
     ]);
   });
 
+  it('resume clears a dispatch wait computed before the pause', async () => {
+    const { campaigns, draft } = await previewedDraft();
+    await campaigns.start(CTX, draft.id, {});
+    await campaigns.pause(CTX, draft.id);
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET dispatch_retry_at = now() + interval '1 day', dispatch_error = 'quota_exhausted'
+       WHERE id = $1::uuid`,
+      draft.id
+    );
+    const resumed = await campaigns.resume(CTX, draft.id);
+    expect(resumed.state).toBe('running');
+    expect(resumed.dispatchError).toBeNull();
+    const [row] = await sql.$queryRawUnsafe<
+      { dispatch_retry_at: Date | null }[]
+    >(
+      'SELECT dispatch_retry_at FROM marketing.campaigns WHERE id = $1::uuid',
+      draft.id
+    );
+    expect(row?.dispatch_retry_at).toBeNull();
+  });
+
   it('unschedule returns a queued campaign to draft', async () => {
     const first = await previewedDraft('First');
     await first.campaigns.start(CTX, first.draft.id, {});

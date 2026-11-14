@@ -758,7 +758,11 @@ export function createCampaignService(deps: CampaignDeps) {
 
     async resume(ctx: CampaignContext, id: string): Promise<CampaignRow> {
       try {
-        return await simpleTransition(ctx, id, 'resume');
+        // A wait computed before the pause may no longer hold.
+        return await simpleTransition(ctx, id, 'resume', {
+          dispatch_retry_at: null,
+          dispatch_error: null,
+        });
       } catch (error) {
         // Unreachable while a paused campaign holds the project's slot; kept in case the one-active index changes.
         if (isOneActiveViolation(error)) {

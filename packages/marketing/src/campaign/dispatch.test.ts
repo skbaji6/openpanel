@@ -655,6 +655,45 @@ describe('runDispatchCycle', () => {
     expect((await runDispatchCycle(depsFor(null))).campaignId).toBeNull();
   });
 
+  it('turning quiet hours off wakes a campaign waiting for them', async () => {
+    // 21:00 in Asia/Kolkata.
+    now = new Date('2026-11-03T15:30:00.000Z');
+    const members = pushMembers(3);
+    const sent = fakeChannel('push');
+    const quietHours = {
+      enabled: true,
+      start: '21:00',
+      end: '08:00',
+      timezone: 'Asia/Kolkata',
+    };
+    const id = await setup({
+      channel: 'push',
+      members,
+      settings: { quietHours },
+    });
+    const deps = depsFor(createFakeSource({ members }));
+    await runDispatchCycle(deps);
+    expect((await campaign(id)).dispatch_error).toBe('quiet_hours');
+
+    await putChannelSettings(
+      sql,
+      project,
+      'push',
+      {
+        ...DEFAULT_CHANNEL_SETTINGS.push,
+        quietHours: { ...quietHours, enabled: false },
+      },
+      1
+    );
+    await runDispatchCycle(deps);
+
+    expect(sent).toHaveLength(3);
+    expect(await campaign(id)).toMatchObject({
+      state: 'completed',
+      dispatch_error: null,
+    });
+  });
+
   it('a successful lookup keeps a channel error; a batch the adapter takes clears it', async () => {
     const members = pushMembers(1);
     const sent = fakeChannel('push');
