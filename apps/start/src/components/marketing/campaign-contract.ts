@@ -54,7 +54,9 @@ export type FilterOp = (typeof FILTER_OPS)[number];
 export const MAX_FILTER_DEPTH = 3;
 export const MAX_LIST_IDS = 20_000;
 export const MAX_IDS_PER_CHANGE = 2000;
-export const MAX_RESOLVE_INPUTS = 1000;
+// The service rejects more than 200 distinct inputs per call (after trim and dedupe); the proxy body holds 1000.
+export const MAX_RESOLVE_DISTINCT_INPUTS = 200;
+export const MAX_RESOLVE_INPUT_LENGTH = 256;
 
 const MAX_CAMPAIGN_NAME = 200;
 const MAX_CAMPAIGN_KEY = 100;
@@ -119,12 +121,18 @@ const noVariables = (value: string) => !value.includes('{{');
 
 const zImageUrl = z
   .string()
+  .trim()
   .max(MAX_URL_LENGTH)
   .refine((value) => parsedUrl(value)?.protocol === 'https:', 'must be https')
+  .refine((value) => {
+    const url = parsedUrl(value);
+    return !(url?.username || url?.password);
+  }, 'must not contain a user name or password')
   .refine(noVariables, 'must not contain variables');
 // App deep links such as sia://course/12 are allowed; only schemes that run code or read files are not.
 const zLink = z
   .string()
+  .trim()
   .max(MAX_URL_LENGTH)
   .refine((value) => {
     const url = parsedUrl(value);
@@ -348,6 +356,13 @@ export type ChannelSettingsIssue =
   | 'consent_not_supported'
   | 'quota_not_supported';
 
+export const ISSUE_CODES = [
+  'rate_required',
+  'quota_required',
+  'consent_not_supported',
+  'quota_not_supported',
+] as const satisfies readonly ChannelSettingsIssue[];
+
 export interface ChannelSettingsResponse {
   channel: CampaignChannel;
   settings: ChannelSettings;
@@ -416,6 +431,12 @@ export interface AudienceCount {
 export interface CountPreview extends AudienceCount {
   campaignVersion: number;
   audienceVersion: number;
+}
+
+export interface Confirmation {
+  count: number;
+  channel: CampaignChannel;
+  spreadOverDays?: boolean;
 }
 
 export interface CampaignCounters {
@@ -529,4 +550,46 @@ export interface TemplateRow extends TemplateVersion {
   enabled: boolean;
   currentVersion: number;
   updatedAt: string;
+}
+
+export interface RecipientsPage {
+  recipients: RecipientRow[];
+  nextCursor: string | null;
+}
+
+export interface SkipReasonsResponse {
+  reasons: SkipReasonRow[];
+}
+
+export interface TestSendsResponse {
+  testSends: TestSendRow[];
+}
+
+export interface AudiencePreview {
+  members: { id: string; displayName?: string }[];
+  nextCursor: string | null;
+  exclusionsApplied: boolean;
+}
+
+export interface ResolveResponse {
+  ids: string[];
+  unmatchedPositions: number[];
+}
+
+export type ExplanationReason =
+  | 'matched_filter'
+  | 'not_matched'
+  | 'included'
+  | 'excluded_by_list'
+  | 'excluded_by_filter';
+
+export interface Explanation {
+  id: string;
+  verdict: 'in' | 'out';
+  reasons: ExplanationReason[];
+}
+
+export interface IdsPage {
+  ids: string[];
+  nextCursor: string | null;
 }

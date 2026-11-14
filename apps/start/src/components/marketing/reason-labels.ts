@@ -39,6 +39,9 @@ const RECIPIENT_REASONS: Record<string, string> = {
   rate_limited: 'Provider asked us to slow down; will retry',
   channel_error: 'Channel provider error; will retry',
   failed: 'Campaign failed before sending',
+  completed: 'Campaign had already finished',
+  missed: 'Campaign missed its send time',
+  'unreachable:no_live_token': 'No active device token',
   no_phone: 'No phone number on file',
   'no email': 'No email address on file',
   'invalid email': 'Email address is not valid',
@@ -64,6 +67,7 @@ const SETTINGS_ISSUES: Record<string, string> = {
 };
 
 const PROVIDER_PREFIXES = ['msg91 ', 'fcm ', 'smtp ', 'http '];
+const MAIL_NETWORK_ERROR = /^smtp E[A-Z_]+$/;
 const UNREACHABLE_PREFIX = 'unreachable:';
 
 export const labelDispatchError = (code: string): string =>
@@ -82,6 +86,9 @@ export function labelRecipientReason(reason: string): string {
   }
   if (reason.startsWith(UNREACHABLE_PREFIX)) {
     return `Could not be reached: ${reason.slice(UNREACHABLE_PREFIX.length)}`;
+  }
+  if (MAIL_NETWORK_ERROR.test(reason)) {
+    return 'The mail server could not be reached';
   }
   const prefix = PROVIDER_PREFIXES.find((candidate) =>
     reason.startsWith(candidate)

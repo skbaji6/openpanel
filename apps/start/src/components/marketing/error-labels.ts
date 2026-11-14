@@ -59,5 +59,17 @@ export const ERROR_LABELS: Record<string, string> = {
   invalid_settings: 'These settings are not allowed for this channel.',
   channel_unavailable: 'This channel is not available.',
   test_send_limit: 'Test send limit reached. Try again in an hour.',
+  too_many_inputs: 'Too many different entries at once. Paste at most 200.',
+  source_is_http:
+    'The audience source is already an HTTP API, so this sync action does not apply.',
+  source_protocol_error: 'The audience API answered in an unexpected format.',
+  too_many_requests: 'Too many requests. Wait a moment and try again.',
+  invalid_body: 'The request was not valid. Check the fields and try again.',
+  invalid_query: 'The request filters were not valid.',
+  invalid_json: 'The request could not be read.',
+  not_configured: 'This is not set up yet.',
+  freeze_lock_lost:
+    'Freezing was interrupted by another change. Try freezing again.',
+  secret_required: 'Enter the secret again to save these changes.',
   invalid_profile_id: 'That student id is not valid.',
 };

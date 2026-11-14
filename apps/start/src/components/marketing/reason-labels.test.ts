@@ -59,6 +59,8 @@ const RECIPIENT_REASONS = [
   'msg91 failed',
   'msg91 conflicting',
   'msg91 unlisted',
+  'completed',
+  'missed',
 ];
 
 describe('reason labels', () => {
@@ -78,9 +80,10 @@ describe('reason labels', () => {
   });
 
   test('unreachable reasons name the cause', () => {
-    const label = labelRecipientReason('unreachable:no_live_token');
-    expect(label).toContain('no_live_token');
-    expect(label).not.toBe('unreachable:no_live_token');
+    expect(labelRecipientReason('unreachable:no_live_token')).toBe(
+      'No active device token'
+    );
+    expect(labelRecipientReason('unreachable:other')).toContain('other');
   });
 
   test('provider prefixes keep the provider answer', () => {
@@ -89,6 +92,12 @@ describe('reason labels', () => {
       'Provider answered UNREGISTERED'
     );
     expect(labelRecipientReason('smtp 550')).toBe('Provider answered 550');
+    expect(labelRecipientReason('smtp ECONNREFUSED')).toBe(
+      'The mail server could not be reached'
+    );
+    expect(labelRecipientReason('smtp EAI_AGAIN')).toBe(
+      'The mail server could not be reached'
+    );
     expect(labelRecipientReason('http 502')).toBe('Provider answered 502');
   });
 

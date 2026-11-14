@@ -4,6 +4,11 @@ import {
   CAMPAIGN_CHANNELS,
   CAMPAIGN_STATES,
   FILTER_OPS,
+  ISSUE_CODES,
+  MAX_IDS_PER_CHANGE,
+  MAX_LIST_IDS,
+  MAX_RESOLVE_DISTINCT_INPUTS,
+  MAX_RESOLVE_INPUT_LENGTH,
   RECIPIENT_STATUSES,
   zAudienceInput,
   zCampaignDraft,
@@ -63,6 +68,37 @@ describe('campaign contract mirrors the service', () => {
   });
 });
 
+function constant(source: string, name: string): number {
+  const match = new RegExp(`const ${name} = ([\\d_]+);`).exec(source);
+  if (!match) {
+    throw new Error(`${name} not found`);
+  }
+  return Number((match[1] as string).replaceAll('_', ''));
+}
+
+describe('numeric limits mirror the service', () => {
+  test('audience list and paste limits', () => {
+    const definition = read('audience/definition.ts');
+    expect(MAX_LIST_IDS).toBe(constant(definition, 'MAX_LIST_IDS'));
+    expect(MAX_IDS_PER_CHANGE).toBe(constant(definition, 'MAX_IDS_PER_CHANGE'));
+    expect(MAX_RESOLVE_DISTINCT_INPUTS).toBe(
+      constant(read('audience/contract.ts'), 'MAX_RESOLVE_INPUTS')
+    );
+    expect(MAX_RESOLVE_INPUT_LENGTH).toBe(
+      constant(read('api/routes-audiences.ts'), 'MAX_RESOLVE_INPUT_LENGTH')
+    );
+  });
+
+  test('channel settings issue codes', () => {
+    const source = read('channels/settings.ts');
+    const start = source.indexOf('export type ChannelSettingsIssue');
+    const end = source.indexOf(';', start);
+    expect([...ISSUE_CODES]).toEqual(
+      [...source.slice(start, end).matchAll(/'([^']+)'/g)].map((m) => m[1])
+    );
+  });
+});
+
 describe('zCampaignDraft', () => {
   test('accepts a minimal push draft and one with image and link', () => {
     expect(zCampaignDraft.safeParse(draft()).success).toBe(true);
@@ -99,6 +135,20 @@ describe('zCampaignDraft', () => {
     ]) {
       expect(zCampaignDraft.safeParse(draft({ template })).success).toBe(false);
     }
+  });
+
+  test('rejects credentials in an imageUrl and trims url fields', () => {
+    expect(
+      zCampaignDraft.safeParse(
+        draft({
+          template: { body: 'Hi', imageUrl: 'https://u:p@x.test/a.png' },
+        })
+      ).success
+    ).toBe(false);
+    const parsed = zCampaignDraft.parse(
+      draft({ template: { body: 'Hi', link: ' sia://x ' } })
+    );
+    expect(parsed.template).toMatchObject({ link: 'sia://x' });
   });
 
   test('imageUrl is not allowed on an email draft', () => {

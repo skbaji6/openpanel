@@ -44,6 +44,16 @@ const REQUIRED_CODES = [
   'channel_unavailable',
   'test_send_limit',
   'invalid_profile_id',
+  'too_many_inputs',
+  'source_is_http',
+  'source_protocol_error',
+  'too_many_requests',
+  'invalid_body',
+  'invalid_query',
+  'invalid_json',
+  'not_configured',
+  'freeze_lock_lost',
+  'secret_required',
 ];
 
 describe('error labels', () => {
