@@ -33,7 +33,13 @@ export const CAP_LOCK_CHUNK = 100;
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 // Adapter reasons for items never put on the wire (past the batch deadline, or held back after a failed probe):
 // they spend no attempt.
-const UNSTARTED_REASONS = "'deadline', 'breaker'";
+export const NOT_ATTEMPTED_REASONS: ReadonlySet<string> = new Set([
+  'deadline',
+  'breaker',
+]);
+const NOT_ATTEMPTED_SQL = [...NOT_ATTEMPTED_REASONS]
+  .map((reason) => `'${reason}'`)
+  .join(', ');
 const ALIVE_STATES = new Set(['running', 'paused']);
 const ONE_MILLISECOND = "interval '1 millisecond'";
 const CAMPAIGN_REF = `'campaign:' || changed.campaign_id::text || ':' || changed.profile_id`;
@@ -112,10 +118,10 @@ const MARK_SENDING_SQL = `
 const MARK_OUTCOMES_SQL = `
   WITH decided AS (
     SELECT r.profile_id, i.outcome, NULLIF(i.reason, '') AS reason, NULLIF(i.provider_ref, '') AS provider_ref,
-      (i.outcome = 'retry' AND i.reason IN (${UNSTARTED_REASONS})) AS unstarted,
+      (i.outcome = 'retry' AND i.reason IN (${NOT_ATTEMPTED_SQL})) AS unstarted,
       CASE
         WHEN i.outcome IN ('sent', 'failed', 'uncertain') THEN i.outcome
-        WHEN i.outcome = 'retry' AND i.reason NOT IN (${UNSTARTED_REASONS})
+        WHEN i.outcome = 'retry' AND i.reason NOT IN (${NOT_ATTEMPTED_SQL})
           AND r.attempt >= ${MAX_SEND_ATTEMPTS} THEN 'failed'
         WHEN NOT $10::boolean THEN 'skipped'
         ELSE 'pending'

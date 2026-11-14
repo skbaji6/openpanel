@@ -71,6 +71,7 @@ import {
   markLeasedFinal,
   markOutcomes,
   markSending,
+  NOT_ATTEMPTED_REASONS,
   RETRY_BACKOFF_MS,
   releaseLeased,
   SENDING_LEASE_MS,
@@ -91,6 +92,13 @@ const RETURNED_OUTCOMES = new Set<DeliveryOutcome['outcome']>([
   'rate_limited',
   'channel_error',
 ]);
+const providerReached = (outcome: DeliveryOutcome) =>
+  outcome.outcome !== 'channel_error' &&
+  outcome.outcome !== 'rate_limited' &&
+  !(
+    outcome.outcome === 'retry' &&
+    NOT_ATTEMPTED_REASONS.has(outcome.reason ?? '')
+  );
 
 // No row lock: SKIP LOCKED on the recipient claim keeps concurrent loops apart.
 const PICK_SQL = `SELECT c.id::text, c.project_id, c.channel, c.template, c.template_version,
@@ -109,8 +117,20 @@ const RETRY_LATER_SQL = `UPDATE marketing.campaigns SET dispatch_retry_at = $2::
 const STAMP_SQL = `UPDATE marketing.campaigns
   SET dispatch_retry_at = GREATEST(COALESCE(dispatch_retry_at, $2::timestamptz), $2::timestamptz)
   WHERE id = $1::uuid`;
-const LOOKUP_OK_SQL = `UPDATE marketing.campaigns SET dispatch_failures = 0, dispatch_error = NULL
-  WHERE id = $1::uuid AND (dispatch_failures <> 0 OR dispatch_error IS NOT NULL)`;
+// A successful lookup says only that the source is healthy; channel-side errors wait for the adapter.
+const SOURCE_ERRORS =
+  "'source_unavailable', 'source_auth_failed', 'source_error'";
+const CHANNEL_ERRORS = `'channel_auth_failed', 'channel_unreachable', 'channel_not_configured', 'quota_exhausted',
+  'quiet_hours', 'rate_limited', 'dispatch_error'`;
+const LOOKUP_OK_SQL = `UPDATE marketing.campaigns SET dispatch_failures = 0,
+    dispatch_error = CASE WHEN dispatch_error IN (${SOURCE_ERRORS}) THEN NULL ELSE dispatch_error END
+  WHERE id = $1::uuid AND (dispatch_failures <> 0 OR dispatch_error IN (${SOURCE_ERRORS}))`;
+const CHANNEL_OK_SQL = `UPDATE marketing.campaigns SET dispatch_error = NULL
+  WHERE id = $1::uuid AND dispatch_error IN (${CHANNEL_ERRORS})`;
+// A provider backoff also guards an unreachable channel; that label is the more telling one.
+const BACKOFF_WAIT_SQL = `UPDATE marketing.campaigns SET dispatch_retry_at = $2::timestamptz,
+    dispatch_error = CASE WHEN dispatch_error = 'channel_unreachable' THEN dispatch_error ELSE 'rate_limited' END
+  WHERE id = $1::uuid`;
 const PROTOCOL_FAILURE_SQL = `UPDATE marketing.campaigns SET dispatch_failures = dispatch_failures + 1,
     dispatch_error = 'source_error', dispatch_retry_at = $2::timestamptz
   WHERE id = $1::uuid RETURNING dispatch_failures`;
@@ -295,7 +315,11 @@ async function prepare(
   const { settings } = await getChannelSettings(deps.sql, projectId, channel);
   const backoffUntil = await deps.backoff.until(projectId, channel);
   if (backoffUntil !== null) {
-    await retryLater(deps, id, new Date(backoffUntil), null);
+    await deps.sql.$executeRawUnsafe(
+      BACKOFF_WAIT_SQL,
+      id,
+      new Date(backoffUntil).toISOString()
+    );
     return null;
   }
   const override = zQuietHoursOverride.safeParse(
@@ -306,7 +330,7 @@ async function prepare(
     override.success ? override.data : null
   );
   if (inQuietHours(now, quietHours)) {
-    await retryLater(deps, id, nextAllowedTime(now, quietHours), null);
+    await retryLater(deps, id, nextAllowedTime(now, quietHours), 'quiet_hours');
     return null;
   }
   let quota = Number.POSITIVE_INFINITY;
@@ -618,12 +642,17 @@ async function recordOutcomes(
       result.released += 1;
     }
   }
+  // Cleared first, so a mixed batch ends with the label of the problem it still shows.
+  if (outcomes.some(providerReached)) {
+    await deps.sql.$executeRawUnsafe(CHANNEL_OK_SQL, id);
+  }
   const rateLimited = outcomes.filter((o) => o.outcome === 'rate_limited');
   if (rateLimited.length > 0) {
     const backoffMs = Math.max(
       ...rateLimited.map((o) => o.retryAfterMs ?? RETRY_BACKOFF_MS)
     );
     await deps.backoff.set(projectId, channel, backoffMs);
+    await retryLater(deps, id, later(now, backoffMs), 'rate_limited');
   }
   if (outcomes.some((o) => o.outcome === 'channel_error')) {
     await retryLater(

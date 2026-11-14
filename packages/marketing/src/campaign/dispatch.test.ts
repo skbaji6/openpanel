@@ -612,7 +612,41 @@ describe('runDispatchCycle', () => {
     expect((await campaign(id)).dispatch_retry_at?.toISOString()).toBe(
       '2026-11-04T02:30:00.000Z'
     );
+    expect((await campaign(id)).dispatch_error).toBe('quiet_hours');
     expect((await runDispatchCycle(depsFor(null))).campaignId).toBeNull();
+  });
+
+  it('a successful lookup keeps a channel error; a batch the adapter takes clears it', async () => {
+    const members = pushMembers(1);
+    const sent = fakeChannel('push');
+    // A rate of 0.1 per second claims one recipient per cycle: the unknown id first, then the member.
+    const id = await setup({
+      channel: 'push',
+      members,
+      recipients: ['gone', 'p-00000'],
+      settings: { ratePerSecond: 0.1 },
+    });
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaign_recipients SET due_at = due_at - interval '1 second'
+       WHERE campaign_id = $1::uuid AND profile_id = 'gone'`,
+      id
+    );
+    await sql.$executeRawUnsafe(
+      `UPDATE marketing.campaigns SET dispatch_error = 'channel_auth_failed' WHERE id = $1::uuid`,
+      id
+    );
+    const deps = depsFor(createFakeSource({ members }));
+
+    await runDispatchCycle(deps);
+    expect((await recipients(id)).get('gone')?.status).toBe('skipped');
+    expect(sent).toHaveLength(0);
+    expect((await campaign(id)).dispatch_error).toBe('channel_auth_failed');
+
+    await runUntilIdle(deps);
+    expect(sent).toHaveLength(1);
+    const state = await campaign(id);
+    expect(state.state).toBe('completed');
+    expect(state.dispatch_error).toBeNull();
   });
 
   it('an email campaign with quota 100 sends 100 today and resumes the rest at local midnight', async () => {
@@ -695,6 +729,10 @@ describe('runDispatchCycle', () => {
     expect(await statuses(id)).toEqual({ pending: 3 });
     expect((await recipients(id)).get('p-00000')?.reason).toBe('rate_limited');
     expect(await backoff.until(project, 'push')).toBe(startedAt + retryAfterMs);
+    expect(await campaign(id)).toMatchObject({
+      dispatch_error: 'rate_limited',
+      dispatch_retry_at: new Date(startedAt + retryAfterMs),
+    });
 
     // Another batch's 429 extends the backoff past the rows' own due time.
     advance(retryAfterMs);
@@ -702,9 +740,10 @@ describe('runDispatchCycle', () => {
     const backedOff = await runDispatchCycle(deps);
     expect(backedOff).toMatchObject({ campaignId: id, claimed: 0 });
     expect(batches).toHaveLength(1);
-    expect((await campaign(id)).dispatch_retry_at?.getTime()).toBe(
-      at(retryAfterMs).getTime()
-    );
+    expect(await campaign(id)).toMatchObject({
+      dispatch_error: 'rate_limited',
+      dispatch_retry_at: at(retryAfterMs),
+    });
 
     advance(retryAfterMs);
     await runUntilIdle(deps);
@@ -714,6 +753,7 @@ describe('runDispatchCycle', () => {
     expect(state.state).toBe('completed');
     expect(state.sent).toBe(3);
     expect(state.failed).toBe(0);
+    expect(state.dispatch_error).toBeNull();
   });
 
   it('channel_error leaves every row pending with dispatch_error channel_auth_failed and nothing failed', async () => {
