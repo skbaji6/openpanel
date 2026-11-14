@@ -220,6 +220,23 @@ describe('pooled email adapter', () => {
     ).toBe(true);
   });
 
+  it('a server refusing connections leaves nothing uncertain', async () => {
+    const closedPort = smtp.port;
+    await smtp.close();
+    const items = Array.from({ length: 6 }, (_, n) => item(n));
+    const outcomes = await pooled({ timeoutMs: SHORT_TIMEOUT_MS }).sendBatch(
+      items,
+      config({ port: closedPort }),
+      { concurrency: 2 }
+    );
+    const kinds = new Set(outcomes.map((o) => `${o.outcome}:${o.reason}`));
+    expect(outcomes).toHaveLength(6);
+    expect([...kinds].sort()).toEqual([
+      'retry:pool closed',
+      'retry:smtp ECONNREFUSED',
+    ]);
+  });
+
   it('items not yet handed over when the deadline passed or the signal aborted are retry deadline', async () => {
     const items = [item(0), item(1)];
     const late = await pooled({ now: () => 1000 }).sendBatch(items, config(), {

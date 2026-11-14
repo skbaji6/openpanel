@@ -57,6 +57,8 @@ interface EmailAdapterOptions {
 
 const zEmail = z.string().email();
 
+const NEVER_CONNECTED_MESSAGE = 'connection closed before it was established';
+
 function stripLineBreaks(value: string): string {
   return value.replace(LINE_BREAKS, ' ');
 }
@@ -121,7 +123,7 @@ function socketOwnedBy(
     signal.addEventListener('abort', destroy, { once: true });
     socket.once('close', () => {
       signal.removeEventListener('abort', destroy);
-      settle(new Error('connection closed before it was established'));
+      settle(new Error(NEVER_CONNECTED_MESSAGE));
     });
     socket.once('error', (error) => settle(error));
     socket.once('connect', () => settle(null, socket));
@@ -220,6 +222,14 @@ const POOL_MAX_MESSAGES = 100;
 const CAMPAIGN_MAX_BATCH = 500;
 const DEADLINE_REASON = 'deadline';
 const POOL_CLOSED_REASON = 'pool closed';
+// nodemailer keeps a connection that failed to connect in its pool for good, so later sends would hang.
+// nodemailer's reply for a message still in its queue at close: it was never given to a connection.
+const NEVER_STARTED_MESSAGE = 'Connection pool was closed';
+const CONNECT_FAILURE_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+]);
 
 export interface PooledTransport extends MailTransport {
   close?(): void;
@@ -334,7 +344,8 @@ export function createPooledEmailAdapter(
       }
     }
     const sockets = new AbortController();
-    const transport = createTransport({
+    // maxRequeues is missing from the published types.
+    const poolOptions: SMTPPool.Options & { maxRequeues: number } = {
       pool: true,
       host: config.host,
       port: config.port,
@@ -345,13 +356,16 @@ export function createPooledEmailAdapter(
         port: config.port,
       }),
       maxConnections: concurrency,
+      // nodemailer must never re-send a message on its own: that would be a second delivery.
+      maxRequeues: 0,
       maxMessages: POOL_MAX_MESSAGES,
       connectionTimeout: timeoutMs,
       greetingTimeout: timeoutMs,
       socketTimeout: timeoutMs,
       disableFileAccess: true,
       disableUrlAccess: true,
-    });
+    };
+    const transport = createTransport(poolOptions);
     const pool: Pool = {
       key: projectId,
       digest,
@@ -421,8 +435,23 @@ export function createPooledEmailAdapter(
         };
         const expire = () =>
           settle({ outcome: 'uncertain', reason: 'timeout' });
-        const fail = (error: unknown) =>
+        const fail = (error: unknown) => {
+          const { code, message } = (error ?? {}) as {
+            code?: unknown;
+            message?: unknown;
+          };
+          if (
+            message === NEVER_STARTED_MESSAGE ||
+            message === NEVER_CONNECTED_MESSAGE
+          ) {
+            settle({ outcome: 'retry', reason: POOL_CLOSED_REASON });
+            return;
+          }
           settle(classifySendResult(failureFor(error)));
+          if (typeof code === 'string' && CONNECT_FAILURE_CODES.has(code)) {
+            closePool(pool);
+          }
+        };
         const timer = setTimeout(() => {
           for (const settleInflight of [...pool.inflight]) {
             settleInflight();
