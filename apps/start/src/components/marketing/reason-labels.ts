@@ -66,6 +66,29 @@ const SETTINGS_ISSUES: Record<string, string> = {
   quota_not_supported: 'A daily quota is only available for email',
 };
 
+const TEST_SEND_STATUSES: Record<string, string> = {
+  pending: 'Waiting to send',
+  sending: 'Sending',
+  sent: 'Sent',
+  failed: 'Failed',
+  skipped: 'Skipped',
+};
+
+// A test send is tried once, so reasons that promise a retry are reworded.
+const TEST_SEND_REASONS: Record<string, string> = {
+  cancelled: 'The campaign was cancelled',
+  failed: 'The campaign failed',
+  channel_not_configured: 'The channel is not set up',
+  template_not_found: 'The message template no longer exists',
+  template_disabled: 'The message template is turned off',
+  source_not_http: 'The audience source is not an HTTP API',
+  source_auth_failed: 'The audience API refused our credentials',
+  source_unavailable: 'The audience API is not answering',
+  uncertain: 'Sending was interrupted; it may or may not have arrived',
+  rate_limited: 'The channel was busy; not sent',
+  channel_error: 'Channel provider error; not sent',
+};
+
 const PROVIDER_PREFIXES = ['msg91 ', 'fcm ', 'smtp ', 'http '];
 const MAIL_NETWORK_ERROR = /^smtp E[A-Z_]+$/;
 const UNREACHABLE_PREFIX = 'unreachable:';
@@ -95,3 +118,9 @@ export function labelRecipientReason(reason: string): string {
   );
   return prefix ? `Provider answered ${reason.slice(prefix.length)}` : reason;
 }
+
+export const labelTestSendStatus = (status: string): string =>
+  TEST_SEND_STATUSES[status] ?? status;
+
+export const labelTestSendReason = (reason: string): string =>
+  TEST_SEND_REASONS[reason] ?? labelRecipientReason(reason);

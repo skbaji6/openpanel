@@ -4,6 +4,8 @@ import {
   labelRecipientReason,
   labelSettingsIssue,
   labelStateReason,
+  labelTestSendReason,
+  labelTestSendStatus,
 } from './reason-labels';
 
 const DISPATCH_ERRORS = [
@@ -118,5 +120,27 @@ describe('reason labels', () => {
     ]) {
       expect(labelSettingsIssue(code), code).not.toBe(code);
     }
+  });
+
+  test('test-send statuses and reasons', () => {
+    for (const status of ['pending', 'sending', 'sent', 'failed', 'skipped']) {
+      expect(labelTestSendStatus(status), status).not.toBe(status);
+    }
+    for (const code of [
+      'channel_not_configured',
+      'template_not_found',
+      'template_disabled',
+      'source_not_http',
+      'source_auth_failed',
+      'source_unavailable',
+      'uncertain',
+      'cancelled',
+      'failed',
+    ]) {
+      expect(labelTestSendReason(code), code).not.toBe(code);
+    }
+    expect(labelTestSendReason('rate_limited')).not.toContain('retry');
+    expect(labelTestSendReason('channel_error')).not.toContain('retry');
+    expect(labelTestSendReason('no_phone')).toBe('No phone number on file');
   });
 });

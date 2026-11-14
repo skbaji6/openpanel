@@ -6,6 +6,7 @@ import {
   STATE_BADGE,
   sendTimeText,
 } from './campaign-form';
+import { UnscheduleButton } from './campaign-launch-panel';
 import {
   campaignLoadErrorTitle,
   useAudiences,
@@ -71,7 +72,8 @@ export function CampaignSummary({
           </div>
         ))}
       </dl>
-      <div>
+      <div className="row items-center gap-2">
+        {row.state === 'scheduled' && <UnscheduleButton campaign={row} />}
         <Button onClick={onClose} variant="ghost">
           Back to campaigns
         </Button>
