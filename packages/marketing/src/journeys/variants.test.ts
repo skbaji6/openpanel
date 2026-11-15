@@ -14,7 +14,7 @@ function step(overrides: Partial<Step> = {}): Step {
 describe('chooseMessage', () => {
   it('no variants uses the default', () => {
     expect(chooseMessage(step({ template: DEFAULT }), { state: 'TS' })).toEqual(
-      { ok: true, template: DEFAULT }
+      { ok: true, variantKey: 'default', template: DEFAULT }
     );
   });
 
@@ -23,21 +23,21 @@ describe('chooseMessage', () => {
       step({ template: DEFAULT, variants: { TS, AP } }),
       { state: 'TS' }
     );
-    expect(choice).toEqual({ ok: true, template: TS });
+    expect(choice).toEqual({ ok: true, variantKey: 'TS', template: TS });
   });
 
   it('numeric state 36 matches key "36"', () => {
     const choice = chooseMessage(step({ variants: { '36': TS } }), {
       state: 36,
     });
-    expect(choice).toEqual({ ok: true, template: TS });
+    expect(choice).toEqual({ ok: true, variantKey: '36', template: TS });
   });
 
   it('a state with other case and spaces matches the key', () => {
     const choice = chooseMessage(step({ variants: { TS, AP } }), {
       state: '  ap ',
     });
-    expect(choice).toEqual({ ok: true, template: AP });
+    expect(choice).toEqual({ ok: true, variantKey: 'AP', template: AP });
   });
 
   it('a state named like an object property still gets the default', () => {
@@ -46,7 +46,11 @@ describe('chooseMessage', () => {
         step({ template: DEFAULT, variants: { TS } }),
         { state }
       );
-      expect(choice).toEqual({ ok: true, template: DEFAULT });
+      expect(choice).toEqual({
+        ok: true,
+        variantKey: 'default',
+        template: DEFAULT,
+      });
     }
   });
 
@@ -55,12 +59,17 @@ describe('chooseMessage', () => {
       step({ template: DEFAULT, variants: { TS } }),
       { state: 'KA' }
     );
-    expect(choice).toEqual({ ok: true, template: DEFAULT });
+    expect(choice).toEqual({
+      ok: true,
+      variantKey: 'default',
+      template: DEFAULT,
+    });
   });
 
   it('unknown state and no default is no_variant_for_state', () => {
     expect(chooseMessage(step({ variants: { TS } }), { state: 'KA' })).toEqual({
       ok: false,
+      variantKey: '',
       reason: 'no_variant_for_state',
     });
   });
@@ -69,6 +78,7 @@ describe('chooseMessage', () => {
     for (const traits of [{}, { state: '  ' }, { state: { nested: 'TS' } }]) {
       expect(chooseMessage(step({ variants: { TS } }), traits)).toEqual({
         ok: false,
+        variantKey: '',
         reason: 'no_state_trait',
       });
     }
@@ -82,6 +92,20 @@ describe('chooseMessage', () => {
       }),
       { state: 'TS' }
     );
-    expect(choice).toEqual({ ok: false, reason: 'template_not_pinned' });
+    expect(choice).toEqual({
+      ok: false,
+      variantKey: 'TS',
+      reason: 'template_not_pinned',
+    });
+  });
+
+  it("the choice names the variant key, default, or '' when nothing fits", () => {
+    const withDefault = step({ template: DEFAULT, variants: { TS } });
+    const keyOf = (s: Step, state: string) =>
+      chooseMessage(s, { state }).variantKey;
+    expect(keyOf(withDefault, ' ts ')).toBe('TS');
+    expect(keyOf(withDefault, 'KA')).toBe('default');
+    expect(keyOf(step({ variants: { TS } }), 'KA')).toBe('');
+    expect(keyOf(step({ variants: { TS } }), 'x')).not.toContain('x');
   });
 });

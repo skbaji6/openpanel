@@ -30,6 +30,7 @@ import type { RuleDefinition } from '../rules/rule.schema';
 import { linkKey } from '../tracking/keys';
 import { DEFAULT_TRACKING_SETTINGS } from '../tracking/settings';
 import { openLinkToken } from '../tracking/token';
+import { COUNT_SQL } from '../tracking/variant-counts';
 import { createEngine, lockProfiles } from './engine';
 import {
   capLockKey,
@@ -654,6 +655,32 @@ describe('runTick', () => {
     await enrollOne(VARIANTS_ONLY_RULE);
     expect(await tick()).toEqual({ ...ZERO, sent: 1 });
     expect(calls[0]?.msg.body).toBe('telangana Ada');
+  });
+
+  it('counts the chosen variant key, not the state', async () => {
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.contacts SET attributes = $1::jsonb',
+      JSON.stringify({ firstName: 'Ada', state: ' ts ' })
+    );
+    await enrollOne(VARIANTS_ONLY_RULE);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    const counts = await sql.$queryRawUnsafe<
+      { variant_key: string; sent: number }[]
+    >('SELECT variant_key, sent FROM marketing.journey_variant_counts');
+    expect(counts).toEqual([{ variant_key: 'TS', sent: 1 }]);
+  });
+
+  it('a count error does not change the step status', async () => {
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.contacts SET attributes = $1::jsonb',
+      JSON.stringify({ firstName: 'Ada', state: 'TS' })
+    );
+    const { enrollmentId } = await enrollOne(VARIANTS_ONLY_RULE);
+    const failing = flakySql('$executeRawUnsafe', COUNT_SQL.sent, 5);
+    expect(await tick(CFG, { sql: failing })).toEqual({ ...ZERO, sent: 1 });
+    const [step] = await steps(enrollmentId);
+    expect(step?.status).toBe('sent');
+    expect(calls).toHaveLength(1);
   });
 
   it('an unreachable student on a variants-only step keeps reason unreachable:no_active_device, not no_state_trait', async () => {

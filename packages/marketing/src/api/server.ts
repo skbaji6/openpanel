@@ -32,6 +32,7 @@ import { campaignRoutes } from './routes-campaigns';
 import { channelSettingsRoutes } from './routes-channel-settings';
 import { dashboardRoutes } from './routes-dashboard';
 import { routesJourneys } from './routes-journeys';
+import { routesReports } from './routes-reports';
 import { syncRoutes } from './routes-sync';
 import { templateRoutes } from './routes-templates';
 import { routesTracking } from './routes-tracking';
@@ -197,6 +198,7 @@ export function createServer(deps: ServerDeps) {
       cfg,
       settings: deps.trackingSettings ?? createTrackingSettingsCache({ sql }),
     }),
+    ...routesReports({ sql }),
     ...templateRoutes(templates),
     ...(deps.redis && sources
       ? [

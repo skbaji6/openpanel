@@ -27,6 +27,10 @@ import type { Step, StepTemplate } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
 import { applyTracking, planTracking } from '../tracking/links';
 import type { TrackingSettingsCache } from '../tracking/settings';
+import {
+  countVariantOutcome,
+  type VariantOutcome,
+} from '../tracking/variant-counts';
 import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
 import {
   type createEngine,
@@ -1098,8 +1102,17 @@ async function deliver(
     stepDef,
     isRecord(context.attributes) ? context.attributes : {}
   );
+  const counted = (outcome: Outcome) =>
+    countStepOutcome(
+      deps,
+      context,
+      claim.step_index,
+      stepDef,
+      choice.variantKey,
+      outcome
+    );
   if (!choice.ok) {
-    return await step.finish('skipped', choice.reason);
+    return await counted(await step.finish('skipped', choice.reason));
   }
   const quietHours = zQuietHours.parse(context.quiet_hours ?? null);
   const now = deps.now();
@@ -1111,10 +1124,12 @@ async function deliver(
   try {
     adapter = getAdapter(stepDef.channel);
   } catch {
-    return await step.finish('skipped', 'channel_unavailable');
+    return await counted(await step.finish('skipped', 'channel_unavailable'));
   }
   if (!context.config_encrypted) {
-    return await step.finish('skipped', 'channel_not_configured');
+    return await counted(
+      await step.finish('skipped', 'channel_not_configured')
+    );
   }
   const loaded = loadChannelConfig(
     adapter.configSchema,
@@ -1122,7 +1137,9 @@ async function deliver(
     deps.cfg.encryptionKey
   );
   if (!loaded.ok) {
-    return await step.finish('skipped', 'invalid_channel_config');
+    return await counted(
+      await step.finish('skipped', 'invalid_channel_config')
+    );
   }
 
   const trackingSettings = await deps.trackingSettings?.get(context.project_id);
@@ -1191,6 +1208,41 @@ async function deliver(
     entry !== undefined,
     sendResult.invalidTokens
   );
+  return await counted(outcome);
+}
+
+const isCountable = (outcome: Outcome): outcome is VariantOutcome =>
+  outcome === 'sent' || outcome === 'skipped' || outcome === 'failed';
+
+// Runs after the mark and swallows everything: a counter must never change a send's result or retry it.
+// Only the error class is logged, since database errors can quote bound values.
+async function countStepOutcome(
+  deps: TickDeps,
+  context: StepContext,
+  stepIndex: number,
+  stepDef: Step,
+  variantKey: string,
+  outcome: Outcome
+): Promise<Outcome> {
+  if (stepDef.variants === undefined || !isCountable(outcome)) {
+    return outcome;
+  }
+  try {
+    await countVariantOutcome(deps.sql, {
+      projectId: context.project_id,
+      ruleId: context.rule_id,
+      stepIndex,
+      variantKey,
+      status: outcome,
+      at: deps.now(),
+    });
+  } catch (error) {
+    (deps.logger ?? console).warn(
+      LOG_PREFIX,
+      'variant count failed:',
+      error instanceof Error ? error.name : 'unknown'
+    );
+  }
   return outcome;
 }
 

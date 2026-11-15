@@ -467,6 +467,8 @@ describe('marketing proxy', () => {
     ['POST', 'campaigns/c1/estimate'],
     ['GET', 'campaigns/c1/test-sends'],
     ['GET', 'tracking-settings'],
+    ['GET', 'reports/campaigns/c1'],
+    ['GET', 'reports/journeys/r1'],
     ...SETTINGS_CHANNELS.map((channel): [string, string] => [
       'GET',
       `channels/${channel}/settings`,

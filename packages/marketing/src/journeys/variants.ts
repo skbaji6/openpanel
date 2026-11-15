@@ -1,11 +1,14 @@
 import type { Step, StepTemplate } from '../rules/rule.schema';
 
 export const STATE_TRAIT = 'state';
+export const DEFAULT_VARIANT_KEY = 'default';
 
+// variantKey is the operator's configured key, never the student's state value.
 export type MessageChoice =
-  | { ok: true; template: StepTemplate & { body: string } }
+  | { ok: true; variantKey: string; template: StepTemplate & { body: string } }
   | {
       ok: false;
+      variantKey: string;
       reason: 'no_state_trait' | 'no_variant_for_state' | 'template_not_pinned';
     };
 
@@ -16,26 +19,25 @@ function stateOf(traits: Record<string, unknown>): string {
 }
 
 // Operators type keys by hand, so " ts " and "TS" must reach the same students; an exact key still wins.
-function variantFor(
+function variantKeyFor(
   variants: Record<string, StepTemplate>,
   state: string
-): StepTemplate | undefined {
+): string | undefined {
   if (Object.hasOwn(variants, state)) {
-    return variants[state];
+    return state;
   }
   const wanted = state.toLowerCase();
-  const key = Object.keys(variants).find(
+  return Object.keys(variants).find(
     (candidate) => candidate.trim().toLowerCase() === wanted
   );
-  return key === undefined ? undefined : variants[key];
 }
 
-function pinned(template: StepTemplate): MessageChoice {
+function pinned(template: StepTemplate, variantKey: string): MessageChoice {
   const { body } = template;
   if (body === undefined) {
-    return { ok: false, reason: 'template_not_pinned' };
+    return { ok: false, variantKey, reason: 'template_not_pinned' };
   }
-  return { ok: true, template: { ...template, body } };
+  return { ok: true, variantKey, template: { ...template, body } };
 }
 
 export function chooseMessage(
@@ -44,13 +46,17 @@ export function chooseMessage(
 ): MessageChoice {
   const variants = step.variants ?? {};
   const state = stateOf(traits);
-  const variant = state === '' ? undefined : variantFor(variants, state);
-  const chosen = variant ?? step.template;
-  if (chosen) {
-    return pinned(chosen);
+  const key = state === '' ? undefined : variantKeyFor(variants, state);
+  const variant = key === undefined ? undefined : variants[key];
+  if (key !== undefined && variant) {
+    return pinned(variant, key);
+  }
+  if (step.template) {
+    return pinned(step.template, DEFAULT_VARIANT_KEY);
   }
   return {
     ok: false,
+    variantKey: '',
     reason: state === '' ? 'no_state_trait' : 'no_variant_for_state',
   };
 }
