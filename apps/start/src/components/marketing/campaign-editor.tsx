@@ -30,7 +30,7 @@ import {
 import { CampaignLaunchPanel } from './campaign-launch-panel';
 import { PushMessageEditor } from './push-message-editor';
 import { useAudiences } from './use-campaign';
-import { useMarketingRole } from './use-marketing-role';
+import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,7 +41,6 @@ import { showConfirm } from '@/modals';
 
 const VERSION_CONFLICT = 'version_conflict';
 const NOT_DRAFT = 'not_draft';
-const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
 const SELECT_CLASS =
   'h-8 self-start rounded-md border bg-background px-2 text-sm';
 const MODE_LABELS = { dynamic: 'Dynamic', snapshot: 'Snapshot' } as const;
@@ -174,6 +173,8 @@ function RegistryTemplateField({
       marketingFetch<{ templates: TemplateRow[] }>(
         `templates?channel=${channel}`
       ),
+    staleTime: 0,
+    refetchOnWindowFocus: 'always',
   });
   const enabled = (templates.data?.templates ?? []).filter((t) => t.enabled);
   const selected = enabled.find((t) => t.templateId === value);
@@ -379,6 +380,8 @@ function QuietHoursFields({
         `channels/${form.channel}/settings`
       ),
     retry: false,
+    staleTime: 0,
+    refetchOnWindowFocus: 'always',
   });
   const choose = (choice: QuietHoursChoice) => {
     set('quietHours', choice);
@@ -646,7 +649,7 @@ export function CampaignEditor({
 
   const save = useMutation({
     mutationFn: () => {
-      const body = toDraftBody(form) as Record<string, unknown>;
+      const body = toDraftBody(form);
       if (row) {
         return marketingFetch<CampaignRow>(
           `campaigns/${encodeURIComponent(row.id)}`,

@@ -254,7 +254,7 @@ function timingOf(form: CampaignForm) {
   };
 }
 
-export function toDraftBody(form: CampaignForm): unknown {
+export function toDraftBody(form: CampaignForm): Record<string, unknown> {
   const scheduled = form.sendKind === 'scheduled';
   return {
     name: form.name.trim(),

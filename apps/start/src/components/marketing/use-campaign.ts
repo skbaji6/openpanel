@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   MarketingApiError,
   useMarketingFetch,
@@ -39,5 +39,25 @@ export function useAudiences() {
   return useQuery({
     queryKey: queryKey('audiences'),
     queryFn: () => marketingFetch<{ audiences: AudienceRow[] }>('audiences'),
+    // Audiences are edited in another tab; coming back must show the current version.
+    staleTime: 0,
+    refetchOnWindowFocus: 'always',
   });
+}
+
+// A request that timed out may still have committed, so the row and the list are re-read.
+export function useRefreshCampaign() {
+  const queryKey = useMarketingQueryKey();
+  const client = useQueryClient();
+  return (campaignId: string) =>
+    Promise.all([
+      client.invalidateQueries({
+        queryKey: queryKey('campaigns', campaignId),
+        exact: true,
+      }),
+      client.invalidateQueries({
+        queryKey: queryKey('campaigns'),
+        exact: true,
+      }),
+    ]);
 }

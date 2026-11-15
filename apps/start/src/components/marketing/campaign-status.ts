@@ -20,6 +20,8 @@ const POLLED_STATES: readonly CampaignState[] = [
   'running',
   'paused',
 ];
+export const QUEUED_START_LINE =
+  'Waiting for the other campaign in this project to finish. The count is not checked again when it starts.';
 const BUILDING_STATES: readonly CampaignState[] = ['running', 'paused'];
 
 // Mirrors the server's transition table (campaign/state.ts) and RETRYABLE in operator.ts.
@@ -118,6 +120,9 @@ export function waitingLine(
     return row.materializeError
       ? `Building the recipient list. ${labelDispatchError(row.materializeError)}`
       : 'Building the recipient list';
+  }
+  if (row.state === 'scheduled' && row.sendKind === 'now') {
+    return QUEUED_START_LINE;
   }
   if (row.state !== 'running' || !row.dispatchError) {
     return null;

@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import type { ApiIssue } from './contract';
-import { ERROR_LABELS } from './error-labels';
+import { labelErrorCode } from './error-labels';
 import { labelSettingsIssue } from './reason-labels';
 import { useAppParams } from '@/hooks/use-app-params';
 
@@ -59,6 +59,11 @@ export async function marketingFetch<T>(
     ...init,
     headers,
     credentials: 'same-origin',
+  }).catch((error: unknown) => {
+    if (error instanceof TypeError) {
+      throw new MarketingApiError(0, 'network_error', [], null);
+    }
+    throw error;
   });
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -103,7 +108,7 @@ export function describeMarketingError(error: unknown): string {
   const issues = error.issues
     .map((issue) => `${issue.path}: ${issue.message}`)
     .join('; ');
-  const message = ERROR_LABELS[error.code] ?? error.code;
+  const message = labelErrorCode(error.code);
   const settingsIssues =
     error.code === 'invalid_settings' && Array.isArray(error.details?.issues)
       ? error.details.issues

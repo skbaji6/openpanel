@@ -16,6 +16,7 @@ import {
   PREVIEW_TTL_MS,
   previewIsFresh,
   startConfirmation,
+  startHint,
   testSendIdProblem,
   testSendIsPending,
 } from './campaign-launch';
@@ -140,30 +141,6 @@ describe('previewIsFresh', () => {
 });
 
 describe('confirmFromError', () => {
-  test('confirmation_required asks with the server count and channel', () => {
-    expect(
-      confirmFromError(
-        apiError('confirmation_required', { count: 1200, channel: 'sms' }),
-        undefined
-      )
-    ).toEqual({ kind: 'confirm', count: 1200, channel: 'sms' });
-  });
-
-  test('confirmation_required with unusable details is not a confirm', () => {
-    expect(
-      confirmFromError(
-        apiError('confirmation_required', { count: '1200', channel: 'sms' }),
-        undefined
-      )
-    ).toBeNull();
-    expect(
-      confirmFromError(
-        apiError('confirmation_required', { count: 1, channel: 'fax' }),
-        undefined
-      )
-    ).toBeNull();
-  });
-
   test('quota_spread_required after a confirm keeps its count and channel', () => {
     expect(
       confirmFromError(
@@ -381,5 +358,35 @@ describe('startConfirmation', () => {
         'Schedule for 2026-11-20 09:30 (Asia/Kolkata) to 7 students by SMS?',
       confirm: { count: 7, channel: 'sms' },
     });
+  });
+});
+
+describe('start guards', () => {
+  test('no confirmation or start for an empty audience', () => {
+    const row = campaign({ countPreview: preview({ count: 0 }) });
+    expect(startConfirmation(row, true)).toBeNull();
+    expect(startHint(row, true)).toContain('no students');
+  });
+
+  test('hint depends on whether a count exists and is fresh', () => {
+    expect(startHint(campaign({ countPreview: null }), false)).toBe(
+      'Count the audience first'
+    );
+    expect(startHint(campaign({ countPreview: preview() }), false)).toBe(
+      'Count again first'
+    );
+    expect(startHint(campaign({ countPreview: preview() }), true)).toBeNull();
+  });
+
+  test('the confirm names a registry template and its version', () => {
+    const row = campaign({
+      channel: 'sms',
+      template: { templateId: 'exam_reminder' },
+      templateVersion: 3,
+      countPreview: preview({ count: 5 }),
+    });
+    expect(startConfirmation(row, true)?.text).toContain(
+      'using template exam_reminder, version 3'
+    );
   });
 });

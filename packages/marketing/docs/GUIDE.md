@@ -257,7 +257,7 @@ A campaign sends one message to an audience over one channel. It is drafted, che
 
 **Push campaigns.** A push campaign template is a title (`subject`), the text (`body`), an optional `imageUrl` and an optional `link`. The image must be an `https` URL; the link may be a web address or an app deep link such as `sia://course/12`, but not `javascript:`, `data:`, `file:` or `vbscript:`. Neither takes `{{variables}}`. The app receives the link as `data.link` and decides what to open. Journey push steps are unchanged.
 
-**One campaign at a time per project.** While a campaign is running or paused, a new start is queued: it becomes `scheduled` and starts by itself as soon as the slot is free. A paused campaign keeps the slot until it is resumed and finishes, or is cancelled.
+**One campaign at a time per project.** While a campaign is running or paused, a new start is queued: it becomes `scheduled` and starts by itself as soon as the slot is free, unless the wait outlasts `ifLateMinutes`, in which case it is marked `missed`. A paused campaign keeps the slot until it is resumed and finishes, or is cancelled.
 
 **When no worker runs at the scheduled time.** The campaign still starts if a worker picks it up within `ifLateMinutes` of its time, plus one minute of grace (so `0` still allows the due minute); later than that it is marked `missed` and is not sent. A scheduled campaign that is due while another one holds the slot also waits, and is missed if the wait outlasts its window. Missed is final: create a new campaign.
 

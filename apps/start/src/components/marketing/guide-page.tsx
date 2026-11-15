@@ -286,7 +286,9 @@ export function GuidePage() {
             <dt className="font-medium">Scheduled</dt>
             <dd className="text-muted-foreground">
               Waiting for its send time, or for another campaign in the project
-              to finish. Unschedule turns it back into a draft.
+              to finish. If the wait outlasts the allowed lateness of its time,
+              it is marked Missed and nothing is sent. Unschedule turns it back
+              into a draft.
             </dd>
           </div>
           <div>

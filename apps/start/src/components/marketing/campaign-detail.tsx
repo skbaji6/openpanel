@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { MegaphoneIcon } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import {
   describeMarketingError,
@@ -15,7 +16,6 @@ import {
 } from './campaign-form';
 import {
   campaignPath,
-  NOT_ADMIN_NOTE,
   UnscheduleButton,
   useStoreCampaign,
 } from './campaign-launch-panel';
@@ -23,6 +23,7 @@ import { CampaignRecipients } from './campaign-recipients';
 import {
   ALREADY_RECEIVED,
   actionsFor,
+  type CampaignActionName,
   outcomeLine,
   progressOf,
   shouldPoll,
@@ -34,8 +35,9 @@ import {
   campaignLoadErrorTitle,
   useAudiences,
   useCampaign,
+  useRefreshCampaign,
 } from './use-campaign';
-import { useMarketingRole } from './use-marketing-role';
+import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
@@ -91,6 +93,7 @@ function ActionButton({
 }) {
   const marketingFetch = useMarketingFetch();
   const storeCampaign = useStoreCampaign();
+  const refreshCampaign = useRefreshCampaign();
   const copy = ACTION_COPY[action];
   const run = useMutation({
     mutationFn: async () => {
@@ -106,7 +109,10 @@ function ActionButton({
       toast.success(copy.done);
       storeCampaign(saved);
     },
-    onError: (error) => toast.error(describeMarketingError(error)),
+    onError: (error) => {
+      toast.error(describeMarketingError(error));
+      refreshCampaign(campaign.id);
+    },
   });
   return (
     <Button
@@ -127,12 +133,12 @@ function ActionButton({
   );
 }
 
-const ACTION_TO_SERVER = {
+const ACTION_TO_SERVER: Partial<Record<CampaignActionName, ServerAction>> = {
   pause: 'pause',
   resume: 'resume',
   cancel: 'cancel',
   retryUncertain: 'retry-uncertain',
-} as const;
+};
 
 function Actions({ row }: { row: CampaignRow }) {
   const { isAdmin } = useMarketingRole();
@@ -152,15 +158,10 @@ function Actions({ row }: { row: CampaignRow }) {
           if (action === 'unschedule') {
             return <UnscheduleButton campaign={row} key={action} />;
           }
-          if (action in ACTION_TO_SERVER) {
+          const serverAction = ACTION_TO_SERVER[action];
+          if (serverAction) {
             return (
-              <ActionButton
-                action={
-                  ACTION_TO_SERVER[action as keyof typeof ACTION_TO_SERVER]
-                }
-                campaign={row}
-                key={action}
-              />
+              <ActionButton action={serverAction} campaign={row} key={action} />
             );
           }
           return null;
@@ -176,9 +177,11 @@ function Actions({ row }: { row: CampaignRow }) {
 function Counters({
   row,
   preSkipped,
+  totalKnown,
 }: {
   row: CampaignRow;
   preSkipped: number;
+  totalKnown: boolean;
 }) {
   const { total, done, percent } = progressOf(
     row.counters,
@@ -195,7 +198,7 @@ function Counters({
   return (
     <div className="col gap-2">
       <Progress
-        aria-label={`${done} of ${total} done`}
+        aria-label={totalKnown ? `${done} of ${total} done` : `${done} done`}
         size="lg"
         // 0 would render a stray "0" inside the bar
         value={percent || undefined}
@@ -282,6 +285,16 @@ function CampaignBody({
 }) {
   const audiences = useAudiences();
   const skipReasons = useSkipReasons(row);
+  const refreshCampaign = useRefreshCampaign();
+  const lastState = useRef(row.state);
+  // The list shows the state too, so it is re-read when polling sees the state move.
+  useEffect(() => {
+    if (lastState.current === row.state) {
+      return;
+    }
+    lastState.current = row.state;
+    refreshCampaign(row.id);
+  }, [row.state, row.id, refreshCampaign]);
   const preSkipped = (skipReasons.data?.reasons ?? [])
     .filter((item) => item.reason === ALREADY_RECEIVED)
     .reduce((sum, item) => sum + item.count, 0);
@@ -318,7 +331,11 @@ function CampaignBody({
           </div>
         ))}
       </dl>
-      <Counters preSkipped={preSkipped} row={row} />
+      <Counters
+        preSkipped={preSkipped}
+        row={row}
+        totalKnown={!skipReasons.isPending}
+      />
       {status && <p className="text-sm">{status}</p>}
       <div className="row items-center gap-2">
         <Actions row={row} />

@@ -1,7 +1,6 @@
 import type { MarketingApiError } from './api';
 import { looksLikeContacts } from './audience-paste';
 import {
-  CAMPAIGN_CHANNELS,
   type CampaignChannel,
   type CampaignRow,
   type Confirmation,
@@ -30,7 +29,6 @@ const ID_PROBLEM_CONTACT =
 const ID_PROBLEM_LONG = `A student id is at most ${MAX_ID_LENGTH} characters.`;
 
 export type LaunchDecision =
-  | { kind: 'confirm'; count: number; channel: CampaignChannel }
   | {
       kind: 'spread';
       count: number;
@@ -47,9 +45,6 @@ export interface LaunchStep {
   done: boolean;
   note: string;
 }
-
-const isChannel = (value: unknown): value is CampaignChannel =>
-  CAMPAIGN_CHANNELS.some((channel) => channel === value);
 
 const isCount = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0;
@@ -78,13 +73,6 @@ export function confirmFromError(
     return { kind: 'recount' };
   }
   const details = error.details ?? {};
-  if (error.code === 'confirmation_required') {
-    const { count, channel } = details;
-    if (!(isCount(count) && isChannel(channel))) {
-      return null;
-    }
-    return { kind: 'confirm', count, channel };
-  }
   if (error.code === 'quota_spread_required') {
     const { count, remainingToday, daysNeeded } = details;
     if (!(isCount(count) && isCount(remainingToday) && isCount(daysNeeded))) {
@@ -214,13 +202,43 @@ export function launchAction(row: CampaignRow): {
   };
 }
 
+// Registry channels send a provider template picked by id; inline messages have no name to show.
+function templateClause(row: CampaignRow): string {
+  const template = row.template;
+  const id =
+    typeof template === 'object' &&
+    template !== null &&
+    'templateId' in template
+      ? template.templateId
+      : null;
+  if (typeof id !== 'string' || id === '') {
+    return '';
+  }
+  const version =
+    row.templateVersion === null ? '' : `, version ${row.templateVersion}`;
+  return ` using template ${id}${version}`;
+}
+
+export function startHint(row: CampaignRow, fresh: boolean): string | null {
+  if (!row.countPreview) {
+    return 'Count the audience first';
+  }
+  if (!fresh) {
+    return 'Count again first';
+  }
+  if (row.countPreview.count === 0) {
+    return 'The audience has no students, so there is nothing to send';
+  }
+  return null;
+}
+
 // Every start names the count on screen, so the server refuses it (confirmation_mismatch) when that count is no longer true.
 export function startConfirmation(
   row: CampaignRow,
   fresh: boolean
 ): { title: string; text: string; confirm: Confirmation } | null {
   const preview = row.countPreview;
-  if (!(preview && fresh)) {
+  if (!(preview && fresh) || preview.count === 0) {
     return null;
   }
   const action = launchAction(row);
@@ -232,7 +250,7 @@ export function startConfirmation(
       : `${action.label} to ${audience}?`;
   return {
     title,
-    text: `${preview.count} students will get this campaign by ${channelName}. Messages that went out cannot be recalled.`,
+    text: `${preview.count} students will get this campaign by ${channelName}${templateClause(row)}. Messages that went out cannot be recalled.`,
     confirm: { count: preview.count, channel: row.channel },
   };
 }

@@ -73,4 +73,25 @@ export const ERROR_LABELS: Record<string, string> = {
     'Freezing was interrupted by another change. Try freezing again.',
   secret_required: 'Enter the secret again to save these changes.',
   invalid_profile_id: 'That student id is not valid.',
+  marketing_unavailable:
+    'The marketing service is not running or cannot be reached. Try again in a moment.',
+  marketing_timeout:
+    'The marketing service took too long. The action may still have happened; reload to check.',
+  core_timeout:
+    'The server took too long. The action may still have happened; reload to check.',
+  internal: 'The server hit an unexpected error. Try again in a moment.',
+  invalid_project: 'This project could not be found.',
+  method_not_allowed: 'This action is not supported.',
+  network_error: 'Could not reach the server',
 };
+
+const HTTP_CODE = /^http_(\d+)$/;
+
+export function labelErrorCode(code: string): string {
+  const known = ERROR_LABELS[code];
+  if (known) {
+    return known;
+  }
+  const status = HTTP_CODE.exec(code)?.[1];
+  return status ? `The server answered with an error (${status}).` : code;
+}

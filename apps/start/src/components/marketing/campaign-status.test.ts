@@ -210,6 +210,20 @@ describe('waitingLine', () => {
   });
 });
 
+describe('queued start', () => {
+  it('explains a start that waits for the other campaign', () => {
+    expect(waitingLine(row({ state: 'scheduled', sendKind: 'now' }), 0)).toBe(
+      'Waiting for the other campaign in this project to finish. The count is not checked again when it starts.'
+    );
+  });
+
+  it('says nothing for a campaign scheduled for later', () => {
+    expect(
+      waitingLine(row({ state: 'scheduled', sendKind: 'scheduled' }), 0)
+    ).toBeNull();
+  });
+});
+
 describe('outcomeLine', () => {
   it('explains a missed campaign', () => {
     expect(outcomeLine(row({ state: 'missed' }))).toBe(

@@ -27,6 +27,7 @@ import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
+import { showConfirm } from '@/modals';
 
 const IN_USE_NOTE =
   'A campaign uses this audience, so it cannot be changed. You can still check it.';
@@ -126,6 +127,7 @@ function EditorForm({
   const [conflict, setConflict] = useState(false);
   const [uploads, setUploads] = useState<Record<string, boolean>>({});
   const [showProblems, setShowProblems] = useState(false);
+  const [blankForm] = useState(() => JSON.stringify(toBody(form)));
   const body = toBody(form);
   const typed = JSON.stringify(body);
   const problems = [
@@ -137,6 +139,18 @@ function EditorForm({
   const current = row ? definitionOf(row) : null;
   const hasUnsavedChanges = typed !== current;
   const locked = row?.inUse === true;
+  const edited = row ? hasUnsavedChanges : typed !== blankForm;
+  const back = () => {
+    if (!edited || locked) {
+      onClose();
+      return;
+    }
+    showConfirm({
+      title: 'Discard unsaved changes?',
+      text: 'Your edits to this audience have not been saved.',
+      onConfirm: onClose,
+    });
+  };
   const uploading = Object.values(uploads).some(Boolean);
 
   // List changes and freezes bump the version without touching the definition, so only a
@@ -318,7 +332,7 @@ function EditorForm({
         </ul>
       )}
       <div className="row items-center justify-end gap-2 border-t p-4">
-        <Button onClick={onClose} type="button" variant="ghost">
+        <Button onClick={back} type="button" variant="ghost">
           Back
         </Button>
         {!locked && (

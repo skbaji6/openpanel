@@ -17,7 +17,6 @@ const REQUIRED_CODES = [
   'template_mapping_missing',
   'template_channel_mismatch',
   'count_preview_required',
-  'confirmation_required',
   'confirmation_mismatch',
   'quota_spread_required',
   'another_campaign_active',
@@ -54,6 +53,13 @@ const REQUIRED_CODES = [
   'not_configured',
   'freeze_lock_lost',
   'secret_required',
+  'marketing_unavailable',
+  'marketing_timeout',
+  'core_timeout',
+  'internal',
+  'invalid_project',
+  'method_not_allowed',
+  'network_error',
 ];
 
 describe('error labels', () => {
@@ -63,6 +69,17 @@ describe('error labels', () => {
       expect(label, code).toBeTruthy();
       expect(label, code).not.toBe(code);
     }
+  });
+
+  test('an unknown http status and a network failure read as sentences', () => {
+    expect(
+      describeMarketingError(new MarketingApiError(502, 'http_502', [], null))
+    ).toBe('The server answered with an error (502).');
+    expect(
+      describeMarketingError(
+        new MarketingApiError(0, 'network_error', [], null)
+      )
+    ).toBe('Could not reach the server');
   });
 
   test('version_conflict tells the user to reload', () => {

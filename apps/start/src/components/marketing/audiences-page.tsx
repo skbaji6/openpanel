@@ -11,7 +11,7 @@ import {
 import { AudienceEditor } from './audience-editor';
 import { formatCount } from './audience-filter';
 import type { AudienceRow, AudienceSchema } from './campaign-contract';
-import { useMarketingRole } from './use-marketing-role';
+import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
@@ -23,7 +23,6 @@ const route = getRouteApi(
   '/_app/$organizationId/$projectId/marketing/_tabs/audiences'
 );
 
-const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
 const NOT_ADMIN_NOTE_ID = 'audiences-not-admin-note';
 const UNREACHABLE_CODES = new Set([
   'source_unavailable',

@@ -15,6 +15,7 @@ import {
   MAX_ID_CONDITION_VALUES,
   MAX_PREVIEW_LIMIT,
 } from './campaign-contract';
+import { testSendIdProblem } from './campaign-launch';
 import { isVersionConflict, useAudienceRow } from './use-audience-row';
 import { InputWithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
@@ -167,6 +168,7 @@ function ExplainCheck({ path }: { path: string }) {
   const [result, setResult] = useState<Explanation | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [pending, setPending] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
   const check = async (id: string) => {
     setPending(true);
     setError(null);
@@ -189,7 +191,9 @@ function ExplainCheck({ path }: { path: string }) {
       className="col gap-2"
       onSubmit={(event) => {
         event.preventDefault();
-        if (studentId.trim() !== '') {
+        const found = testSendIdProblem(studentId);
+        setProblem(found);
+        if (!found) {
           check(studentId.trim());
         }
       }}
@@ -197,6 +201,7 @@ function ExplainCheck({ path }: { path: string }) {
       <div className="row items-end gap-2">
         <InputWithLabel
           className="flex-1"
+          error={problem ?? undefined}
           hint="A student id from your system, not a phone number or email"
           id={fieldId}
           label="Why is this student in or out?"

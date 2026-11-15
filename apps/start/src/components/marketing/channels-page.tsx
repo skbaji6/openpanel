@@ -281,7 +281,8 @@ function ChannelCard({ channel }: { channel: CampaignChannel }) {
         {config.data && (
           <ChannelForm
             channel={channel}
-            key={config.dataUpdatedAt}
+            // Keyed on the saved content, so a refetch that changed nothing keeps typed credentials.
+            key={JSON.stringify(config.data)}
             loaded={config.data}
           />
         )}

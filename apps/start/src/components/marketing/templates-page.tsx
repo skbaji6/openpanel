@@ -4,6 +4,7 @@ import { MessageSquareTextIcon, PlusIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   describeMarketingError,
+  MarketingApiError,
   useMarketingFetch,
   useMarketingQueryKey,
 } from './api';
@@ -14,7 +15,7 @@ import {
 } from './campaign-contract';
 import { formFromRow, TemplateEditor } from './template-editor';
 import { emptyTemplate } from './template-form';
-import { useMarketingRole } from './use-marketing-role';
+import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
@@ -28,11 +29,22 @@ const CHANNEL_LABELS: Record<ProviderTemplateChannel, string> = {
   sms: 'SMS',
   whatsapp: 'WhatsApp',
 };
-const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
+
+const NOT_FOUND = 404;
+
+function templateLoadErrorTitle(error: unknown): string {
+  const notFound =
+    error instanceof MarketingApiError && error.status === NOT_FOUND;
+  return notFound ? 'Template not found' : 'Could not load the template';
+}
 
 function providerReference(row: TemplateRow): string {
-  const ref = row.providerRef as Record<string, string | undefined>;
-  return ref.flowId ?? ref.templateName ?? '';
+  const ref = row.providerRef;
+  if (typeof ref !== 'object' || ref === null) {
+    return '';
+  }
+  const { flowId, templateName } = ref as Record<string, unknown>;
+  return [flowId, templateName].find((id) => typeof id === 'string') ?? '';
 }
 
 function EnableButton({ row }: { row: TemplateRow }) {
@@ -99,12 +111,12 @@ export function TemplatesPage() {
   if (search.id && linked.isPending) {
     return <FullPageLoadingState />;
   }
-  if (search.id && linked.error) {
+  if (search.id && linked.error && !linked.data) {
     return (
       <FullPageEmptyState
         description={describeMarketingError(linked.error)}
         icon={MessageSquareTextIcon}
-        title="Template not found"
+        title={templateLoadErrorTitle(linked.error)}
       >
         <Button onClick={close}>Back to templates</Button>
       </FullPageEmptyState>

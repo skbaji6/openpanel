@@ -12,6 +12,8 @@ const DISPATCH_ERRORS = [
   'source_unavailable',
   'source_auth_failed',
   'source_error',
+  'source_protocol_error',
+  'internal_error',
   'channel_auth_failed',
   'channel_unreachable',
   'channel_not_configured',

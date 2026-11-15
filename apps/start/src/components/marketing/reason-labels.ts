@@ -2,6 +2,9 @@ const DISPATCH_ERRORS: Record<string, string> = {
   source_unavailable: 'Waiting: the audience API is not answering',
   source_auth_failed: 'Waiting: the audience API refused our credentials',
   source_error: 'Waiting: the audience API returned an error',
+  source_protocol_error:
+    'Waiting: the audience API answered in an unexpected format',
+  internal_error: 'Waiting: an unexpected error happened and will be retried',
   channel_auth_failed: 'Waiting: the channel provider refused our credentials',
   channel_unreachable: 'Waiting: the channel provider cannot be reached',
   channel_not_configured: 'Waiting: the channel is not set up',

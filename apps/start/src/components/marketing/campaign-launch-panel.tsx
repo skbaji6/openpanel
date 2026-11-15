@@ -26,13 +26,14 @@ import {
   PREVIEW_TTL_MS,
   previewIsFresh,
   startConfirmation,
+  startHint,
   testSendIdProblem,
   testSendIsPending,
 } from './campaign-launch';
 import { CAMPAIGN_POLL_MS } from './polling';
 import { labelTestSendReason, labelTestSendStatus } from './reason-labels';
-import { useAudiences } from './use-campaign';
-import { useMarketingRole } from './use-marketing-role';
+import { useAudiences, useRefreshCampaign } from './use-campaign';
+import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
 import { InputWithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
 import {
@@ -46,7 +47,16 @@ import {
 import { useAppParams } from '@/hooks/use-app-params';
 import { showConfirm, useOnPushModal } from '@/modals';
 
-export const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
+const QUEUED_TOAST =
+  'Queued: starts when the campaign that is sending now finishes';
+
+function launchToast(path: string, saved: CampaignRow): string {
+  if (saved.state === 'scheduled' && saved.sendKind === 'now') {
+    return QUEUED_TOAST;
+  }
+  return path === 'start' ? 'Campaign started' : 'Campaign scheduled';
+}
+
 const RECOUNT_NOTE =
   'The number of students changed or the count is out of date. Counting again…';
 const RECOUNTED_NOTE = 'Counted again. Check the new number and start again.';
@@ -252,7 +262,7 @@ function TestSendForm({
       <InputWithLabel
         autoComplete="off"
         error={problem ?? undefined}
-        hint="The id of a student in your audience API. The message goes to that one student."
+        hint="The id of a student in your audience API. This sends a real message to that student."
         label="Student id"
         onChange={(event) => setStudentId(event.target.value)}
         value={studentId}
@@ -338,6 +348,7 @@ function LaunchStep({
 }) {
   const marketingFetch = useMarketingFetch();
   const storeCampaign = useStoreCampaign();
+  const refreshCampaign = useRefreshCampaign();
   const action = launchAction(campaign);
   const inFlight = useRef(false);
   const dialogOpen = useRef(false);
@@ -362,6 +373,7 @@ function LaunchStep({
       error instanceof MarketingApiError ? confirmFromError(error, sent) : null;
     if (!decision) {
       toast.error(describeMarketingError(error));
+      refreshCampaign(campaign.id);
       return;
     }
     if (decision.kind === 'recount') {
@@ -370,14 +382,6 @@ function LaunchStep({
       return;
     }
     const channelName = CHANNEL_LABELS[decision.channel];
-    if (decision.kind === 'confirm') {
-      ask(
-        `Send to ${decision.count} students by ${channelName}?`,
-        `${decision.count} students will get this campaign by ${channelName}. Messages that went out cannot be recalled.`,
-        { count: decision.count, channel: decision.channel }
-      );
-      return;
-    }
     ask(
       `Only ${decision.remainingToday} emails are left today. Spread over ${decision.daysNeeded} days?`,
       `${decision.count} students will get this campaign by ${channelName}, spread over ${decision.daysNeeded} days by the daily quota.`,
@@ -405,14 +409,14 @@ function LaunchStep({
       setPending(false);
     }
     if (saved) {
-      toast.success(
-        action.path === 'start' ? 'Campaign started' : 'Campaign scheduled'
-      );
+      toast.success(launchToast(action.path, saved));
       storeCampaign(saved);
       return;
     }
     handleError(failure, confirm);
   }
+
+  const hint = startHint(campaign, fresh);
 
   const begin = () => {
     const plan = startConfirmation(campaign, fresh);
@@ -430,7 +434,7 @@ function LaunchStep({
       </p>
       <div>
         <Button
-          disabled={dialogShown || counting || !fresh}
+          disabled={dialogShown || counting || hint !== null}
           loading={pending}
           onClick={begin}
           type="button"
@@ -438,11 +442,7 @@ function LaunchStep({
           {action.label}
         </Button>
       </div>
-      {!fresh && (
-        <p className="text-muted-foreground text-xs">
-          Count the audience first
-        </p>
-      )}
+      {hint && <p className="text-muted-foreground text-xs">{hint}</p>}
     </Step>
   );
 }
@@ -458,7 +458,9 @@ export function CampaignLaunchPanel({ campaign }: { campaign: CampaignRow }) {
       ?.version ?? null;
   const fresh = previewIsFresh(campaign, Date.now(), audienceVersion);
   const freshnessUnknown =
-    Boolean(audiences.error) && campaign.countPreview !== null;
+    audiences.data === undefined &&
+    Boolean(audiences.error) &&
+    campaign.countPreview !== null;
   const [, setExpiredAt] = useState(0);
   const countedAt = campaign.countPreview?.countedAt;
 
@@ -501,6 +503,9 @@ export function CampaignLaunchPanel({ campaign }: { campaign: CampaignRow }) {
       }),
     enabled: fresh,
     retry: false,
+    // Channel settings are fixed in another tab; coming back must re-estimate.
+    staleTime: 0,
+    refetchOnWindowFocus: 'always',
   });
 
   const testSendsKey = [...campaignKey, 'test-sends'];
@@ -576,6 +581,7 @@ export function CampaignLaunchPanel({ campaign }: { campaign: CampaignRow }) {
 export function UnscheduleButton({ campaign }: { campaign: CampaignRow }) {
   const marketingFetch = useMarketingFetch();
   const storeCampaign = useStoreCampaign();
+  const refreshCampaign = useRefreshCampaign();
   const { isAdmin } = useMarketingRole();
   const unschedule = useMutation({
     mutationFn: () =>
@@ -587,7 +593,10 @@ export function UnscheduleButton({ campaign }: { campaign: CampaignRow }) {
       toast.success('Campaign unscheduled; it is a draft again');
       storeCampaign(saved);
     },
-    onError: (error) => toast.error(describeMarketingError(error)),
+    onError: (error) => {
+      toast.error(describeMarketingError(error));
+      refreshCampaign(campaign.id);
+    },
   });
   if (!isAdmin) {
     return (

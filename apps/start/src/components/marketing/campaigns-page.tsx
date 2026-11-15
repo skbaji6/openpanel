@@ -26,7 +26,7 @@ function OpenCampaign({
   if (campaign.isPending) {
     return <FullPageLoadingState />;
   }
-  if (campaign.error) {
+  if (campaign.error && !campaign.data) {
     return (
       <FullPageEmptyState
         description={describeMarketingError(campaign.error)}

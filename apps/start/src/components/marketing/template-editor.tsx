@@ -19,14 +19,15 @@ import {
   traitsOf,
   withRowIds,
 } from './template-form';
+import { NOT_ADMIN_NOTE } from './use-marketing-role';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { showConfirm } from '@/modals';
 
 const VERSION_CONFLICT = 'version_conflict';
-const NOT_ADMIN_NOTE = 'Only owners and admins can do this';
 const MISSING_VARIABLE_TEXT =
-  'A variable could not be filled: a trait it uses is missing or empty in the sample, so a real send would skip this student.';
+  'A variable could not be filled: a trait it uses is missing or empty in the sample, so a real send would fail for this student.';
 
 type PreviewResult =
   | { ok: true; variables: { slot: string; value: string }[]; text: string }
@@ -285,6 +286,21 @@ export function TemplateEditor({
   const problems = templateProblems(form);
   const errorOf = (path: string) =>
     showProblems ? problems.find((p) => p.path === path)?.message : undefined;
+  const dirty =
+    isAdmin &&
+    JSON.stringify(toTemplateBody(form)) !==
+      JSON.stringify(toTemplateBody(loaded.initial));
+  const back = () => {
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    showConfirm({
+      title: 'Discard unsaved changes?',
+      text: 'Your edits to this template have not been saved.',
+      onConfirm: onClose,
+    });
+  };
   const refresh = () =>
     client.invalidateQueries({ queryKey: queryKey('templates') });
 
@@ -498,7 +514,7 @@ export function TemplateEditor({
           <p className="text-muted-foreground text-xs">{NOT_ADMIN_NOTE}</p>
         )}
         <div className="row gap-2">
-          <Button onClick={onClose} type="button" variant="ghost">
+          <Button onClick={back} type="button" variant="ghost">
             {isAdmin ? 'Cancel' : 'Back'}
           </Button>
           {isAdmin && (
