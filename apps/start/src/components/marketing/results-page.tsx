@@ -1,11 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
 import { BarChart3Icon } from 'lucide-react';
+import { useState } from 'react';
 import {
   describeMarketingError,
   useMarketingFetch,
   useMarketingQueryKey,
 } from './api';
+import type { CampaignRow } from './campaign-contract';
+import { CampaignReport } from './campaign-report';
 import type { RuleResult } from './contract';
+import { JourneyReport } from './journey-report';
 import { FullPageEmptyState } from '@/components/full-page-empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import {
@@ -33,7 +37,93 @@ const COLUMNS: { key: Exclude<keyof RuleResult, 'goalKind'>; label: string }[] =
     { key: 'failed', label: 'Failed' },
   ];
 
+type OpenReport =
+  | { kind: 'journey'; id: string; name: string }
+  | { kind: 'campaign'; id: string; name: string };
+
+function OpenRowButton({ name, onOpen }: { name: string; onOpen: () => void }) {
+  return (
+    <button
+      aria-label={`Open report for ${name}`}
+      className="text-left font-medium hover:underline"
+      onClick={onOpen}
+      type="button"
+    >
+      {name}
+    </button>
+  );
+}
+
+function CampaignResults({
+  onOpen,
+}: {
+  onOpen: (campaign: CampaignRow) => void;
+}) {
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
+  const campaigns = useQuery({
+    queryKey: queryKey('campaigns'),
+    queryFn: () => marketingFetch<{ campaigns: CampaignRow[] }>('campaigns'),
+  });
+  return (
+    <section className="card col gap-2 p-4">
+      <h2 className="font-medium">Campaigns</h2>
+      {campaigns.isPending && (
+        <p className="text-muted-foreground text-sm">Loading campaigns...</p>
+      )}
+      {campaigns.error && (
+        <p className="text-sm">
+          Campaigns could not be loaded:{' '}
+          {describeMarketingError(campaigns.error)}
+        </p>
+      )}
+      {campaigns.data && campaigns.data.campaigns.length === 0 && (
+        <p className="text-muted-foreground text-sm">No campaigns yet.</p>
+      )}
+      {campaigns.data && campaigns.data.campaigns.length > 0 && (
+        <ul className="col gap-1 text-sm">
+          {campaigns.data.campaigns.map((campaign) => (
+            <li key={campaign.id}>
+              <OpenRowButton
+                name={campaign.name}
+                onOpen={() => onOpen(campaign)}
+              />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function ResultsPage() {
+  const [open, setOpen] = useState<OpenReport | null>(null);
+  const close = () => setOpen(null);
+  if (open?.kind === 'journey') {
+    return <JourneyReport name={open.name} onClose={close} ruleId={open.id} />;
+  }
+  if (open?.kind === 'campaign') {
+    return (
+      <CampaignReport campaignId={open.id} name={open.name} onClose={close} />
+    );
+  }
+  return (
+    <div className="col gap-4">
+      <JourneyResults
+        onOpen={(result) =>
+          setOpen({ kind: 'journey', id: result.ruleId, name: result.name })
+        }
+      />
+      <CampaignResults
+        onOpen={(campaign) =>
+          setOpen({ kind: 'campaign', id: campaign.id, name: campaign.name })
+        }
+      />
+    </div>
+  );
+}
+
+function JourneyResults({ onOpen }: { onOpen: (result: RuleResult) => void }) {
   const marketingFetch = useMarketingFetch();
   const queryKey = useMarketingQueryKey();
   const results = useQuery({
@@ -88,7 +178,12 @@ export function ResultsPage() {
         <TableBody>
           {results.data.results.map((result) => (
             <TableRow key={result.ruleId}>
-              <TableCell className="font-medium">{result.name}</TableCell>
+              <TableCell>
+                <OpenRowButton
+                  name={result.name}
+                  onOpen={() => onOpen(result)}
+                />
+              </TableCell>
               {COLUMNS.map((column) => (
                 <TableCell className="text-right tabular-nums" key={column.key}>
                   {result[column.key]}

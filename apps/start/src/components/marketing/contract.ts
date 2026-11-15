@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { TestSendStatus } from './campaign-contract';
+import type { CampaignChannel, TestSendStatus } from './campaign-contract';
 
 // Copied verbatim from packages/marketing/src/rules/rule.schema.ts; contract.test.ts fails unless the
 // text from MAX_SUBJECT_LENGTH to RuleDefinition matches the service file exactly.
@@ -244,4 +244,81 @@ export interface JourneyTestSendRow {
 
 export interface JourneyTestSendsResponse {
   testSends: JourneyTestSendRow[];
+}
+
+// Report types: copied from packages/marketing/src/tracking/reports.ts and status.ts.
+export const MESSAGE_STATUSES = [
+  'skipped',
+  'uncertain',
+  'sent',
+  'failed',
+  'delivered',
+  'read',
+  'clicked',
+  'converted',
+] as const;
+export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
+
+export type StatusCounts = Record<MessageStatus, number>;
+export type Reportable = 'delivered' | 'read' | 'clicked';
+
+export interface Funnel {
+  sent: number;
+  delivered: number;
+  read: number;
+  clicked: number;
+  converted: number;
+}
+
+export interface DailyRow extends Funnel {
+  day: string;
+  failed: number;
+  skipped: number;
+  uncertain: number;
+}
+
+// Milestones a channel's provider never reports, so the dashboard shows "not reported" rather than 0.
+export const NOT_REPORTED: Record<CampaignChannel, Reportable[]> = {
+  push: ['delivered', 'read'],
+  email: ['delivered', 'read'],
+  sms: ['read', 'clicked'],
+  whatsapp: ['clicked'],
+  webhook: ['delivered', 'read', 'clicked'],
+};
+
+export interface ReportConversion {
+  event: string | null;
+  windowDays: number;
+}
+
+export interface CampaignReport {
+  campaignId: string;
+  channel: CampaignChannel;
+  statuses: StatusCounts;
+  funnel: Funnel;
+  daily: DailyRow[];
+  notReported: Reportable[];
+  conversion: ReportConversion;
+}
+
+export interface JourneyReport {
+  ruleId: string;
+  statuses: StatusCounts;
+  funnel: Funnel;
+  daily: DailyRow[];
+  steps: {
+    stepIndex: number;
+    channel: string | null;
+    statuses: StatusCounts;
+    funnel: Funnel;
+    notReported: Reportable[];
+  }[];
+  variants: {
+    stepIndex: number;
+    variantKey: string;
+    sent: number;
+    skipped: number;
+    failed: number;
+  }[];
+  conversion: ReportConversion;
 }
