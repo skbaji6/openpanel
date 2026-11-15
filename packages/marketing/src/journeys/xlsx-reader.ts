@@ -210,10 +210,17 @@ function decodeXml(text: string) {
   );
 }
 
+// Real attribute lists are a few hundred bytes; a longer one is crafted to stall the scan.
+const MAX_ATTRIBUTES_LENGTH = 4096;
+
 function attributes(source: string) {
+  if (source.length > MAX_ATTRIBUTES_LENGTH) {
+    throw new ImportFileError('not_xlsx');
+  }
   const found = new Map<string, string>();
+  // The lookbehind makes each run of name characters start only one attempt: linear, not quadratic.
   for (const match of source.matchAll(
-    /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
+    /(?<![\w:.-])([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g
   )) {
     const key = match[1];
     if (key !== undefined && !found.has(key)) {

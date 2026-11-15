@@ -195,6 +195,16 @@ describe('readXlsx malformed xml stays linear', () => {
     ).toEqual(QUICK_NOT_XLSX);
   });
 
+  it('a huge attribute run without an equals sign stays quick', () => {
+    const run = 'a'.repeat(4 * 1024 * 1024);
+    for (const xml of [
+      `<worksheet><sheetData><row ${run}></row></sheetData></worksheet>`,
+      `<worksheet><sheetData><row r="1"><c ${run}></c></row></sheetData></worksheet>`,
+    ]) {
+      expect(quickCode(sheetWith(xml))).toEqual(QUICK_NOT_XLSX);
+    }
+  });
+
   it('an unterminated tag is not_xlsx', () => {
     expect(quickCode(sheetWith('<worksheet><sheetData><row r="1"'))).toEqual(
       QUICK_NOT_XLSX
