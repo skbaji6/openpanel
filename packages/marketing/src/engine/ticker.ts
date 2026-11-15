@@ -25,6 +25,7 @@ import { chooseMessage } from '../journeys/variants';
 import { redactSecrets } from '../redact';
 import type { Step, StepTemplate } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
+import type { TrackingSettingsCache } from '../tracking/settings';
 import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
 import {
   type createEngine,
@@ -72,6 +73,8 @@ export interface TickDeps {
     profileId: string,
     channel: string
   ) => string;
+  // Warms the cache that renderUnsubscribeUrl reads the project's public url from.
+  trackingSettings?: Pick<TrackingSettingsCache, 'get'>;
   // Shared across ticks by the worker; without it every tick sweeps and warns.
   state?: TickState;
   logger?: Pick<Console, 'warn'>;
@@ -1121,6 +1124,7 @@ async function deliver(
     return await step.finish('skipped', 'invalid_channel_config');
   }
 
+  await deps.trackingSettings?.get(context.project_id);
   const reserved = await step.reserve({
     projectId: context.project_id,
     profileId: context.profile_id,

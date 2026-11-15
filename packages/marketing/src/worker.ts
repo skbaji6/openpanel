@@ -8,6 +8,10 @@ import { purgeSendHistory } from './engine/ledger';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
 import { purgeTracking } from './tracking/purge';
+import {
+  createTrackingSettingsCache,
+  type TrackingSettingsCache,
+} from './tracking/settings';
 
 const LOG_PREFIX = 'marketing worker:';
 const INTEREST_REFRESH_MS = 10_000;
@@ -25,6 +29,7 @@ export interface WorkerContext {
   refreshInterest: () => Promise<void>;
   redis: Redis;
   sources: SourceResolver;
+  trackingSettings: TrackingSettingsCache;
 }
 
 export interface WorkerDeps {
@@ -32,6 +37,8 @@ export interface WorkerDeps {
   startHttp?: (context: WorkerContext) => Promise<Stoppable>;
   // Without a signed unsubscribe link no step may be sent, so the ticker only runs once this is wired.
   renderUnsubscribeUrl?: TickDeps['renderUnsubscribeUrl'];
+  // Called once with the per-project settings cache, so the renderer can read each project's public url.
+  onTrackingSettings?: (cache: TrackingSettingsCache) => void;
   // Runs after the worker stopped itself because the consumer died for good.
   onFatal?: () => void;
 }
@@ -174,6 +181,8 @@ export async function startWorker(
     const redis = getRedisCache();
     started.push({ stop: async () => redis.disconnect() });
     const sources = createSourceResolver({ sql, cfg, redis });
+    const trackingSettings = createTrackingSettingsCache({ sql });
+    deps.onTrackingSettings?.(trackingSettings);
     const sourceFor = (projectId: string) => sources.forProject(projectId);
     const templates = createTemplateRegistry({ sql, now });
     const campaigns = createCampaignService({
@@ -230,6 +239,7 @@ export async function startWorker(
             renderUnsubscribeUrl,
             state: tickState,
             sources,
+            trackingSettings,
           })
         )
       );
@@ -243,6 +253,7 @@ export async function startWorker(
         bucket: createRateBucket(redis, {}),
         backoff: createChannelBackoff(redis),
         renderUnsubscribeUrl,
+        trackingSettings,
         now,
         sleep: (ms: number) => Bun.sleep(ms),
       };
@@ -309,6 +320,7 @@ export async function startWorker(
           refreshInterest: () => interest.refresh(),
           redis,
           sources,
+          trackingSettings,
         })
       );
     }
@@ -321,8 +333,15 @@ export async function startWorker(
 
 // What the process runs in production: the HTTP API and signed unsubscribe links (which turn the ticker on).
 export function defaultWorkerDeps(cfg: MarketingConfig): WorkerDeps {
+  let settings: TrackingSettingsCache | undefined;
   return {
-    renderUnsubscribeUrl: createUnsubscribeUrlRenderer(cfg),
+    renderUnsubscribeUrl: createUnsubscribeUrlRenderer(
+      cfg,
+      (projectId) => settings?.peek(projectId)?.publicUrl
+    ),
+    onTrackingSettings: (cache) => {
+      settings = cache;
+    },
     // Imported lazily so @openpanel/db is first loaded after startWorker sets DATABASE_URL.
     startHttp: async (context) => {
       const { startHttpServer } = await import('./api/server');

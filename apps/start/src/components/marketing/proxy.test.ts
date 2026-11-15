@@ -466,6 +466,7 @@ describe('marketing proxy', () => {
     ['GET', 'campaigns/c1/skip-reasons'],
     ['POST', 'campaigns/c1/estimate'],
     ['GET', 'campaigns/c1/test-sends'],
+    ['GET', 'tracking-settings'],
     ...SETTINGS_CHANNELS.map((channel): [string, string] => [
       'GET',
       `channels/${channel}/settings`,
@@ -477,6 +478,8 @@ describe('marketing proxy', () => {
     ['POST', 'templates/t1/enable'],
     ['POST', 'templates/t1/disable'],
     ['POST', 'campaigns/c1/retry-uncertain'],
+    ['PUT', 'tracking-settings'],
+    ['GET', 'tracking-settings/webhook'],
     ...SETTINGS_CHANNELS.map((channel): [string, string] => [
       'PUT',
       `channels/${channel}/settings`,

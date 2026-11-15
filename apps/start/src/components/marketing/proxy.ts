@@ -52,6 +52,9 @@ const ALLOWED_ROUTES: {
   { pattern: /^audience-source$/, methods: { GET: 'admin', PUT: 'admin' } },
   { pattern: /^audience-source\/test$/, methods: { POST: 'admin' } },
   { pattern: /^settings$/, methods: { GET: 'member', PUT: 'admin' } },
+  { pattern: /^tracking-settings$/, methods: { GET: 'member', PUT: 'admin' } },
+  // The webhook url carries the provider secret.
+  { pattern: /^tracking-settings\/webhook$/, methods: { GET: 'admin' } },
   { pattern: /^results$/, methods: { GET: 'member' } },
   { pattern: /^api-keys$/, methods: { POST: 'admin' } },
   { pattern: /^preview$/, methods: { POST: 'member' } },

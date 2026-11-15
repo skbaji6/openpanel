@@ -88,11 +88,15 @@ export function verifyUnsubscribeToken(
 }
 
 export function createUnsubscribeUrlRenderer(
-  cfg: Pick<MarketingConfig, 'encryptionKey' | 'publicUrl'>
+  cfg: Pick<MarketingConfig, 'encryptionKey' | 'publicUrl'>,
+  publicUrlFor?: (projectId: string) => string | null | undefined
 ) {
   const key = unsubscribeKey(cfg.encryptionKey);
-  const base = cfg.publicUrl.replace(/\/+$/, '');
   return (projectId: string, profileId: string, channel: string): string => {
+    const base = (publicUrlFor?.(projectId) ?? cfg.publicUrl).replace(
+      /\/+$/,
+      ''
+    );
     const token = signUnsubscribeToken(key, {
       projectId,
       profileId,

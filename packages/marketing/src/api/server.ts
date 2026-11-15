@@ -7,6 +7,10 @@ import type { MarketingConfig } from '../config';
 import type { Sql } from '../engine/engine';
 import { redactSecrets } from '../redact';
 import { createTemplateRegistry } from '../templates/registry';
+import {
+  createTrackingSettingsCache,
+  type TrackingSettingsCache,
+} from '../tracking/settings';
 import type { WorkerContext } from '../worker';
 import {
   authenticateDashboard,
@@ -24,6 +28,7 @@ import { dashboardRoutes } from './routes-dashboard';
 import { routesJourneys } from './routes-journeys';
 import { syncRoutes } from './routes-sync';
 import { templateRoutes } from './routes-templates';
+import { routesTracking } from './routes-tracking';
 import { createUnsubscribeHandlers } from './unsubscribe';
 
 const LOG_PREFIX = 'marketing api:';
@@ -41,6 +46,8 @@ export interface ServerDeps {
   redis?: Redis;
   sources?: SourceResolver;
   sourceFetch?: typeof fetch;
+  // Shared with the worker so a saved public url applies to its next unsubscribe link at once.
+  trackingSettings?: TrackingSettingsCache;
   // Tests shorten it so a lost lock shows within a freeze.
   freezeLockTtlMs?: number;
 }
@@ -128,6 +135,11 @@ export function createServer(deps: ServerDeps) {
       rulesChanged: onRulesChanged,
     }),
     ...channelSettingsRoutes(sql),
+    ...routesTracking({
+      sql,
+      cfg,
+      settings: deps.trackingSettings ?? createTrackingSettingsCache({ sql }),
+    }),
     ...templateRoutes(templates),
     ...(deps.redis && sources
       ? [
@@ -251,6 +263,7 @@ export function startHttpServer(context: WorkerContext) {
     onRulesChanged: context.refreshInterest,
     redis: context.redis,
     sources: context.sources,
+    trackingSettings: context.trackingSettings,
   });
   const server = Bun.serve({
     port: context.cfg.port,

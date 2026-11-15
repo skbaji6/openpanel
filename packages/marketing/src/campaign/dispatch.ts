@@ -51,6 +51,7 @@ import type {
   createTemplateRegistry,
   TemplateVersion,
 } from '../templates/registry';
+import type { TrackingSettingsCache } from '../tracking/settings';
 import {
   zFrequencyCap,
   zPushTemplate,
@@ -165,6 +166,8 @@ export interface DispatchDeps {
     profileId: string,
     channel: string
   ) => string;
+  // Warms the cache that renderUnsubscribeUrl reads the project's public url from.
+  trackingSettings?: Pick<TrackingSettingsCache, 'get'>;
   now: () => Date;
   sleep: (ms: number) => Promise<void>;
 }
@@ -326,6 +329,7 @@ async function prepare(
 ): Promise<Prepared | null> {
   const { id, project_id: projectId, channel } = campaign;
   const { settings } = await getChannelSettings(deps.sql, projectId, channel);
+  await deps.trackingSettings?.get(projectId);
   const backoffUntil = await deps.backoff.until(projectId, channel);
   if (backoffUntil !== null) {
     await deps.sql.$executeRawUnsafe(
