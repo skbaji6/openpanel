@@ -7,6 +7,29 @@ const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', 'migrations');
 const MIGRATION_LOCK_KEY = 7_291_644_031;
 const MIGRATION_TIMEOUT_MS = 300_000;
 
+const DOLLAR_QUOTE = '$$';
+
+// shortcut: splits on ';' outside $$ blocks, so a ';' inside a quoted string or a comment would break a file.
+export function splitStatements(content: string): string[] {
+  const statements: string[] = [];
+  let current = '';
+  for (const [index, part] of content.split(DOLLAR_QUOTE).entries()) {
+    const insideQuote = index % 2 === 1;
+    if (insideQuote) {
+      current += `${DOLLAR_QUOTE}${part}${DOLLAR_QUOTE}`;
+      continue;
+    }
+    const [head = '', ...rest] = part.split(';');
+    current += head;
+    for (const piece of rest) {
+      statements.push(current);
+      current = piece;
+    }
+  }
+  statements.push(current);
+  return statements.map((statement) => statement.trim()).filter(Boolean);
+}
+
 async function migrationFiles() {
   const files = (await readdir(MIGRATIONS_DIR))
     .filter((file) => file.endsWith('.sql'))
@@ -46,12 +69,7 @@ export async function migrate(): Promise<string[]> {
         if (done.has(file)) {
           continue;
         }
-        // shortcut: splits on ';', so migration files must not contain ';' inside strings or function bodies
-        const statements = content
-          .split(';')
-          .map((statement) => statement.trim())
-          .filter(Boolean);
-        for (const statement of statements) {
+        for (const statement of splitStatements(content)) {
           await tx.$executeRawUnsafe(statement);
         }
         await tx.$executeRawUnsafe(

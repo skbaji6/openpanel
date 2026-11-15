@@ -7,6 +7,7 @@ import type { createEngine, Sql } from './engine/engine';
 import { purgeSendHistory } from './engine/ledger';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
+import { purgeTracking } from './tracking/purge';
 
 const LOG_PREFIX = 'marketing worker:';
 const INTEREST_REFRESH_MS = 10_000;
@@ -293,6 +294,9 @@ export async function startWorker(
       ),
       every(PURGE_INTERVAL_MS, 'purge send history', secrets, () =>
         purgeSendHistory(sql)
+      ),
+      every(PURGE_INTERVAL_MS, 'purge tracking', secrets, () =>
+        purgeTracking(sql)
       )
     );
 

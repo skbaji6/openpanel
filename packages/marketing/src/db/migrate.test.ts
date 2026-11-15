@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sql } from './client';
-import { migrate } from './migrate';
+import { migrate, splitStatements } from './migrate';
 import { resetMarketingTables } from './test-helpers';
 
 const TABLES = [
@@ -146,5 +146,88 @@ describe('marketing migrations under concurrency', () => {
     );
     expect(row?.count).toBe(2);
     await migrate();
+  });
+});
+
+describe('migration 0019 message tracking', () => {
+  const FILE = '0019_message_tracking.sql';
+  const CAMPAIGN_ID = '00000000-0000-0000-0000-0000000000c1';
+  const ENROLLMENT_ID = '00000000-0000-0000-0000-0000000000e1';
+  const OLD_CAMPAIGN_ID = '00000000-0000-0000-0000-0000000000c2';
+  const OLD_DAYS = 500;
+
+  async function trackingRefs(): Promise<string[]> {
+    const rows = await sql.$queryRawUnsafe<{ source_ref: string }[]>(
+      'SELECT source_ref FROM marketing.message_tracking ORDER BY source_ref'
+    );
+    return rows.map((row) => row.source_ref);
+  }
+
+  async function reapply(): Promise<string[]> {
+    await sql.$executeRawUnsafe(
+      'DELETE FROM marketing.schema_migrations WHERE name = $1',
+      FILE
+    );
+    return await migrate();
+  }
+
+  it('0019 backfills a sent recipient and a sent step and is idempotent on a second run', async () => {
+    await migrate();
+    await resetMarketingTables();
+    for (const [id, daysAgo] of [
+      [CAMPAIGN_ID, 1],
+      [OLD_CAMPAIGN_ID, OLD_DAYS],
+    ] as const) {
+      await sql.$executeRawUnsafe(
+        `INSERT INTO marketing.campaigns (id, project_id, name, state, channel, template, confirm_threshold, created_by)
+         VALUES ($1::uuid, 'p1', 'c', 'completed', 'sms', '{}'::jsonb, 5000, 'u')`,
+        id
+      );
+      await sql.$executeRawUnsafe(
+        `INSERT INTO marketing.campaign_recipients (campaign_id, profile_id, project_id, status, provider_ref, sent_at)
+         VALUES ($1::uuid, 'a', 'p1', 'sent', 'req-1', now() - make_interval(days => $2::int))`,
+        id,
+        daysAgo
+      );
+    }
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, match_value, status, trigger_time)
+       VALUES ($1::uuid, 'p1', $2::uuid, '{"steps":[{"channel":"email"}]}'::jsonb, 'u1', '', 'completed', now())`,
+      ENROLLMENT_ID,
+      RULE_ID
+    );
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status, sent_at)
+       VALUES ($1::uuid, 0, now(), 'sent', now() - interval '2 days')`,
+      ENROLLMENT_ID
+    );
+    // The triggers already wrote rows; the backfill is for sends made before they existed.
+    await sql.$executeRawUnsafe('DELETE FROM marketing.message_tracking');
+
+    expect(await reapply()).toEqual([FILE]);
+
+    const expected = [`campaign:${CAMPAIGN_ID}:a`, `step:${ENROLLMENT_ID}:0`];
+    expect(await trackingRefs()).toEqual(expected);
+    const [step] = await sql.$queryRawUnsafe<
+      { channel: string; rule_id: string; accepted_at: Date | null }[]
+    >(
+      'SELECT channel, rule_id::text, accepted_at FROM marketing.message_tracking WHERE source_ref = $1',
+      `step:${ENROLLMENT_ID}:0`
+    );
+    expect(step).toMatchObject({ channel: 'email', rule_id: RULE_ID });
+    expect(step?.accepted_at).not.toBeNull();
+
+    expect(await reapply()).toEqual([FILE]);
+    expect(await trackingRefs()).toEqual(expected);
+    expect(await migrate()).toEqual([]);
+  });
+
+  it('splitStatements keeps a dollar-quoted function body in one statement', () => {
+    const statements = splitStatements(
+      'CREATE TABLE a (x int);\nCREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql;\nSELECT 1;'
+    );
+    expect(statements).toHaveLength(3);
+    expect(statements[1]).toContain('RETURN 1; END;');
+    expect(statements[1]?.endsWith('LANGUAGE plpgsql')).toBe(true);
   });
 });
