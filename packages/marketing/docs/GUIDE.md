@@ -477,6 +477,59 @@ Facts to know:
 - A push `link` reaches the app as `data.link`; the mobile app has to read it.
 - Only owners and admins start, schedule, pause, resume, cancel, delete or test; members draft and look.
 
+## 10a. Tracking and reports
+
+Every finalised send (campaign recipient or journey step) gets one tracking row, and the Results tab reports per campaign and per journey. Rows hold ids only.
+
+### Statuses and their order
+
+`skipped` < `uncertain` < `sent` < `failed` < `delivered` < `read` < `clicked` < `converted`. A write only raises a status, so duplicate or late reports change nothing (a `delivered` after `read`, or a `failed` after `delivered`, is ignored). The funnel counts milestones, not ranks: a conversion counts even if no click was seen.
+
+### What each channel reports
+
+| Channel | Not reported (shown as "not reported", not 0) |
+|---|---|
+| Push | delivered, read (FCM gives no delivery report) |
+| Email | delivered, read |
+| SMS | read, clicked |
+| WhatsApp | clicked |
+| Webhook | delivered, read, clicked |
+
+### MSG91 delivery webhook
+
+In the dashboard open Channels, copy the delivery webhook URL (owners and admins only) and paste it into MSG91 as the delivery report URL for SMS and for WhatsApp. The URL contains a secret derived from `ENCRYPTION_KEY` and the project; a wrong secret answers 401. If the audience source is down the webhook answers 503 so MSG91 can retry. Reports are matched by MSG91 request id and then by phone number, in memory only.
+
+### Link tracking and the campaign host
+
+Set the Campaign URL in Channels (for example `https://campaign.sianext.com`). Point that host's DNS at the dashboard origin and give it TLS, so `/marketing/r/*` and `/marketing/webhooks/msg91/*` reach the dashboard pass-through. With no Campaign URL nothing is rewritten. Tracked links are `http(s)` links in push (`link`) and email (`href`) templates without `{{`. App-scheme push links, SMS, WhatsApp, webhook and test sends are never rewritten. A tracked link answers 302 to the stored URL; an unknown token is 404 and an expired one is 410.
+
+### Conversions
+
+Set the conversion event and window (1 to 30 days, default 7) in Channels. Conversions stay off until an event name is set. An event counts when it happens at or after the send, inside the window and not more than 5 minutes in the future. The latest eligible message (accepted, not failed) for that student is credited; if it is already converted it absorbs the event and no older message is credited.
+
+### Retention
+
+Tracking rows and per-state counters are purged after 400 days. Link tokens expire after 90 days (410 afterwards). Link rows are kept, one per distinct URL.
+
+### Privacy
+
+No phone, email, device token or trait value is stored in tracking tables. Phones in delivery reports are compared in memory (last 10 digits, hashed) and dropped.
+
+### Upgrade notes
+
+- No new environment variable.
+- Migration `0019` runs at startup and backfills up to 400 days of sends; on a large install it may take minutes.
+- New public paths on the public origin: `/marketing/r/*` and `/marketing/webhooks/msg91/*`.
+- Changing `ENCRYPTION_KEY` invalidates every tracked link and the webhook URL.
+- No `openpanel doctor` check is added (fork discipline forbids editing `self-hosting/cli`). This is a known gap.
+
+### Open items for the owner
+
+1. App-open event name: conversions stay off until it is set.
+2. The per-state breakdown is aggregate counters only: per-variant skipped is partial, and delivered to converted is not per state.
+3. Capture one real MSG91 SMS delivery report and one WhatsApp status body, and confirm whether MSG91 retries on 5xx. The parser follows documented shapes that were not verified. Reports are lost while the audience source is down, and reports arriving more than 2 minutes before the send is recorded are dropped.
+4. Push app-scheme links (`sia://`) are not tracked. A tracked https link must open in a browser or through app links for the student to arrive.
+
 ## 11. Try it end to end
 
 With the stack running, `scripts/e2e.ts` creates a rule, sends events through `/track`, and checks that one signed webhook arrives and that a person who reaches the goal is not messaged. Setup and variables: README, "End-to-end check". A manual check:
@@ -528,6 +581,9 @@ MARKETING_E2E=1 MARKETING_E2E_MSG91_URL=<fake MSG91 base URL from dev-stack> bun
 | `401` from the sync API | Wrong or revoked key. After revoking, a replica may accept the old key for up to 5 minutes. |
 | `429` from the sync API | Too many failed key attempts from one IP (30 per minute). |
 | Email fails | SMTP settings or TLS mode; check the failure reason in Results. |
+| MSG91 webhook answers 401 | The URL was copied from another project, or `ENCRYPTION_KEY` changed. Copy the URL again from Channels. |
+| Links in messages are unchanged | No Campaign URL is set in Channels, or the link is an app-scheme link or has `{{` in it. |
+| A tracked link shows "expired" (410) | The link is older than 90 days. Send a new message. |
 | Push has no effect | Service account JSON for another Firebase project, or the device token belongs to a different Firebase app. |
 | Webhook shows `blocked url` | Not https and the host is not in `MARKETING_WEBHOOK_ALLOW_HOSTS`, or it resolves to a private address. |
 | Audience edit answers `audience_in_use` | A scheduled, running or paused campaign uses it (see 9). |

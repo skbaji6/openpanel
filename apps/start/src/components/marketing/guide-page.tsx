@@ -472,6 +472,43 @@ export function GuidePage() {
         </ul>
       </Section>
 
+      <Section title="Tracking and reports">
+        <p>
+          Each message ends up in one of these states, from least to most:
+          skipped, uncertain, sent, failed, delivered, read, clicked, converted.
+          A state only moves forward, so late or repeated reports do no harm.
+        </p>
+        <p className="text-muted-foreground">
+          Some channels cannot report everything, and the Results tab shows "not
+          reported" for those instead of 0. Push and email: delivered and read.
+          SMS: read and clicked. WhatsApp: clicked. Webhook: delivered, read and
+          clicked.
+        </p>
+        <p className="text-muted-foreground">
+          SMS and WhatsApp delivery: copy the delivery webhook address from
+          Channels (owners and admins) into MSG91 as the delivery report
+          address.
+        </p>
+        <p className="text-muted-foreground">
+          Link tracking: set the Campaign URL in Channels, and point that host
+          at the dashboard address with HTTPS. Push and email links then go
+          through it so clicks are counted. App links such as sia:// are not
+          tracked, and a tracked link must open in a browser or through app
+          links.
+        </p>
+        <p className="text-muted-foreground">
+          Conversions: set the conversion event (for example the app-open event)
+          and a window of 1 to 30 days. Until an event is set, nothing counts as
+          converted. The latest message the student received before the event
+          gets the credit.
+        </p>
+        <p className="text-muted-foreground">
+          Records are kept 400 days and links work for 90 days. No phone, email
+          or device token is stored in the reports. The per-state view shows
+          counts only, not the full funnel per state.
+        </p>
+      </Section>
+
       <Section title="Connect your backend">
         <p className="text-muted-foreground">
           Your backend sends contacts, push tokens and item lists to the
