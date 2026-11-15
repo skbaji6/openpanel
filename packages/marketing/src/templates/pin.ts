@@ -48,7 +48,7 @@ async function pinMessage(
   }
   try {
     const template = await registry.get(projectId, templateId);
-    if (message.version === undefined && !template.enabled) {
+    if (!template.enabled) {
       return { ok: false, code: 'template_disabled' };
     }
     // Email templates cannot be copied into a step until the email compiler exists.

@@ -118,6 +118,28 @@ describe('pinDefinition', () => {
     });
   });
 
+  it('a versioned ref on a disabled template refuses with template_disabled', async () => {
+    const t = await registry.create(CTX, PUSH);
+    await registry.setEnabled(CTX, t.templateId, false);
+    const result = await pinDefinition(
+      registry,
+      'p1',
+      definition([
+        {
+          delaySeconds: 0,
+          channel: 'push',
+          template: { templateId: t.templateId, version: 1 },
+        },
+      ])
+    );
+    expect(result).toEqual({
+      ok: false,
+      code: 'template_disabled',
+      stepIndex: 0,
+      variant: 'default',
+    });
+  });
+
   it('a push template on an email step is template_channel_mismatch', async () => {
     const t = await registry.create(CTX, PUSH);
     const result = await pinDefinition(
