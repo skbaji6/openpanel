@@ -3,12 +3,14 @@ import { inflateRawSync } from 'node:zlib';
 export const MAX_IMPORT_BYTES = 512 * 1024;
 export const MAX_INFLATED_BYTES = 8 * 1024 * 1024;
 export const MAX_IMPORT_ROWS = 2000;
+export const MAX_IMPORT_COLUMNS = 200;
 
 export type ImportFileErrorCode =
   | 'not_xlsx'
   | 'file_too_large'
   | 'too_many_rows'
-  | 'missing_column';
+  | 'missing_column'
+  | 'malformed_csv';
 
 // The message is the code only: uploaded cell text must never reach logs.
 export class ImportFileError extends Error {
@@ -20,6 +22,7 @@ export class ImportFileError extends Error {
   }
 }
 
+// cells has a null prototype: read it with Object.hasOwn or Object.entries.
 export type SheetRows = {
   sheet: string;
   rows: { rowNumber: number; cells: Record<string, string> }[];
@@ -220,10 +223,76 @@ function attributes(source: string) {
   return found;
 }
 
+const WHITESPACE_AFTER_TAG = new Set([' ', '\t', '\n', '\r']);
+
+type XmlElement = { attrs: string; inner: string | undefined };
+
+function isTagAt(xml: string, start: number, tag: string) {
+  if (!xml.startsWith(tag, start + 1)) {
+    return false;
+  }
+  const next = xml[start + 1 + tag.length];
+  return (
+    next === '>' ||
+    next === '/' ||
+    (next !== undefined && WHITESPACE_AFTER_TAG.has(next))
+  );
+}
+
+function skipPast(xml: string, from: number, closeTag: string) {
+  const close = xml.indexOf(closeTag, from);
+  if (close === -1) {
+    throw new ImportFileError('not_xlsx');
+  }
+  return close + closeTag.length;
+}
+
+// One forward pass over untrusted XML: a missing close tag or an unterminated
+// tag is malformed input and is never rescanned, so cost stays linear.
+function* elements(
+  xml: string,
+  tag: string,
+  skipTag?: string
+): Generator<XmlElement> {
+  const closeTag = `</${tag}>`;
+  let position = 0;
+  while (position < xml.length) {
+    const start = xml.indexOf('<', position);
+    if (start === -1) {
+      return;
+    }
+    if (skipTag !== undefined && isTagAt(xml, start, skipTag)) {
+      position = skipPast(xml, start, `</${skipTag}>`);
+      continue;
+    }
+    if (!isTagAt(xml, start, tag)) {
+      position = start + 1;
+      continue;
+    }
+    const end = xml.indexOf('>', start);
+    if (end === -1) {
+      throw new ImportFileError('not_xlsx');
+    }
+    const isSelfClosing = xml[end - 1] === '/';
+    const attrs = xml.slice(
+      start + 1 + tag.length,
+      isSelfClosing ? end - 1 : end
+    );
+    if (isSelfClosing) {
+      yield { attrs, inner: undefined };
+      position = end + 1;
+      continue;
+    }
+    const close = skipPast(xml, end + 1, closeTag);
+    yield { attrs, inner: xml.slice(end + 1, close - closeTag.length) };
+    position = close;
+  }
+}
+
 function textRuns(xml: string) {
   let out = '';
-  for (const match of xml.matchAll(/<t\b[^>]*?(?:\/>|>([\s\S]*?)<\/t>)/g)) {
-    out += decodeXml(match[1] ?? '');
+  for (const run of elements(xml, 't', 'rPh')) {
+    out += decodeXml(run.inner ?? '');
   }
   return out;
 }
@@ -232,10 +301,11 @@ function readSharedStrings(xml: string | undefined) {
   if (xml === undefined) {
     return [];
   }
-  const withoutPhonetic = xml.replace(/<rPh\b[\s\S]*?<\/rPh>/g, '');
-  return [
-    ...withoutPhonetic.matchAll(/<si\b[^>]*?(?:\/>|>([\s\S]*?)<\/si>)/g),
-  ].map((match) => textRuns(match[1] ?? ''));
+  const strings: string[] = [];
+  for (const item of elements(xml, 'si')) {
+    strings.push(textRuns(item.inner ?? ''));
+  }
+  return strings;
 }
 
 function resolveTarget(target: string) {
@@ -275,7 +345,11 @@ function cellText(
   if (type === 'inlineStr') {
     return textRuns(inner);
   }
-  const value = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(inner)?.[1];
+  let value: string | undefined;
+  for (const element of elements(inner, 'v')) {
+    value = element.inner ?? '';
+    break;
+  }
   if (value === undefined) {
     return '';
   }
@@ -285,71 +359,61 @@ function cellText(
   return decodeXml(value);
 }
 
-// defineProperty keeps a header named __proto__ an ordinary own key.
-export function setCell(
-  cells: Record<string, string>,
-  header: string,
-  value: string
-) {
-  Object.defineProperty(cells, header, {
-    value,
-    enumerable: true,
-    writable: true,
-    configurable: true,
-  });
+// Header text (trimmed) by column. Checked before any row object is built.
+export function readHeaders(raw: Iterable<[number, string]>) {
+  const headers = new Map<number, string>();
+  const seen = new Set<string>();
+  let nonEmpty = 0;
+  for (const [column, value] of raw) {
+    const header = value.trim();
+    if (header === '') {
+      continue;
+    }
+    nonEmpty++;
+    if (nonEmpty > MAX_IMPORT_COLUMNS) {
+      throw new ImportFileError('file_too_large');
+    }
+    if (!seen.has(header)) {
+      seen.add(header);
+      headers.set(column, header);
+    }
+  }
+  return headers;
 }
 
 function parseSheet(xml: string, sharedStrings: string[]): SheetRows['rows'] {
-  const parsed: { rowNumber: number; columns: Map<number, string> }[] = [];
+  const rows: SheetRows['rows'] = [];
+  let headers: Map<number, string> | undefined;
   let previousRow = 0;
-  for (const rowMatch of xml.matchAll(
-    /<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g
-  )) {
-    const rowAttrs = attributes(rowMatch[1] ?? '');
-    const declared = Number.parseInt(rowAttrs.get('r') ?? '', 10);
+  for (const row of elements(xml, 'row')) {
+    const declared = Number.parseInt(attributes(row.attrs).get('r') ?? '', 10);
     const rowNumber = Number.isFinite(declared) ? declared : previousRow + 1;
     previousRow = rowNumber;
     const columns = new Map<number, string>();
     let nextColumn = 1;
-    for (const cellMatch of (rowMatch[2] ?? '').matchAll(
-      /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
-    )) {
-      const cellAttrs = attributes(cellMatch[1] ?? '');
+    for (const cell of elements(row.inner ?? '', 'c')) {
+      const cellAttrs = attributes(cell.attrs);
       const column = columnIndex(cellAttrs.get('r')) ?? nextColumn;
       nextColumn = column + 1;
-      columns.set(
-        column,
-        cellText(cellAttrs, cellMatch[2] ?? '', sharedStrings)
-      );
+      columns.set(column, cellText(cellAttrs, cell.inner ?? '', sharedStrings));
     }
-    const isEmpty = [...columns.values()].every((value) => value.trim() === '');
-    if (isEmpty) {
+    if ([...columns.values()].every((value) => value.trim() === '')) {
       continue;
     }
-    // Header row is not counted against the data-row limit.
-    if (parsed.length > MAX_IMPORT_ROWS) {
+    if (!headers) {
+      headers = readHeaders(columns);
+      continue;
+    }
+    if (rows.length >= MAX_IMPORT_ROWS) {
       throw new ImportFileError('too_many_rows');
     }
-    parsed.push({ rowNumber, columns });
-  }
-  const [headerRow, ...dataRows] = parsed;
-  if (!headerRow) {
-    return [];
-  }
-  const headers = new Map<number, string>();
-  for (const [column, value] of headerRow.columns) {
-    const header = value.trim();
-    if (header !== '' && ![...headers.values()].includes(header)) {
-      headers.set(column, header);
-    }
-  }
-  return dataRows.map(({ rowNumber, columns }) => {
-    const cells: Record<string, string> = {};
+    const cells: Record<string, string> = Object.create(null);
     for (const [column, header] of headers) {
-      setCell(cells, header, columns.get(column) ?? '');
+      cells[header] = columns.get(column) ?? '';
     }
-    return { rowNumber, cells };
-  });
+    rows.push({ rowNumber, cells });
+  }
+  return rows;
 }
 
 function readWorkbook(bytes: Uint8Array): SheetRows[] {
@@ -363,8 +427,8 @@ function readWorkbook(bytes: Uint8Array): SheetRows[] {
     throw new ImportFileError('not_xlsx');
   }
   const targets = new Map<string, string>();
-  for (const match of rels.matchAll(/<Relationship\b([^>]*?)\/?>/g)) {
-    const attrs = attributes(match[1] ?? '');
+  for (const element of elements(rels, 'Relationship')) {
+    const attrs = attributes(element.attrs);
     const id = attrs.get('Id');
     const target = attrs.get('Target');
     if (id !== undefined && target !== undefined) {
@@ -375,8 +439,8 @@ function readWorkbook(bytes: Uint8Array): SheetRows[] {
     readEntry(archive, 'xl/sharedStrings.xml')
   );
   const sheets: SheetRows[] = [];
-  for (const match of workbook.matchAll(/<sheet\b([^>]*?)\/?>/g)) {
-    const attrs = attributes(match[1] ?? '');
+  for (const element of elements(workbook, 'sheet')) {
+    const attrs = attributes(element.attrs);
     const name = attrs.get('name');
     const path = targets.get(attrs.get('r:id') ?? '');
     const xml = path === undefined ? undefined : readEntry(archive, path);

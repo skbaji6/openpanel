@@ -18,6 +18,7 @@ type XlsxOptions = {
   rawXml?: boolean;
   sheetXml?: Uint8Array;
   declaredSheetSize?: number;
+  sharedStringsXml?: string;
 };
 
 const encoder = new TextEncoder();
@@ -86,7 +87,14 @@ export function buildZip(entries: ZipEntry[]): Uint8Array {
 }
 
 function columnLetter(index: number) {
-  return String.fromCharCode(65 + index);
+  const letters = 26;
+  let rest = index + 1;
+  let name = '';
+  while (rest > 0) {
+    name = String.fromCharCode(65 + ((rest - 1) % letters)) + name;
+    rest = Math.floor((rest - 1) / letters);
+  }
+  return name;
 }
 
 export function buildXlsx(
@@ -139,7 +147,13 @@ export function buildXlsx(
       declaredSize: i === 0 ? options.declaredSheetSize : undefined,
     })),
   ];
-  if (sharedStrings.length > 0) {
+  if (options.sharedStringsXml !== undefined) {
+    entries.push({
+      name: 'xl/sharedStrings.xml',
+      data: encoder.encode(options.sharedStringsXml),
+      deflate: options.deflate,
+    });
+  } else if (sharedStrings.length > 0) {
     const items = sharedStrings
       .map((value) => `<si><t>${text(value)}</t></si>`)
       .join('');

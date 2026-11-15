@@ -36,6 +36,28 @@ describe('readCsv', () => {
     expect(codeOf(() => readCsv(text))).toBe('too_many_rows');
   });
 
+  it('rejects more than the column limit', () => {
+    const headers = [
+      'State',
+      ...Array.from({ length: 200 }, (_, i) => `h${i}`),
+    ];
+    expect(codeOf(() => readCsv(`${headers.join(',')}\nTS\n`))).toBe(
+      'file_too_large'
+    );
+  });
+
+  it('rows with an empty State come back as the sheet named empty string', () => {
+    const sheets = readCsv('State,Text\nTS,1\n,2\n  ,3\n');
+    expect(sheets.map((s) => s.sheet)).toEqual(['TS', '']);
+    expect(sheets[1]?.rows.map((r) => r.rowNumber)).toEqual([3, 4]);
+  });
+
+  it('an unterminated quote is malformed_csv', () => {
+    expect(codeOf(() => readCsv('State,Text\nTS,"oops\nAP,2\n'))).toBe(
+      'malformed_csv'
+    );
+  });
+
   it('rejects oversized text', () => {
     expect(codeOf(() => readCsv(`State\n${'x'.repeat(512 * 1024)}`))).toBe(
       'file_too_large'

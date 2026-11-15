@@ -2,8 +2,8 @@ import {
   ImportFileError,
   MAX_IMPORT_BYTES,
   MAX_IMPORT_ROWS,
+  readHeaders,
   type SheetRows,
-  setCell,
 } from './xlsx-reader';
 
 const STATE_HEADER = 'state';
@@ -45,12 +45,21 @@ function parseRecords(text: string) {
       field += char;
     }
   }
+  if (inQuotes) {
+    throw new ImportFileError('malformed_csv');
+  }
   if (field !== '' || record.length > 0) {
     endRecord();
   }
   return records;
 }
 
+/**
+ * One pseudo-sheet per distinct State value, in order of first appearance.
+ * Rows whose State is empty come back as the sheet named '' with their true
+ * rowNumbers, so the caller can report each one. `cells` has a null
+ * prototype: read it with Object.hasOwn or Object.entries.
+ */
 export function readCsv(text: string): SheetRows[] {
   if (Buffer.byteLength(text) > MAX_IMPORT_BYTES) {
     throw new ImportFileError('file_too_large');
@@ -59,23 +68,20 @@ export function readCsv(text: string): SheetRows[] {
     text.startsWith(BYTE_ORDER_MARK) ? text.slice(1) : text
   );
   const [headerRecord, ...dataRecords] = records;
-  const headers = (headerRecord ?? []).map((header) => header.trim());
-  const stateColumn = headers.findIndex(
+  const rawHeaders = (headerRecord ?? []).map((header) => header.trim());
+  const stateColumn = rawHeaders.findIndex(
     (header) => header.toLowerCase() === STATE_HEADER
   );
   if (stateColumn === -1) {
     throw new ImportFileError('missing_column');
   }
+  const headers = readHeaders(rawHeaders.entries());
   const sheets = new Map<string, SheetRows>();
   for (const [index, record] of dataRecords.entries()) {
     if (record.every((value) => value.trim() === '')) {
       continue;
     }
     const state = (record[stateColumn] ?? '').trim();
-    // A row with no State has no pseudo-sheet to belong to.
-    if (state === '') {
-      continue;
-    }
     let sheet = sheets.get(state);
     if (!sheet) {
       sheet = { sheet: state, rows: [] };
@@ -84,11 +90,9 @@ export function readCsv(text: string): SheetRows[] {
     if (sheet.rows.length >= MAX_IMPORT_ROWS) {
       throw new ImportFileError('too_many_rows');
     }
-    const cells: Record<string, string> = {};
-    for (const [column, header] of headers.entries()) {
-      if (header !== '' && !Object.hasOwn(cells, header)) {
-        setCell(cells, header, record[column] ?? '');
-      }
+    const cells: Record<string, string> = Object.create(null);
+    for (const [column, header] of headers) {
+      cells[header] = record[column] ?? '';
     }
     sheet.rows.push({ rowNumber: index + 2, cells });
   }

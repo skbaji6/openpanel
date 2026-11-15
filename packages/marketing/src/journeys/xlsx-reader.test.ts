@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { buildXlsx, buildZip } from './xlsx-fixture';
-import { MAX_IMPORT_ROWS, readXlsx } from './xlsx-reader';
+import { MAX_IMPORT_COLUMNS, MAX_IMPORT_ROWS, readXlsx } from './xlsx-reader';
 
 const HEADER = ['Name', 'Note'];
 
@@ -126,5 +126,118 @@ describe('readXlsx', () => {
     const centralStart = view.getUint32(bytes.length - 22 + 16, true);
     view.setUint16(centralStart + 8, 1, true);
     expect(codeOf(() => readXlsx(bytes))).toBe('not_xlsx');
+  });
+});
+
+const MAX_PARSE_MS = 1000;
+const HUGE_XML_BYTES = 7 * 1024 * 1024;
+const encoder = new TextEncoder();
+
+function repeated(unit: string, prefix = '', suffix = '') {
+  return (
+    prefix + unit.repeat(Math.floor(HUGE_XML_BYTES / unit.length)) + suffix
+  );
+}
+
+function quickCode(bytes: Uint8Array) {
+  const started = performance.now();
+  const code = codeOf(() => readXlsx(bytes));
+  const isQuick = performance.now() - started < MAX_PARSE_MS;
+  return { code, isQuick };
+}
+
+const QUICK_NOT_XLSX = { code: 'not_xlsx', isQuick: true };
+
+function sheetWith(xml: string) {
+  return buildXlsx([{ name: 'S', rows: [HEADER] }], {
+    deflate: true,
+    sheetXml: encoder.encode(xml),
+  });
+}
+
+function sharedWith(xml: string) {
+  return buildXlsx([{ name: 'S', rows: [HEADER] }], {
+    deflate: true,
+    sharedStringsXml: xml,
+  });
+}
+
+describe('readXlsx malformed xml stays linear', () => {
+  it('unterminated rows', () => {
+    expect(
+      quickCode(sheetWith(repeated('<row>', '<worksheet><sheetData>')))
+    ).toEqual(QUICK_NOT_XLSX);
+  });
+
+  it('unterminated cell value', () => {
+    expect(
+      quickCode(
+        sheetWith(
+          repeated(
+            '<c r="A1"><v>',
+            '<worksheet><sheetData><row r="1">',
+            '</row>'
+          )
+        )
+      )
+    ).toEqual(QUICK_NOT_XLSX);
+  });
+
+  it('unterminated si, t and rPh in shared strings', () => {
+    expect(quickCode(sharedWith(repeated('<si>', '<sst>')))).toEqual(
+      QUICK_NOT_XLSX
+    );
+    expect(
+      quickCode(sharedWith(repeated('<t>', '<sst><si>', '</si>')))
+    ).toEqual(QUICK_NOT_XLSX);
+    expect(
+      quickCode(sharedWith(repeated('<rPh>', '<sst><si>', '</si>')))
+    ).toEqual(QUICK_NOT_XLSX);
+  });
+
+  it('an unterminated tag is not_xlsx', () => {
+    expect(quickCode(sheetWith('<worksheet><sheetData><row r="1"'))).toEqual(
+      QUICK_NOT_XLSX
+    );
+  });
+});
+
+describe('readXlsx column limit', () => {
+  const headers = (count: number) =>
+    Array.from({ length: count }, (_, i) => `h${i}`);
+
+  it('rejects more than the column limit', () => {
+    const rows = [headers(MAX_IMPORT_COLUMNS + 1), ['x']];
+    expect(codeOf(() => readXlsx(buildXlsx([{ name: 'S', rows }])))).toBe(
+      'file_too_large'
+    );
+  });
+
+  it('accepts exactly the column limit', () => {
+    const rows = [headers(MAX_IMPORT_COLUMNS), ['x']];
+    const [sheet] = readXlsx(buildXlsx([{ name: 'S', rows }]));
+    expect(Object.keys(sheet?.rows[0]?.cells ?? {})).toHaveLength(
+      MAX_IMPORT_COLUMNS
+    );
+  });
+
+  it('keeps a header named __proto__ as an ordinary key', () => {
+    const [sheet] = readXlsx(
+      buildXlsx([
+        {
+          name: 'S',
+          rows: [
+            ['__proto__', 'constructor'],
+            ['a', 'b'],
+          ],
+        },
+      ])
+    );
+    const cells = sheet?.rows[0]?.cells ?? {};
+    expect(Object.hasOwn(cells, '__proto__')).toBe(true);
+    expect(Object.entries(cells)).toEqual([
+      ['__proto__', 'a'],
+      ['constructor', 'b'],
+    ]);
   });
 });
