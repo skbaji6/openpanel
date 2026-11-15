@@ -334,7 +334,7 @@ function CampaignBody({
       <Counters
         preSkipped={preSkipped}
         row={row}
-        totalKnown={!skipReasons.isPending}
+        totalKnown={skipReasons.data !== undefined}
       />
       {status && <p className="text-sm">{status}</p>}
       <div className="row items-center gap-2">

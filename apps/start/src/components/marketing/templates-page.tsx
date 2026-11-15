@@ -166,7 +166,11 @@ export function TemplatesPage() {
         <FullPageEmptyState
           description={describeMarketingError(templates.error)}
           icon={MessageSquareTextIcon}
-          title="Templates are not available"
+          title={
+            templates.data
+              ? 'Could not refresh templates'
+              : 'Templates are not available'
+          }
         />
       )}
       {templates.data && rows.length === 0 && (

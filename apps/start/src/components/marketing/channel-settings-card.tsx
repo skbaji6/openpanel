@@ -21,7 +21,7 @@ import {
   toSettingsBody,
   toSettingsForm,
 } from './channel-settings';
-import { useMarketingRole } from './use-marketing-role';
+import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import {
   IntegrationCardFooter,
@@ -230,9 +230,7 @@ function SettingsFields({
       </fieldset>
       <IntegrationCardFooter className="justify-between">
         {!isAdmin && (
-          <p className="text-muted-foreground text-xs">
-            Only owners and admins can do this
-          </p>
+          <p className="text-muted-foreground text-xs">{NOT_ADMIN_NOTE}</p>
         )}
         {isAdmin && (
           <Button
