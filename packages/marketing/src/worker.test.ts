@@ -184,6 +184,7 @@ describe('startWorker', () => {
         'refreshInterest',
         'sources',
         'sql',
+        'trackingSettings',
       ]);
 
       const deadline = Date.now() + LAG_WAIT_MS;
