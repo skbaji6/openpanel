@@ -17,6 +17,7 @@ import {
   type CreatedApiKey,
   SECRET_MASK,
 } from './contract';
+import { TrackingSettingsCard } from './tracking-settings-card';
 import { useMarketingRole } from './use-marketing-role';
 import CopyInput from '@/components/forms/copy-input';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
@@ -363,6 +364,7 @@ export function ChannelsPage() {
       ))}
       <ApiKeysCard />
       <AudienceSourceCard />
+      <TrackingSettingsCard />
     </div>
   );
 }

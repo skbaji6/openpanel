@@ -34,11 +34,13 @@ import { Route as AppOrganizationIdIndexRouteImport } from './routes/_app.$organ
 import { Route as ShareReportShareIdRouteImport } from './routes/share.report.$shareId'
 import { Route as ShareOverviewShareIdRouteImport } from './routes/share.overview.$shareId'
 import { Route as ShareDashboardShareIdRouteImport } from './routes/share.dashboard.$shareId'
+import { Route as MarketingRTokenRouteImport } from './routes/marketing.r.$token'
 import { Route as StepsOnboardingProjectRouteImport } from './routes/_steps.onboarding.project'
 import { Route as AppOrganizationIdSettingsRouteImport } from './routes/_app.$organizationId.settings'
 import { Route as AppOrganizationIdBillingRouteImport } from './routes/_app.$organizationId.billing'
 import { Route as AppOrganizationIdProjectIdRouteImport } from './routes/_app.$organizationId.$projectId'
 import { Route as AppOrganizationIdProjectIdIndexRouteImport } from './routes/_app.$organizationId.$projectId.index'
+import { Route as MarketingWebhooksMsg91SplatRouteImport } from './routes/marketing.webhooks.msg91.$'
 import { Route as StepsOnboardingProjectIdVerifyRouteImport } from './routes/_steps.onboarding.$projectId.verify'
 import { Route as StepsOnboardingProjectIdConnectRouteImport } from './routes/_steps.onboarding.$projectId.connect'
 import { Route as AppOrganizationIdMembersTabsRouteImport } from './routes/_app.$organizationId.members._tabs'
@@ -269,6 +271,11 @@ const ShareDashboardShareIdRoute = ShareDashboardShareIdRouteImport.update({
   path: '/share/dashboard/$shareId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MarketingRTokenRoute = MarketingRTokenRouteImport.update({
+  id: '/marketing/r/$token',
+  path: '/marketing/r/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StepsOnboardingProjectRoute = StepsOnboardingProjectRouteImport.update({
   id: '/onboarding/project',
   path: '/onboarding/project',
@@ -333,6 +340,12 @@ const AppOrganizationIdProjectIdIndexRoute =
     id: '/',
     path: '/',
     getParentRoute: () => AppOrganizationIdProjectIdRoute,
+  } as any)
+const MarketingWebhooksMsg91SplatRoute =
+  MarketingWebhooksMsg91SplatRouteImport.update({
+    id: '/marketing/webhooks/msg91/$',
+    path: '/marketing/webhooks/msg91/$',
+    getParentRoute: () => rootRouteImport,
   } as any)
 const StepsOnboardingProjectIdVerifyRoute =
   StepsOnboardingProjectIdVerifyRouteImport.update({
@@ -794,6 +807,7 @@ export interface FileRoutesByFullPath {
   '/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/$organizationId/settings': typeof AppOrganizationIdSettingsRoute
   '/onboarding/project': typeof StepsOnboardingProjectRoute
+  '/marketing/r/$token': typeof MarketingRTokenRoute
   '/share/dashboard/$shareId': typeof ShareDashboardShareIdRoute
   '/share/overview/$shareId': typeof ShareOverviewShareIdRoute
   '/share/report/$shareId': typeof ShareReportShareIdRoute
@@ -813,6 +827,7 @@ export interface FileRoutesByFullPath {
   '/$organizationId/members': typeof AppOrganizationIdMembersTabsRouteWithChildren
   '/onboarding/$projectId/connect': typeof StepsOnboardingProjectIdConnectRoute
   '/onboarding/$projectId/verify': typeof StepsOnboardingProjectIdVerifyRoute
+  '/marketing/webhooks/msg91/$': typeof MarketingWebhooksMsg91SplatRoute
   '/$organizationId/$projectId/': typeof AppOrganizationIdProjectIdIndexRoute
   '/$organizationId/$projectId/dashboards/$dashboardId': typeof AppOrganizationIdProjectIdDashboardsDashboardIdRoute
   '/$organizationId/$projectId/events': typeof AppOrganizationIdProjectIdEventsTabsRouteWithChildren
@@ -890,6 +905,7 @@ export interface FileRoutesByTo {
   '/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/$organizationId/settings': typeof AppOrganizationIdSettingsRoute
   '/onboarding/project': typeof StepsOnboardingProjectRoute
+  '/marketing/r/$token': typeof MarketingRTokenRoute
   '/share/dashboard/$shareId': typeof ShareDashboardShareIdRoute
   '/share/overview/$shareId': typeof ShareOverviewShareIdRoute
   '/share/report/$shareId': typeof ShareReportShareIdRoute
@@ -909,6 +925,7 @@ export interface FileRoutesByTo {
   '/$organizationId/members': typeof AppOrganizationIdMembersTabsIndexRoute
   '/onboarding/$projectId/connect': typeof StepsOnboardingProjectIdConnectRoute
   '/onboarding/$projectId/verify': typeof StepsOnboardingProjectIdVerifyRoute
+  '/marketing/webhooks/msg91/$': typeof MarketingWebhooksMsg91SplatRoute
   '/$organizationId/$projectId': typeof AppOrganizationIdProjectIdIndexRoute
   '/$organizationId/$projectId/dashboards/$dashboardId': typeof AppOrganizationIdProjectIdDashboardsDashboardIdRoute
   '/$organizationId/$projectId/events': typeof AppOrganizationIdProjectIdEventsTabsIndexRoute
@@ -982,6 +999,7 @@ export interface FileRoutesById {
   '/_app/$organizationId/billing': typeof AppOrganizationIdBillingRoute
   '/_app/$organizationId/settings': typeof AppOrganizationIdSettingsRoute
   '/_steps/onboarding/project': typeof StepsOnboardingProjectRoute
+  '/marketing/r/$token': typeof MarketingRTokenRoute
   '/share/dashboard/$shareId': typeof ShareDashboardShareIdRoute
   '/share/overview/$shareId': typeof ShareOverviewShareIdRoute
   '/share/report/$shareId': typeof ShareReportShareIdRoute
@@ -1003,6 +1021,7 @@ export interface FileRoutesById {
   '/_app/$organizationId/members/_tabs': typeof AppOrganizationIdMembersTabsRouteWithChildren
   '/_steps/onboarding/$projectId/connect': typeof StepsOnboardingProjectIdConnectRoute
   '/_steps/onboarding/$projectId/verify': typeof StepsOnboardingProjectIdVerifyRoute
+  '/marketing/webhooks/msg91/$': typeof MarketingWebhooksMsg91SplatRoute
   '/_app/$organizationId/$projectId/': typeof AppOrganizationIdProjectIdIndexRoute
   '/_app/$organizationId/$projectId/dashboards_/$dashboardId': typeof AppOrganizationIdProjectIdDashboardsDashboardIdRoute
   '/_app/$organizationId/$projectId/events': typeof AppOrganizationIdProjectIdEventsRouteWithChildren
@@ -1093,6 +1112,7 @@ export interface FileRouteTypes {
     | '/$organizationId/billing'
     | '/$organizationId/settings'
     | '/onboarding/project'
+    | '/marketing/r/$token'
     | '/share/dashboard/$shareId'
     | '/share/overview/$shareId'
     | '/share/report/$shareId'
@@ -1112,6 +1132,7 @@ export interface FileRouteTypes {
     | '/$organizationId/members'
     | '/onboarding/$projectId/connect'
     | '/onboarding/$projectId/verify'
+    | '/marketing/webhooks/msg91/$'
     | '/$organizationId/$projectId/'
     | '/$organizationId/$projectId/dashboards/$dashboardId'
     | '/$organizationId/$projectId/events'
@@ -1189,6 +1210,7 @@ export interface FileRouteTypes {
     | '/$organizationId/billing'
     | '/$organizationId/settings'
     | '/onboarding/project'
+    | '/marketing/r/$token'
     | '/share/dashboard/$shareId'
     | '/share/overview/$shareId'
     | '/share/report/$shareId'
@@ -1208,6 +1230,7 @@ export interface FileRouteTypes {
     | '/$organizationId/members'
     | '/onboarding/$projectId/connect'
     | '/onboarding/$projectId/verify'
+    | '/marketing/webhooks/msg91/$'
     | '/$organizationId/$projectId'
     | '/$organizationId/$projectId/dashboards/$dashboardId'
     | '/$organizationId/$projectId/events'
@@ -1280,6 +1303,7 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/billing'
     | '/_app/$organizationId/settings'
     | '/_steps/onboarding/project'
+    | '/marketing/r/$token'
     | '/share/dashboard/$shareId'
     | '/share/overview/$shareId'
     | '/share/report/$shareId'
@@ -1301,6 +1325,7 @@ export interface FileRouteTypes {
     | '/_app/$organizationId/members/_tabs'
     | '/_steps/onboarding/$projectId/connect'
     | '/_steps/onboarding/$projectId/verify'
+    | '/marketing/webhooks/msg91/$'
     | '/_app/$organizationId/$projectId/'
     | '/_app/$organizationId/$projectId/dashboards_/$dashboardId'
     | '/_app/$organizationId/$projectId/events'
@@ -1384,9 +1409,11 @@ export interface RootRouteChildren {
   WidgetBadgeRoute: typeof WidgetBadgeRoute
   WidgetCounterRoute: typeof WidgetCounterRoute
   WidgetRealtimeRoute: typeof WidgetRealtimeRoute
+  MarketingRTokenRoute: typeof MarketingRTokenRoute
   ShareDashboardShareIdRoute: typeof ShareDashboardShareIdRoute
   ShareOverviewShareIdRoute: typeof ShareOverviewShareIdRoute
   ShareReportShareIdRoute: typeof ShareReportShareIdRoute
+  MarketingWebhooksMsg91SplatRoute: typeof MarketingWebhooksMsg91SplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -1566,6 +1593,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShareDashboardShareIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/marketing/r/$token': {
+      id: '/marketing/r/$token'
+      path: '/marketing/r/$token'
+      fullPath: '/marketing/r/$token'
+      preLoaderRoute: typeof MarketingRTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_steps/onboarding/project': {
       id: '/_steps/onboarding/project'
       path: '/onboarding/project'
@@ -1642,6 +1676,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/$organizationId/$projectId/'
       preLoaderRoute: typeof AppOrganizationIdProjectIdIndexRouteImport
       parentRoute: typeof AppOrganizationIdProjectIdRoute
+    }
+    '/marketing/webhooks/msg91/$': {
+      id: '/marketing/webhooks/msg91/$'
+      path: '/marketing/webhooks/msg91/$'
+      fullPath: '/marketing/webhooks/msg91/$'
+      preLoaderRoute: typeof MarketingWebhooksMsg91SplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_steps/onboarding/$projectId/verify': {
       id: '/_steps/onboarding/$projectId/verify'
@@ -2769,9 +2810,11 @@ const rootRouteChildren: RootRouteChildren = {
   WidgetBadgeRoute: WidgetBadgeRoute,
   WidgetCounterRoute: WidgetCounterRoute,
   WidgetRealtimeRoute: WidgetRealtimeRoute,
+  MarketingRTokenRoute: MarketingRTokenRoute,
   ShareDashboardShareIdRoute: ShareDashboardShareIdRoute,
   ShareOverviewShareIdRoute: ShareOverviewShareIdRoute,
   ShareReportShareIdRoute: ShareReportShareIdRoute,
+  MarketingWebhooksMsg91SplatRoute: MarketingWebhooksMsg91SplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
