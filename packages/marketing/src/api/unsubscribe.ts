@@ -9,11 +9,13 @@ const HKDF_INFO = 'marketing-unsubscribe';
 const KEY_BYTES = 32;
 // Bounds the work done on an unauthenticated input; covers profile ids up to about 2,900 characters.
 const MAX_TOKEN_LENGTH = 4096;
-const CHANNELS = ['email', 'push', 'webhook'] as const;
+const CHANNELS = ['email', 'push', 'webhook', 'sms', 'whatsapp'] as const;
 const CHANNEL_LABELS: Record<(typeof CHANNELS)[number], string> = {
   email: 'email',
   push: 'push notification',
   webhook: 'webhook',
+  sms: 'SMS',
+  whatsapp: 'WhatsApp',
 };
 const PAGE_HEADERS = {
   'content-type': 'text/html; charset=utf-8',
