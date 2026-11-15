@@ -166,6 +166,21 @@ describe('template routes', () => {
     );
   });
 
+  it('a push template is created and listed under the push filter', async () => {
+    const created = await call('POST', '/marketing/templates', {
+      body: {
+        channel: 'push',
+        displayName: 'Nudge',
+        category: 'service',
+        content: { body: 'Come back' },
+      },
+    });
+    expect(created.status).toBe(201);
+    const listed = await call('GET', '/marketing/templates?channel=push');
+    const { templates } = (await listed.json()) as { templates: unknown[] };
+    expect(templates).toHaveLength(1);
+  });
+
   it('an sms preview returns the approved text unchanged', async () => {
     const sms = await create(SMS);
     const res = await call(

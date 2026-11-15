@@ -17,6 +17,7 @@ function version(
     providerRef,
     approvedText: 'x',
     variables,
+    content: null,
     createdBy: 'u',
     createdAt: '2026-11-03T10:00:00.000Z',
   };

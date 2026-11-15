@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { HttpError, validate } from '../api/http';
 import type { Queryable, Sql } from '../engine/engine';
+import { zInlineTemplate } from '../rules/rule.schema';
+import { zEmailContent } from './email-blocks';
 
 const MAX_VARIABLES = 20;
 const MAX_VALUE_LENGTH = 500;
@@ -49,7 +51,7 @@ export const zTemplateVariable = z.strictObject({
     .refine(onlyProfilePlaceholders, 'only {{profile.<trait>}} placeholders'),
 });
 
-export const zTemplateInput = z
+const zProviderTemplateInput = z
   .strictObject({
     channel: z.enum(['sms', 'whatsapp']),
     displayName: z.string().min(1).max(MAX_DISPLAY_NAME_LENGTH),
@@ -81,6 +83,26 @@ export const zTemplateInput = z
       seen.add(variable.slot);
     }
   });
+
+const zPushTemplateInput = z.strictObject({
+  channel: z.literal('push'),
+  displayName: z.string().min(1).max(MAX_DISPLAY_NAME_LENGTH),
+  category: z.enum(['promotional', 'service']),
+  content: zInlineTemplate,
+});
+
+const zEmailTemplateInput = z.strictObject({
+  channel: z.literal('email'),
+  displayName: z.string().min(1).max(MAX_DISPLAY_NAME_LENGTH),
+  category: z.enum(['promotional', 'service']),
+  content: zEmailContent,
+});
+
+export const zTemplateInput = z.discriminatedUnion('channel', [
+  zProviderTemplateInput,
+  zPushTemplateInput,
+  zEmailTemplateInput,
+]);
 export type TemplateInput = z.infer<typeof zTemplateInput>;
 export type TemplateChannel = TemplateInput['channel'];
 
@@ -90,8 +112,10 @@ export interface TemplateVersion {
   displayName: string;
   category: 'promotional' | 'service';
   providerRef: unknown;
+  // Push and email versions carry `content` instead; their approvedText is ''.
   approvedText: string;
   variables: { slot: string; value: string }[];
+  content: unknown;
   createdBy: string;
   createdAt: string;
 }
@@ -130,15 +154,16 @@ interface DbRow {
   display_name: string;
   category: 'promotional' | 'service';
   provider_ref: unknown;
-  approved_text: string;
+  approved_text: string | null;
   variables: { slot: string; value: string }[];
+  content: unknown;
   created_by: string;
   created_at: Date;
 }
 
 const SELECT_ROWS = `
   SELECT t.id AS template_id, t.project_id, t.channel, t.enabled, t.current_version, t.updated_at,
-         v.version, v.display_name, v.category, v.provider_ref, v.approved_text, v.variables, v.created_by, v.created_at
+         v.version, v.display_name, v.category, v.provider_ref, v.approved_text, v.variables, v.content, v.created_by, v.created_at
   FROM marketing.message_templates t
   JOIN marketing.message_template_versions v ON v.template_id = t.id`;
 const CURRENT_VERSION_ONLY = 'v.version = t.current_version';
@@ -151,8 +176,9 @@ const toVersion = (row: DbRow): TemplateVersion => ({
   displayName: row.display_name,
   category: row.category,
   providerRef: row.provider_ref,
-  approvedText: row.approved_text,
+  approvedText: row.approved_text ?? '',
   variables: row.variables,
+  content: row.content ?? null,
   createdBy: row.created_by,
   createdAt: row.created_at.toISOString(),
 });
@@ -212,17 +238,19 @@ export function createTemplateRegistry(deps: { sql: Sql; now: () => Date }) {
     input: TemplateInput,
     userId: string
   ) {
+    const isProvider = 'providerRef' in input;
     await tx.$executeRawUnsafe(
       `INSERT INTO marketing.message_template_versions
-         (template_id, version, display_name, category, provider_ref, approved_text, variables, created_by, created_at)
-       VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8, $9)`,
+         (template_id, version, display_name, category, provider_ref, approved_text, variables, content, created_by, created_at)
+       VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6, $7::jsonb, $8::jsonb, $9, $10)`,
       id,
       version,
       input.displayName,
       input.category,
-      JSON.stringify(input.providerRef),
-      input.approvedText,
-      JSON.stringify(input.variables),
+      isProvider ? JSON.stringify(input.providerRef) : null,
+      isProvider ? input.approvedText : null,
+      JSON.stringify(isProvider ? input.variables : []),
+      isProvider ? null : JSON.stringify(input.content),
       userId,
       deps.now()
     );
@@ -375,7 +403,7 @@ export function createTemplateRegistry(deps: { sql: Sql; now: () => Date }) {
       }
       if (
         row.channel === 'whatsapp' &&
-        !whatsAppMappingMatches(row.approved_text, row.variables)
+        !whatsAppMappingMatches(row.approved_text ?? '', row.variables)
       ) {
         return { ok: false, code: 'template_mapping_missing' };
       }

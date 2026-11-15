@@ -76,6 +76,7 @@ function item(
       },
       approvedText: 'x',
       variables: [],
+      content: null,
       createdBy: 'u',
       createdAt: '2026-01-01T00:00:00Z',
     },

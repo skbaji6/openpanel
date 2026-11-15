@@ -11,7 +11,7 @@ const NUMBERED_PLACEHOLDER = /\{\{(\d+)\}\}/g;
 type TemplateRegistry = ReturnType<typeof createTemplateRegistry>;
 
 const zListQuery = z.strictObject({
-  channel: z.enum(['sms', 'whatsapp']).optional(),
+  channel: z.enum(['sms', 'whatsapp', 'push', 'email']).optional(),
 });
 // The registry validates the template fields strictly; only expectedVersion is the route's.
 const zUpdate = z.looseObject({ expectedVersion: z.number().int().min(1) });

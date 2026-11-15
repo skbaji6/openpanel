@@ -274,4 +274,46 @@ describe('template registry', () => {
     expect(error.code).toBe('channel_immutable');
     expect(error.status).toBe(400);
   });
+
+  it('a push template is created with content and versioned on update', async () => {
+    const PUSH = {
+      channel: 'push' as const,
+      displayName: 'Nudge',
+      category: 'service' as const,
+      content: { subject: 'Hi', body: 'One' },
+    };
+    const created = await registry.create(CTX, PUSH);
+    expect(created).toMatchObject({
+      channel: 'push',
+      content: { subject: 'Hi', body: 'One' },
+      providerRef: null,
+    });
+    const updated = await registry.update(
+      CTX,
+      created.templateId,
+      { ...PUSH, content: { body: 'Two' } },
+      1
+    );
+    expect(updated.version).toBe(2);
+    expect(
+      (await registry.getVersion('p1', created.templateId, 1)).content
+    ).toEqual({ subject: 'Hi', body: 'One' });
+  });
+
+  it('an sms template still needs providerRef', async () => {
+    const { providerRef: _omitted, ...withoutRef } = SMS;
+    const error = await rejection(registry.create(CTX, withoutRef));
+    expect(error.status).toBe(400);
+  });
+
+  it('content and providerRef cannot both be set', async () => {
+    const created = await registry.create(CTX, SMS);
+    const violation = (async () => {
+      await sql.$executeRawUnsafe(
+        `UPDATE marketing.message_template_versions SET content = '{}'::jsonb WHERE template_id = $1::uuid`,
+        created.templateId
+      );
+    })();
+    await expect(violation).rejects.toThrow();
+  });
 });
