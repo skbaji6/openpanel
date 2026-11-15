@@ -480,6 +480,16 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
             throw new HttpError(409, 'use_start');
           }
           const nextStatus = body.status ?? current.status;
+          const unconfirmed = remainingUnconfirmed(current, body);
+          if (
+            nextStatus === 'active' &&
+            current.status !== 'active' &&
+            unconfirmed.length > 0
+          ) {
+            throw new HttpError(409, 'journey_unconfirmed', undefined, {
+              fields: unconfirmed,
+            });
+          }
           let definition = body.definition ?? null;
           if (
             nextStatus === 'active' &&
@@ -508,7 +518,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
             definition ? JSON.stringify(definition) : null,
             body.definition?.name ?? null,
             body.status ?? null,
-            remainingUnconfirmed(current, body)
+            unconfirmed
           );
           return row;
         };

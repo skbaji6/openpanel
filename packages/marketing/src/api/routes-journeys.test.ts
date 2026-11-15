@@ -350,4 +350,38 @@ describe('journey lifecycle', () => {
       ],
     });
   });
+
+  it('a draft cannot reach active through paused while trigger or goal is unconfirmed', async () => {
+    const rule = await createRule(definition({ body: 'x' }), 'draft', [
+      'trigger',
+      'goal',
+    ]);
+    const path = `/marketing/rules/${rule.id}`;
+    expect((await call('PATCH', path, { status: 'paused' })).status).toBe(200);
+    const resume = await call('PATCH', path, { status: 'active' });
+    expect(await errorOf(resume)).toEqual([
+      409,
+      'journey_unconfirmed',
+      { fields: ['trigger', 'goal'] },
+    ]);
+    const combined = await call('PATCH', path, {
+      definition: definition({ body: 'y' }),
+      status: 'active',
+    });
+    expect((await errorOf(combined)).slice(0, 2)).toEqual([
+      409,
+      'journey_unconfirmed',
+    ]);
+    const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
+      'SELECT status FROM marketing.rules WHERE id = $1::uuid',
+      rule.id
+    );
+    expect(row?.status).toBe('paused');
+    const confirmed = await call('PATCH', path, {
+      confirmed: ['trigger', 'goal'],
+      status: 'active',
+    });
+    expect(confirmed.status).toBe(200);
+    expect(((await confirmed.json()) as RuleBody).status).toBe('active');
+  });
 });
