@@ -28,8 +28,8 @@ import {
 const TRANSACTION = { timeout: 60_000, maxWait: 30_000 };
 const MS_PER_MINUTE = 60_000;
 const PREVIEW_TTL_MS = 15 * MS_PER_MINUTE;
-const TEST_SEND_WINDOW_MS = 60 * MS_PER_MINUTE;
-const MAX_TEST_SENDS_PER_WINDOW = 10;
+export const TEST_SEND_WINDOW_MS = 60 * MS_PER_MINUTE;
+export const MAX_TEST_SENDS_PER_WINDOW = 10;
 const UNIQUE_VIOLATION = '23505';
 const ONE_ACTIVE_KEY = 'Key (project_id)=';
 const TERMINAL = new Set<CampaignState>(TERMINAL_STATES);

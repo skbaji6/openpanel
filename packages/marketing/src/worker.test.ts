@@ -76,6 +76,34 @@ async function insertTestSend(campaignId: string, project: string) {
   return id;
 }
 
+async function insertJourneyTestSend(project: string) {
+  const ruleId = randomUUID();
+  const definition = {
+    name: 'Journey',
+    trigger: { event: 'signup' },
+    goal: { kind: 'event', event: 'paid' },
+    steps: [{ delaySeconds: 60, channel: 'push', template: { body: 'Hi' } }],
+    reentry: { enabled: false, cooldownSeconds: 0 },
+    allowedEventProps: [],
+  };
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
+     VALUES ($1::uuid, $2, 'Journey', 'draft', $3::jsonb)`,
+    ruleId,
+    project,
+    JSON.stringify(definition)
+  );
+  const id = randomUUID();
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.journey_test_sends (id, project_id, rule_id, step_index, variant_key, profile_id)
+     VALUES ($1::uuid, $2, $3::uuid, 0, 'default', 'p1')`,
+    id,
+    project,
+    ruleId
+  );
+  return id;
+}
+
 async function firstValue(query: string, id: string): Promise<unknown> {
   const [row] = await sql.$queryRawUnsafe<{ value: unknown }[]>(query, id);
   return row?.value;
@@ -209,6 +237,7 @@ describe('startWorker campaign jobs', () => {
       const testProject = `worker-test-${runId}`;
       const draft = await insertCampaign(testProject, 'draft', 'not_started');
       const testSend = await insertTestSend(draft, testProject);
+      const journeyTestSend = await insertJourneyTestSend(testProject);
       const reapProject = `worker-reap-${runId}`;
       const reaped = await insertCampaign(reapProject, 'running', 'done');
       await insertRecipient(
@@ -229,6 +258,14 @@ describe('startWorker campaign jobs', () => {
           async () =>
             (await testSendState(testSend)) === 'failed:channel_not_configured',
           'the test send to fail without credentials'
+        );
+        await waitUntil(
+          async () =>
+            (await firstValue(
+              "SELECT status || ':' || COALESCE(reason, '') AS value FROM marketing.journey_test_sends WHERE id = $1::uuid",
+              journeyTestSend
+            )) === 'skipped:channel_not_configured',
+          'the journey test send to end without credentials'
         );
         await waitUntil(
           async () =>

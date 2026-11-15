@@ -134,6 +134,7 @@ export async function startWorker(
     { createChannelBackoff, createRateBucket },
     { runReapTick, startDispatchLane },
     { runTestSendTick },
+    { runJourneyTestSendTick },
   ] = await Promise.all([
     import('./db/client'),
     import('./db/migrate'),
@@ -154,6 +155,7 @@ export async function startWorker(
     import('./campaign/pacing'),
     import('./campaign/dispatch-lane'),
     import('./campaign/test-sends'),
+    import('./journeys/test-send'),
   ]);
   const now = () => new Date();
   const secrets = secretsOf(cfg);
@@ -252,6 +254,9 @@ export async function startWorker(
         }),
         every(cfg.tickMs, 'test sends', secrets, () =>
           runTestSendTick(dispatchDeps)
+        ),
+        every(cfg.tickMs, 'journey test sends', secrets, () =>
+          runJourneyTestSendTick(dispatchDeps)
         )
       );
     } else {

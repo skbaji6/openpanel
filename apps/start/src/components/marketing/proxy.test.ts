@@ -348,6 +348,7 @@ describe('marketing proxy', () => {
 
   const MEMBER_ROUTES: [string, string][] = [
     ['GET', 'rules/r1/skips'],
+    ['GET', 'rules/r1/test-sends'],
     ['GET', 'audience/schema'],
     ['GET', 'audience/dimensions/plan/values'],
     ['POST', 'audience/resolve'],
@@ -369,6 +370,7 @@ describe('marketing proxy', () => {
   ];
   const ADMIN_ROUTES: [string, string][] = [
     ['POST', 'rules/r1/start'],
+    ['POST', 'rules/r1/test-send'],
     ['DELETE', 'audiences/a1'],
     ['DELETE', 'campaigns/c1'],
     ...[

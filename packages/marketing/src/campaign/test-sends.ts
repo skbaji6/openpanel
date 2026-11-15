@@ -123,7 +123,7 @@ async function chooseTemplate(
 }
 
 // Only errors raised before any provider call: nothing was sent, so the test send can end at once.
-function lookupFailureReason(error: unknown): string | null {
+export function lookupFailureReason(error: unknown): string | null {
   if (error instanceof SourceAuthError) {
     return 'source_auth_failed';
   }

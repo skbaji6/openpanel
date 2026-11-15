@@ -4,6 +4,10 @@ import { readCsv } from '../journeys/csv-reader';
 import { planImport } from '../journeys/import-plan';
 import { applyImport } from '../journeys/import-store';
 import {
+  listJourneyTestSends,
+  requestJourneyTestSend,
+} from '../journeys/test-send';
+import {
   ImportFileError,
   MAX_IMPORT_BYTES,
   readXlsx,
@@ -25,6 +29,12 @@ import {
 } from './routes-dashboard';
 
 const CONFLICT = 409;
+
+const zTestSend = z.strictObject({
+  profileId: z.string(),
+  stepIndex: z.number().int().min(0),
+  variant: z.string().min(1).max(MAX_VARIANT_KEY_LENGTH),
+});
 
 const zStart = z.strictObject({ expectedVersion: z.number().int() });
 
@@ -185,6 +195,37 @@ export function routesJourneys(deps: JourneyDeps): Route[] {
           rule: started.row ? toRule(started.row) : null,
           pinned: started.pinned,
         });
+      },
+    },
+    {
+      method: 'POST',
+      pattern: /^\/marketing\/rules\/([^/]+)\/test-send$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const ruleId = ruleIdParam(ctx.params);
+        const body = await parseJsonBody(ctx.req, zTestSend);
+        return json(
+          await requestJourneyTestSend(
+            { sql, registry, now: () => new Date() },
+            ctx.projectId,
+            ruleId,
+            body
+          )
+        );
+      },
+    },
+    {
+      method: 'GET',
+      pattern: /^\/marketing\/rules\/([^/]+)\/test-sends$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        return json(
+          await listJourneyTestSends(
+            sql,
+            ctx.projectId,
+            ruleIdParam(ctx.params)
+          )
+        );
       },
     },
     {

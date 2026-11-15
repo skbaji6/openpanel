@@ -491,3 +491,68 @@ describe('journey import', () => {
     ]);
   });
 });
+
+describe('journey test sends', () => {
+  const twoVariants = () => ({
+    ...definition({ body: 'default' }),
+    steps: [
+      {
+        delaySeconds: 60,
+        channel: 'push',
+        template: { body: 'default' },
+        variants: { AP: { body: 'AP' } },
+      },
+    ],
+  });
+
+  it('queues a draft step and lists it with ids and codes only', async () => {
+    const rule = await createRule(twoVariants());
+    const res = await call('POST', `/marketing/rules/${rule.id}/test-send`, {
+      profileId: 'p1',
+      stepIndex: 0,
+      variant: 'AP',
+    });
+    expect(res.status).toBe(200);
+    const { id, ...rest } = (await res.json()) as { id: string };
+    expect(id).toBeTruthy();
+    expect(rest).toEqual({});
+
+    const list = await call('GET', `/marketing/rules/${rule.id}/test-sends`);
+    expect(list.status).toBe(200);
+    expect(await list.json()).toMatchObject({
+      testSends: [
+        {
+          id,
+          stepIndex: 0,
+          variant: 'AP',
+          profileId: 'p1',
+          status: 'pending',
+          reason: null,
+          sentAt: null,
+        },
+      ],
+    });
+  });
+
+  it('refuses an unknown variant, a bad body and a missing rule', async () => {
+    const rule = await createRule(twoVariants());
+    const path = `/marketing/rules/${rule.id}/test-send`;
+    const unknown = await call('POST', path, {
+      profileId: 'p1',
+      stepIndex: 0,
+      variant: 'KA',
+    });
+    expect((await errorOf(unknown)).slice(0, 2)).toEqual([
+      400,
+      'unknown_variant',
+    ]);
+    const bad = await call('POST', path, { profileId: 'p1' });
+    expect(bad.status).toBe(400);
+    const missing = await call(
+      'POST',
+      `/marketing/rules/${randomUUID()}/test-send`,
+      { profileId: 'p1', stepIndex: 0, variant: 'default' }
+    );
+    expect(missing.status).toBe(404);
+  });
+});
