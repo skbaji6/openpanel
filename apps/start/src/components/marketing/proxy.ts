@@ -20,6 +20,7 @@ const ALLOWED_ROUTES: {
   methods: Partial<Record<string, Requirement>>;
 }[] = [
   { pattern: /^rules$/, methods: { GET: 'member', POST: 'admin' } },
+  { pattern: /^rules\/import$/, methods: { POST: 'admin' } },
   { pattern: /^rules\/[^/]+$/, methods: { PATCH: 'admin', DELETE: 'admin' } },
   { pattern: /^rules\/[^/]+\/start$/, methods: { POST: 'admin' } },
   { pattern: /^rules\/[^/]+\/skips$/, methods: { GET: 'member' } },

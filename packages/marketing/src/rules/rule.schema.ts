@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 const MAX_SUBJECT_LENGTH = 300;
-const MAX_BODY_LENGTH = 20_000;
+export const MAX_BODY_LENGTH = 20_000;
 export const MAX_DELAY_SECONDS = 90 * 24 * 60 * 60;
 export const MAX_STEPS = 20;
 export const MAX_VARIANTS = 40;

@@ -417,6 +417,19 @@ describe('marketing proxy', () => {
     expect(allowed.status).toBe(200);
   });
 
+  test('import needs admin', async () => {
+    const member = setup({ role: 'member' });
+    const denied = await member.proxy.handle(send('rules/import', 'POST'));
+    expect(denied.status).toBe(403);
+    expect(member.marketingCalls()).toHaveLength(0);
+    const admin = setup({ role: 'admin' });
+    const allowed = await admin.proxy.handle(send('rules/import', 'POST'));
+    expect(allowed.status).toBe(200);
+    expect(admin.marketingCalls()).toHaveLength(1);
+    const wrongMethod = await admin.proxy.handle(send('rules/import', 'GET'));
+    expect(wrongMethod.status).toBe(405);
+  });
+
   test('skips allows a member', async () => {
     const { proxy } = setup({ role: 'member' });
     expect((await proxy.handle(send('rules/r1/skips', 'GET'))).status).toBe(

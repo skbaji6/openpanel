@@ -1,6 +1,19 @@
 import { z } from 'zod';
 import type { Sql } from '../engine/engine';
-import { zRuleDefinition } from '../rules/rule.schema';
+import { readCsv } from '../journeys/csv-reader';
+import { planImport } from '../journeys/import-plan';
+import { applyImport } from '../journeys/import-store';
+import {
+  ImportFileError,
+  MAX_IMPORT_BYTES,
+  readXlsx,
+  type SheetRows,
+} from '../journeys/xlsx-reader';
+import {
+  MAX_VARIANT_KEY_LENGTH,
+  MAX_VARIANTS,
+  zRuleDefinition,
+} from '../rules/rule.schema';
 import { pinOrThrow } from '../templates/pin';
 import type { createTemplateRegistry } from '../templates/registry';
 import { HttpError, json, parseJsonBody, type Route } from './http';
@@ -14,6 +27,58 @@ import {
 const CONFLICT = 409;
 
 const zStart = z.strictObject({ expectedVersion: z.number().int() });
+
+const MAX_IMPORT_BASE64_LENGTH = Math.ceil(MAX_IMPORT_BYTES / 3) * 4;
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+const MAX_JOURNEY_OPTIONS = 200;
+const MAX_EVENT_NAME_LENGTH = 200;
+
+const zEventName = z.string().trim().min(1).max(MAX_EVENT_NAME_LENGTH);
+const zImport = z.strictObject({
+  format: z.enum(['xlsx', 'csv']),
+  contentBase64: z.string(),
+  dryRun: z.boolean(),
+  options: z.strictObject({
+    states: z
+      .record(z.string(), z.string().trim().min(1).max(MAX_VARIANT_KEY_LENGTH))
+      .refine((states) => Object.keys(states).length <= MAX_VARIANTS),
+    journeys: z
+      .record(
+        z.string(),
+        z.strictObject({
+          triggerEvent: zEventName.optional(),
+          goalEvent: zEventName.optional(),
+        })
+      )
+      .refine((journeys) => Object.keys(journeys).length <= MAX_JOURNEY_OPTIONS)
+      .optional(),
+    overwriteEdited: z.boolean().optional(),
+  }),
+});
+
+function readUpload(
+  format: 'xlsx' | 'csv',
+  contentBase64: string
+): SheetRows[] {
+  // The length check comes first so an oversized upload is never decoded.
+  if (contentBase64.length > MAX_IMPORT_BASE64_LENGTH) {
+    throw new ImportFileError('file_too_large');
+  }
+  if (!BASE64_PATTERN.test(contentBase64)) {
+    throw new HttpError(400, 'invalid_body');
+  }
+  const bytes = Buffer.from(contentBase64, 'base64');
+  if (format === 'xlsx') {
+    return readXlsx(new Uint8Array(bytes));
+  }
+  try {
+    return readCsv(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+  } catch (error) {
+    throw error instanceof ImportFileError
+      ? error
+      : new ImportFileError('malformed_csv');
+  }
+}
 
 const SKIPS_SQL = `
   SELECT COALESCE(s.outcome->>'reason', 'unknown') AS reason, count(*)::int AS count
@@ -32,6 +97,45 @@ export function routesJourneys(deps: JourneyDeps): Route[] {
   const { sql, registry } = deps;
 
   return [
+    {
+      method: 'POST',
+      pattern: /^\/marketing\/rules\/import$/,
+      auth: 'dashboard',
+      async handle(ctx) {
+        const body = await parseJsonBody(ctx.req, zImport);
+        let sheets: SheetRows[];
+        try {
+          sheets = readUpload(body.format, body.contentBase64);
+        } catch (error) {
+          if (error instanceof ImportFileError) {
+            throw new HttpError(400, error.code);
+          }
+          throw error;
+        }
+        const { journeys, problems } = planImport(sheets, body.options);
+        const results = await applyImport(sql, ctx.projectId, journeys, {
+          overwriteEdited: body.options.overwriteEdited,
+          dryRun: body.dryRun,
+        });
+        const variants = Object.values(body.options.states);
+        return json({
+          sheets: sheets.map((sheet) => sheet.sheet).filter(Boolean),
+          journeys: journeys.map((journey) => {
+            const result = results.find((r) => r.key === journey.key);
+            return {
+              key: journey.key,
+              name: journey.name,
+              action: result?.action,
+              ruleId: result?.ruleId ?? null,
+              steps: journey.definition.steps.length,
+              variants,
+              unconfirmed: journey.unconfirmed,
+            };
+          }),
+          problems,
+        });
+      },
+    },
     {
       method: 'POST',
       pattern: /^\/marketing\/rules\/([^/]+)\/start$/,

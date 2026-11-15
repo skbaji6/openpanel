@@ -385,3 +385,109 @@ describe('journey lifecycle', () => {
     expect(((await confirmed.json()) as RuleBody).status).toBe('active');
   });
 });
+
+describe('journey import', () => {
+  const csv = (rows: string[]) =>
+    Buffer.from(
+      ['State,Event Name,Platform,Timing,Message (Content)', ...rows].join('\n')
+    ).toString('base64');
+  const importBody = (
+    contentBase64: string,
+    extra: Record<string, unknown> = {}
+  ) => ({
+    format: 'csv',
+    contentBase64,
+    dryRun: false,
+    options: { states: { TS: 'TS' } },
+    ...extra,
+  });
+  const ROWS = [
+    'TS,Cart Abandoned,In-App Notification,D0,hello',
+    'TS,Cart Abandoned,In-App Notification,D1 on next login,never',
+    ',Cart Abandoned,In-App Notification,D2,nostate',
+  ];
+
+  it('a dry run reports the plan and writes nothing', async () => {
+    const res = await call(
+      'POST',
+      '/marketing/rules/import',
+      importBody(csv(ROWS), { dryRun: true })
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      sheets: string[];
+      journeys: { key: string; action: string; steps: number; ruleId: null }[];
+      problems: { code: string }[];
+    };
+    expect(body.sheets).toEqual(['TS']);
+    expect(body.journeys[0]).toMatchObject({
+      key: 'cart_abandoned',
+      action: 'created',
+      steps: 1,
+      ruleId: null,
+    });
+    expect(body.problems.map((p) => p.code).sort()).toEqual([
+      'conditional_timing',
+      'unknown_sheet',
+    ]);
+    const text = JSON.stringify(body);
+    expect(text).not.toContain('hello');
+    expect(text).not.toContain('nostate');
+    const [count] = await sql.$queryRawUnsafe<{ n: number }[]>(
+      'SELECT count(*)::int AS n FROM marketing.rules'
+    );
+    expect(count?.n).toBe(0);
+  });
+
+  it('applying creates a draft and a second apply is unchanged', async () => {
+    const body = importBody(csv(ROWS));
+    const first = (await (
+      await call('POST', '/marketing/rules/import', body)
+    ).json()) as {
+      journeys: { action: string; ruleId: string }[];
+    };
+    expect(first.journeys[0]?.action).toBe('created');
+    const second = (await (
+      await call('POST', '/marketing/rules/import', body)
+    ).json()) as {
+      journeys: { action: string }[];
+    };
+    expect(second.journeys[0]?.action).toBe('unchanged');
+  });
+
+  it('an oversized upload is rejected before decoding', async () => {
+    const res = await call(
+      'POST',
+      '/marketing/rules/import',
+      importBody('A'.repeat(700_000))
+    );
+    expect(await errorOf(res)).toEqual([400, 'file_too_large', undefined]);
+  });
+
+  it('reader errors map to 400 with their code', async () => {
+    const notXlsx = await call(
+      'POST',
+      '/marketing/rules/import',
+      importBody(Buffer.from('nope').toString('base64'), { format: 'xlsx' })
+    );
+    expect((await errorOf(notXlsx)).slice(0, 2)).toEqual([400, 'not_xlsx']);
+    const noState = await call(
+      'POST',
+      '/marketing/rules/import',
+      importBody(Buffer.from('a,b\n1,2').toString('base64'))
+    );
+    expect((await errorOf(noState)).slice(0, 2)).toEqual([
+      400,
+      'missing_column',
+    ]);
+    const badBase64 = await call(
+      'POST',
+      '/marketing/rules/import',
+      importBody('not base64!')
+    );
+    expect((await errorOf(badBase64)).slice(0, 2)).toEqual([
+      400,
+      'invalid_body',
+    ]);
+  });
+});
