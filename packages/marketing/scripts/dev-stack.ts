@@ -27,6 +27,18 @@ if (!rawDatabaseUrl) {
     'DATABASE_URL is required: the demo audience lives in the schema reference_demo of that database'
   );
 }
+const LOCAL_DATABASE_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const ALLOW_REMOTE_ENV = 'DEV_STACK_ALLOW_REMOTE_DATABASE';
+if (
+  !(
+    LOCAL_DATABASE_HOSTS.has(new URL(rawDatabaseUrl).hostname) ||
+    process.env[ALLOW_REMOTE_ENV] === '1'
+  )
+) {
+  throw new Error(
+    `This script drops the schema reference_demo, and DATABASE_URL is not on this machine. Set ${ALLOW_REMOTE_ENV}=1 to use it anyway.`
+  );
+}
 // Prisma's ?schema=public is not a Postgres setting, so Bun's driver rejects it.
 const databaseUrl = new URL(rawDatabaseUrl);
 databaseUrl.searchParams.delete('schema');

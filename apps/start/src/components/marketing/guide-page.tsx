@@ -192,7 +192,8 @@ export function GuidePage() {
           <li>
             <strong>Check and send.</strong> Press Count students. Then read the
             estimate, and send a test to one student. The count must be less
-            than 15 minutes old to start.
+            than 15 minutes old, and the campaign and audience unchanged since,
+            to start.
           </li>
           <li>
             <strong>Start now</strong> (or Schedule for a set time). It always
@@ -241,9 +242,9 @@ export function GuidePage() {
           <div>
             <dt className="font-medium">In use</dt>
             <dd className="text-muted-foreground">
-              An audience used by a campaign that has not finished cannot be
-              changed or deleted. Make another audience, or wait for the
-              campaign to end.
+              An audience used by a campaign that is scheduled, sending or
+              paused cannot be changed or deleted. A draft does not lock it.
+              Make another audience, or wait for the campaign to end.
             </dd>
           </div>
         </dl>
@@ -256,10 +257,11 @@ export function GuidePage() {
           or the WhatsApp template name, namespace and language), the approved
           text, and what fills each variable (for example{' '}
           <code>{'{{profile.first_name}}'}</code>). A student without that value
-          is skipped with "A variable had no value for this student". Editing a
-          template makes a new version; a campaign keeps the version it started
-          with, and turning a template off only stops new campaigns from using
-          it. Push and webhook messages are written in the campaign itself.
+          fails with "A variable had no value for this student" and counts as
+          Failed. Editing a template makes a new version; a campaign keeps the
+          version it started with, and turning a template off only stops new
+          campaigns from using it. Push and webhook messages are written in the
+          campaign itself.
         </p>
       </Section>
 
@@ -304,8 +306,9 @@ export function GuidePage() {
           <div>
             <dt className="font-medium">Completed</dt>
             <dd className="text-muted-foreground">
-              Every student was sent, skipped or failed. "To send" is the number
-              of students, and Sent, Failed, Skipped and Uncertain add up to it.
+              Every student was sent, skipped, failed or left uncertain. "To
+              send" is the number of students, and Sent, Failed, Skipped and
+              Uncertain add up to it. Retry uncertain is still available.
             </dd>
           </div>
           <div>
@@ -377,9 +380,10 @@ export function GuidePage() {
             <dt className="font-medium">Limit per student</dt>
             <dd className="text-muted-foreground">
               At most N messages in a period. It counts every message that
-              student got on that channel, from any campaign or journey, not
-              only this one. Students at the limit are skipped with "Limit per
-              student reached".
+              student got on that channel from any campaign or journey, not only
+              this one (all channels if the project's limit is set that way).
+              Students at the limit are skipped with "Limit per student
+              reached".
             </dd>
           </div>
           <div>

@@ -387,18 +387,18 @@ What an operator does in the dashboard, with the wording of its screens. The Gui
 2. **Templates tab** (SMS and WhatsApp). Add template: name, category, the provider reference (flow ID for SMS), approved text and variables. Enable it; only enabled templates appear in a campaign.
 3. **Audiences tab.** New audience: add conditions under "Who is in", hand-picked students and exclusions as needed, Save, then Count and Preview. A snapshot audience is frozen with "Freeze now".
 4. **Campaigns tab.** New campaign: name, channel, audience, template or message, when to send, quiet hours and limit per student. Save.
-5. **Check and send.** Count students, read the estimate, Send test to one student id. Then Start now (or Schedule). It always asks you to confirm the counted number and channel; the server checks it again, and a changed count asks you to count again.
+5. **Check and send.** Count students (valid 15 minutes, and only while the campaign and audience are unchanged), read the estimate, Send test to one student id. Then Start now (or Schedule). It always asks you to confirm the counted number and channel; the server checks it again, and a changed count asks you to count again.
 6. **Watch it.** The detail view shows To send, Sent, Failed, Skipped and Uncertain, why some were not sent, and the recipients. A waiting campaign says why in one line and continues by itself.
 
 Facts to know:
 
 - One campaign per project runs at a time; others wait their turn. A paused campaign keeps the slot.
 - A draft cannot be cancelled, only edited or deleted. Cancel applies to a scheduled or started campaign.
-- An audience used by a campaign that has not finished cannot be changed or deleted.
+- An audience used by a campaign that is scheduled, sending or paused cannot be changed or deleted; a draft does not lock it.
 - Test sends are queued, final (never retried) and limited to 10 per campaign per hour.
 - Uncertain means the provider may or may not have received the message; Retry uncertain can send a duplicate.
-- The limit per student counts every message that student got on that channel, from any campaign or journey.
-- Quiet hours for a campaign: "Use the channel's quiet hours" inherits the setting (empty in the API); "No quiet hours" turns them off for this campaign (`disabled` in the API).
+- The limit per student counts every message that student got on that channel from any campaign or journey (all channels if the project's limit is set that way).
+- Quiet hours for a campaign: "Use the channel's quiet hours" inherits the setting (`quietHoursOverride` is `null` in the API); "No quiet hours" turns them off for this campaign (`{ "enabled": false }`).
 - A push `link` reaches the app as `data.link`; the mobile app has to read it.
 - Only owners and admins start, schedule, pause, resume, cancel, delete or test; members draft and look.
 
@@ -419,6 +419,8 @@ Without real accounts, `scripts/dev-stack.ts` stands in for the audience API (th
 cd packages/marketing
 bun scripts/dev-stack.ts    # needs DATABASE_URL; prints the values to enter and waits for Ctrl+C
 ```
+
+It drops and recreates the schema `reference_demo`, so it refuses a `DATABASE_URL` whose host is not `localhost`, `127.0.0.1` or `[::1]`. To use another database on purpose, set `DEV_STACK_ALLOW_REMOTE_DATABASE=1`.
 
 Start the worker with `MARKETING_WEBHOOK_ALLOW_HOSTS=127.0.0.1` (the fake MSG91 host; plain http is refused for any other host) and the same `MARKETING_PROXY_SECRET` as `apps/start/.env.local`. Then enter what the script prints: audience source base URL, key id and secret on the Channels tab, and for SMS any auth key with the fake MSG91 base URL (its port changes on each run). Try the audience "Semester is 6": 20 students.
 

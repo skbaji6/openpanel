@@ -277,7 +277,7 @@ Afterwards run the plugin tests and `bun run typecheck`, and check `git diff --n
 
 ## Trying it locally
 
-`bun scripts/dev-stack.ts` (from `packages/marketing`, needs `DATABASE_URL`) starts the reference audience API over a demo schema with 50 students and a fake MSG91, prints the values to enter in the dashboard and exits on Ctrl+C. It sends nothing real, and there is no push fake yet. Start the worker with `MARKETING_WEBHOOK_ALLOW_HOSTS=127.0.0.1`, since plain http to the fake is only allowed for listed hosts.
+`bun scripts/dev-stack.ts` (from `packages/marketing`, needs `DATABASE_URL`) starts the reference audience API over a demo schema with 50 students and a fake MSG91, prints the values to enter in the dashboard and exits on Ctrl+C. It sends nothing real, and there is no push fake yet. It drops and recreates the schema `reference_demo`, so it refuses a `DATABASE_URL` whose host is not `localhost`, `127.0.0.1` or `[::1]`; set `DEV_STACK_ALLOW_REMOTE_DATABASE=1` to override. Start the worker with `MARKETING_WEBHOOK_ALLOW_HOSTS=127.0.0.1`, since plain http to the fake is only allowed for listed hosts.
 
 The browser check, skipped unless `MARKETING_E2E=1` (it needs the worker and the dev stack running):
 
