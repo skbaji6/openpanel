@@ -83,6 +83,8 @@ export function emptyRuleDefinition(): RuleDefinition {
   };
 }
 
+const EMPTY_TEMPLATE = { subject: '', body: '' };
+
 function newStep(previous: Step | undefined): Step {
   return {
     delaySeconds: previous
@@ -577,7 +579,7 @@ function StepPreview({
   const request = useDebounceValue(
     JSON.stringify({
       channel: step.channel,
-      template: step.template,
+      template: step.template ?? EMPTY_TEMPLATE,
       allowedEventProps,
       sample: {
         profile: SAMPLE_PROFILE,
@@ -674,10 +676,13 @@ function StepFields({
           onChange={(event) =>
             onChange({
               ...step,
-              template: { ...step.template, subject: event.target.value },
+              template: {
+                ...(step.template ?? EMPTY_TEMPLATE),
+                subject: event.target.value,
+              },
             })
           }
-          value={step.template.subject ?? ''}
+          value={step.template?.subject ?? ''}
         />
       )}
       <WithLabel
@@ -691,11 +696,14 @@ function StepFields({
           onChange={(event) =>
             onChange({
               ...step,
-              template: { ...step.template, body: event.target.value },
+              template: {
+                ...(step.template ?? EMPTY_TEMPLATE),
+                body: event.target.value,
+              },
             })
           }
           rows={5}
-          value={step.template.body}
+          value={step.template?.body ?? ''}
         />
       </WithLabel>
       <StepPreview allowedEventProps={allowedEventProps} step={step} />

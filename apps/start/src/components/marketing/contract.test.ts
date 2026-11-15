@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
+  CHANNELS,
   MAX_BODY_LENGTH,
   MAX_DELAY_SECONDS,
   MAX_STEPS,
@@ -41,6 +42,10 @@ function validRule(): RuleDefinition {
 }
 
 describe('contract', () => {
+  test('CHANNELS survives the step refinements', () => {
+    expect([...CHANNELS]).toEqual(['email', 'webhook', 'push']);
+  });
+
   test('contract accepts the same starter rules the service defines', () => {
     for (const definition of Object.values(starterRules)) {
       expect(zRuleDefinition.safeParse(definition).success).toBe(true);
@@ -129,7 +134,6 @@ describe('contract', () => {
   });
 
   test('contract strips unknown keys like the service schema', () => {
-    expect(SERVICE_SCHEMA_SOURCE).not.toContain('strictObject');
     const parsed = zRuleDefinition.parse({ ...validRule(), extra: true });
     expect(parsed).not.toHaveProperty('extra');
   });

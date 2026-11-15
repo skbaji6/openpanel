@@ -1018,6 +1018,7 @@ export function loadChannelConfig(
 
 function render(
   stepDef: Step,
+  template: { subject?: string; body: string },
   context: StepContext,
   goal: GoalResult,
   meta: RenderedMessage['meta']
@@ -1030,7 +1031,7 @@ function render(
     missing: goal.missing,
     allowedEventProps: context.rule_snapshot.allowedEventProps,
   };
-  const { channel, template } = stepDef;
+  const { channel } = stepDef;
   const heading =
     template.subject === undefined
       ? undefined
@@ -1162,6 +1163,11 @@ async function deliver(
     return await step.finish('skipped', 'invalid_channel_config');
   }
 
+  const template = stepDef.template;
+  if (template?.body === undefined) {
+    return await step.finish('skipped', 'no_message');
+  }
+
   const reserved = await step.reserve({
     projectId: context.project_id,
     profileId: context.profile_id,
@@ -1173,12 +1179,18 @@ async function deliver(
     return reserved;
   }
 
-  const message = render(stepDef, context, goal, {
-    projectId: context.project_id,
-    enrollmentId: claim.enrollment_id,
-    ruleId: context.rule_id,
-    stepIndex: claim.step_index,
-  });
+  const message = render(
+    stepDef,
+    { ...template, body: template.body },
+    context,
+    goal,
+    {
+      projectId: context.project_id,
+      enrollmentId: claim.enrollment_id,
+      ruleId: context.rule_id,
+      stepIndex: claim.step_index,
+    }
+  );
   const leased = await step.extendLease(deps.now());
   if (leased !== true) {
     return leased;

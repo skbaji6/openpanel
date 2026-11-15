@@ -16,7 +16,9 @@ import {
 } from '../engine/engine';
 import { HH_MM } from '../engine/gates';
 import {
+  MAX_DEFINITION_BYTES,
   MAX_DELAY_SECONDS,
+  zInlineTemplate,
   zRuleDefinition,
   zStep,
 } from '../rules/rule.schema';
@@ -49,21 +51,28 @@ const STOP_TRANSACTION = { timeout: 120_000, maxWait: 30_000 };
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-const zBoundedRule = zRuleDefinition.refine(
-  (rule) =>
-    rule.name.length <= MAX_NAME_LENGTH &&
-    (rule.trigger.filters?.length ?? 0) <= MAX_FILTERS &&
-    rule.allowedEventProps.length <= MAX_PROPERTY_NAMES &&
-    (rule.goal.kind !== 'inactivity' ||
-      rule.goal.excludeEvents.length <= MAX_PROPERTY_NAMES),
-  {
-    message: 'rule exceeds the allowed name length, filters or properties',
-  }
-);
-const zStatus = z.enum(['active', 'paused']);
+const zBoundedRule = zRuleDefinition
+  .refine(
+    (rule) =>
+      new TextEncoder().encode(JSON.stringify(rule)).length <=
+      MAX_DEFINITION_BYTES,
+    { message: 'definition is too large' }
+  )
+  .refine(
+    (rule) =>
+      rule.name.length <= MAX_NAME_LENGTH &&
+      (rule.trigger.filters?.length ?? 0) <= MAX_FILTERS &&
+      rule.allowedEventProps.length <= MAX_PROPERTY_NAMES &&
+      (rule.goal.kind !== 'inactivity' ||
+        rule.goal.excludeEvents.length <= MAX_PROPERTY_NAMES),
+    {
+      message: 'rule exceeds the allowed name length, filters or properties',
+    }
+  );
+const zStatus = z.enum(['draft', 'active', 'paused']);
 const zCreateRule = z.strictObject({
   definition: zBoundedRule,
-  status: zStatus.default('paused'),
+  status: zStatus.default('draft'),
 });
 const zUpdateRule = z
   .strictObject({
@@ -110,7 +119,7 @@ const zSettings = z.strictObject({
 const zRecord = z.record(z.string(), z.unknown());
 const zPreview = z.strictObject({
   channel: zStep.shape.channel,
-  template: zStep.shape.template,
+  template: zInlineTemplate,
   sample: z
     .strictObject({
       profile: zRecord.optional(),
@@ -122,7 +131,7 @@ const zPreview = z.strictObject({
 });
 
 const RULE_COLUMNS =
-  'id::text, name, status, definition, version, created_at, updated_at';
+  'id::text, name, status, definition, version, created_at, updated_at, journey_key, unconfirmed';
 
 interface RuleRow {
   id: string;
@@ -132,6 +141,8 @@ interface RuleRow {
   version: number;
   created_at: Date;
   updated_at: Date;
+  journey_key: string | null;
+  unconfirmed: string[];
 }
 
 function toRule(row: RuleRow) {
@@ -143,6 +154,8 @@ function toRule(row: RuleRow) {
     definition: row.definition,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    journeyKey: row.journey_key,
+    unconfirmed: row.unconfirmed,
   };
 }
 

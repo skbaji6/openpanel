@@ -42,7 +42,7 @@ import {
   zCaps,
 } from '../engine/ticker';
 import { redactSecrets } from '../redact';
-import { zStep } from '../rules/rule.schema';
+import { zInlineTemplate } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
 import { renderProviderVariables } from '../templates/provider-render';
 import type {
@@ -498,7 +498,7 @@ function render(
     const template =
       campaign.channel === 'push'
         ? zPushTemplate.parse(campaign.template)
-        : zStep.shape.template.parse(campaign.template);
+        : zInlineTemplate.parse(campaign.template);
     const vars = {
       profile: traits,
       event: {},

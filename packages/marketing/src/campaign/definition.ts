@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { isTimeZone } from '../api/routes-dashboard';
 import { HH_MM } from '../engine/gates';
-import { zStep } from '../rules/rule.schema';
+import { zInlineTemplate } from '../rules/rule.schema';
 
 const MAX_CAMPAIGN_NAME = 200;
 const MAX_CAMPAIGN_KEY = 100;
@@ -107,8 +107,8 @@ const zLink = z
   .refine(noVariables, 'must not contain variables');
 
 export const zPushTemplate = z.strictObject({
-  subject: zStep.shape.template.shape.subject,
-  body: zStep.shape.template.shape.body,
+  subject: zInlineTemplate.shape.subject,
+  body: zInlineTemplate.shape.body,
   imageUrl: zImageUrl.optional(),
   link: zLink.optional(),
 });
@@ -121,7 +121,7 @@ const pushShape = {
 const journeyShape = {
   ...commonFields,
   channel: z.enum(JOURNEY_TEMPLATE_CHANNELS),
-  template: zStep.shape.template.strict(),
+  template: zInlineTemplate,
 };
 export const zRegistryTemplate = z.strictObject({
   templateId: z.string().min(1).max(MAX_TEMPLATE_ID),

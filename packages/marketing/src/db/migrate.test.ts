@@ -128,4 +128,23 @@ describe('marketing migrations under concurrency', () => {
     );
     expect(row?.count).toBe(files.length);
   });
+
+  it('0016 allows status draft and keeps existing rows', async () => {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.rules (id, project_id, name, status, definition)
+       VALUES (gen_random_uuid(), 'p1', 'a', 'active', '{}'::jsonb), (gen_random_uuid(), 'p1', 'd', 'draft', '{}'::jsonb)`
+    );
+    await expect(
+      (async () =>
+        await sql.$executeRawUnsafe(
+          `INSERT INTO marketing.rules (id, project_id, name, status, definition)
+           VALUES (gen_random_uuid(), 'p1', 'x', 'bogus', '{}'::jsonb)`
+        ))()
+    ).rejects.toThrow();
+    const [row] = await sql.$queryRawUnsafe<{ count: number }[]>(
+      `SELECT count(*)::int AS count FROM marketing.rules WHERE status IN ('active','draft')`
+    );
+    expect(row?.count).toBe(2);
+    await migrate();
+  });
 });

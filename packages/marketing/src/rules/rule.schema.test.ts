@@ -104,4 +104,51 @@ describe('zRuleDefinition', () => {
       }).success
     ).toBe(true);
   });
+
+  describe('step messages', () => {
+    const step = valid.steps[0]!;
+    const withStep = (patch: Record<string, unknown>) =>
+      zRuleDefinition.safeParse({
+        ...valid,
+        steps: [{ delaySeconds: 60, channel: 'email', ...patch }],
+      }).success;
+
+    it('a step with only state variants parses', () => {
+      expect(withStep({ variants: { karnataka: { body: 'hi' } } })).toBe(true);
+    });
+
+    it('a step with neither template nor variants is rejected', () => {
+      expect(withStep({})).toBe(false);
+    });
+
+    it('a variant with templateId and no body parses', () => {
+      expect(
+        withStep({
+          variants: {
+            a: { templateId: '6f1c1f3e-7a55-4a8e-9c0e-3b1f2d4a5b6c' },
+          },
+        })
+      ).toBe(true);
+    });
+
+    it('a template with neither body nor templateId is rejected', () => {
+      expect(withStep({ template: { subject: 's' } })).toBe(false);
+    });
+
+    it('41 variants are rejected', () => {
+      const variants = Object.fromEntries(
+        Array.from({ length: 41 }, (_, i) => [`k${i}`, { body: 'x' }])
+      );
+      expect(withStep({ variants })).toBe(false);
+      expect(
+        withStep({
+          variants: Object.fromEntries(Object.entries(variants).slice(0, 40)),
+        })
+      ).toBe(true);
+    });
+
+    it('an existing starter rule still parses unchanged', () => {
+      expect(withStep({ template: step.template })).toBe(true);
+    });
+  });
 });

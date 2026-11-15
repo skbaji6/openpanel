@@ -395,17 +395,21 @@ export function createEngine(deps: { sql: Sql; now?: () => Date }) {
       ? (propertyAsString(event.properties, definition.matchOn) ?? '')
       : '';
     const { goal } = definition;
+    const sendable = {
+      ...definition,
+      steps: definition.steps.map(({ note: _note, ...step }) => step),
+    };
     const snapshot: RuleSnapshot =
       goal.kind === 'set'
         ? {
-            ...definition,
+            ...sendable,
             referenceValues: await loadReferenceSet(
               db,
               event.projectId,
               referenceSetKey(definition, goal, matchValue)
             ),
           }
-        : definition;
+        : sendable;
     const [row] = await db.$queryRawUnsafe<{ id: string }[]>(
       ENROLL_SQL,
       event.projectId,

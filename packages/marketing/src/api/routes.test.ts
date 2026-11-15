@@ -509,6 +509,75 @@ describe('dashboard routes', () => {
     ]);
   });
 
+  it('POST rules defaults to draft and the engine does not enroll a draft', async () => {
+    const created = await dashboard('POST', '/marketing/rules', {
+      definition: ruleDefinition(),
+    });
+    expect(created.status).toBe(201);
+    const rule = (await created.json()) as { status: string };
+    expect(rule.status).toBe('draft');
+    await createEngine({ sql }).handleEvent({
+      eventId: randomUUID(),
+      projectId: 'proj-a',
+      profileId: 'u1',
+      name: 'add_to_cart',
+      time: new Date(),
+      properties: { item_id: 'book-1' },
+    });
+    const [row] = await sql.$queryRawUnsafe<{ count: number }[]>(
+      'SELECT count(*)::int AS count FROM marketing.enrollments'
+    );
+    expect(row?.count).toBe(0);
+  });
+
+  it('a definition over 64 KiB is rejected with 400', async () => {
+    const [first] = ruleDefinition().steps;
+    const big = {
+      ...ruleDefinition(),
+      steps: [
+        {
+          ...first,
+          variants: Object.fromEntries(
+            Array.from({ length: 40 }, (_, i) => [
+              `k${i}`,
+              { body: 'b'.repeat(2000) },
+            ])
+          ),
+        },
+      ],
+    };
+    const response = await dashboard('POST', '/marketing/rules', {
+      definition: big,
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('an enrollment rule_snapshot has no step notes', async () => {
+    const base = ruleDefinition();
+    const definition = {
+      ...base,
+      steps: base.steps.map((step) => ({ ...step, note: 'internal' })),
+    };
+    const created = await dashboard('POST', '/marketing/rules', {
+      definition,
+      status: 'active',
+    });
+    expect(created.status).toBe(201);
+    await createEngine({ sql }).handleEvent({
+      eventId: randomUUID(),
+      projectId: 'proj-a',
+      profileId: 'u1',
+      name: 'add_to_cart',
+      time: new Date(),
+      properties: { item_id: 'book-1' },
+    });
+    const [row] = await sql.$queryRawUnsafe<{ snapshot: string }[]>(
+      'SELECT rule_snapshot::text AS snapshot FROM marketing.enrollments'
+    );
+    expect(row?.snapshot).toBeDefined();
+    expect(row?.snapshot).not.toContain('internal');
+  });
+
   it('editing a rule bumps its version', async () => {
     const ruleId = await insertRule('proj-a');
     const response = await dashboard('PATCH', `/marketing/rules/${ruleId}`, {
