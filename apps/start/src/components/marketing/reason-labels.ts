@@ -45,6 +45,10 @@ const RECIPIENT_REASONS: Record<string, string> = {
   failed: 'Campaign failed before sending',
   completed: 'Campaign had already finished',
   missed: 'Campaign missed its send time',
+  no_state_trait: 'The student has no state in the audience API',
+  no_variant_for_state:
+    "No message for the student's state and no default message",
+  template_not_pinned: 'The template was not pinned; restart the journey',
   'unreachable:no_live_token': 'No active device token',
   no_phone: 'No phone number on file',
   'no email': 'No email address on file',

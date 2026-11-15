@@ -150,3 +150,17 @@ describe('reason labels', () => {
     expect(labelTestSendReason('no_phone')).toBe('No phone number on file');
   });
 });
+
+describe('journey skip reasons', () => {
+  test('the new skip codes read as sentences', () => {
+    expect(labelRecipientReason('no_state_trait')).toBe(
+      'The student has no state in the audience API'
+    );
+    expect(labelRecipientReason('no_variant_for_state')).toBe(
+      "No message for the student's state and no default message"
+    );
+    expect(labelRecipientReason('template_not_pinned')).toBe(
+      'The template was not pinned; restart the journey'
+    );
+  });
+});

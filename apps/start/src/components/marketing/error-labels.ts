@@ -83,6 +83,16 @@ export const ERROR_LABELS: Record<string, string> = {
   invalid_project: 'This project could not be found.',
   method_not_allowed: 'This action is not supported.',
   network_error: 'Could not reach the server',
+  use_start:
+    'A draft journey is turned on with Start, which checks its templates first.',
+  journey_unconfirmed:
+    'Confirm the guessed trigger and goal events of this journey first.',
+  unknown_variant: 'That state has no message in this journey step.',
+  not_xlsx: 'The file is not a valid Excel workbook.',
+  file_too_large: 'The file is too large. The limit is 512 KiB.',
+  too_many_rows: 'The file has too many rows.',
+  missing_column: 'The file is missing a required column.',
+  malformed_csv: 'The CSV file could not be read.',
 };
 
 const HTTP_CODE = /^http_(\d+)$/;

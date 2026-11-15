@@ -3,7 +3,7 @@ import { z } from 'zod';
 // Copied verbatim from packages/marketing/src/rules/rule.schema.ts; contract.test.ts fails unless the
 // text from MAX_SUBJECT_LENGTH to RuleDefinition matches the service file exactly.
 const MAX_SUBJECT_LENGTH = 300;
-const MAX_BODY_LENGTH = 20_000;
+export const MAX_BODY_LENGTH = 20_000;
 export const MAX_DELAY_SECONDS = 90 * 24 * 60 * 60;
 export const MAX_STEPS = 20;
 export const MAX_VARIANTS = 40;
@@ -101,7 +101,7 @@ export type Step = z.infer<typeof zStep>;
 export type Goal = z.infer<typeof zGoal>;
 export type RuleDefinition = z.infer<typeof zRuleDefinition>;
 
-export { MAX_BODY_LENGTH, MAX_SUBJECT_LENGTH };
+export { MAX_SUBJECT_LENGTH };
 
 export const CHANNELS = zStep.shape.channel.options;
 export type Channel = Step['channel'];
@@ -111,7 +111,9 @@ export const GOAL_KINDS = zGoal.options.map(
 );
 export type GoalKind = Goal['kind'];
 
-export type RuleStatus = 'active' | 'paused';
+export type RuleStatus = 'draft' | 'active' | 'paused';
+
+export type JourneyField = 'trigger' | 'goal';
 
 export interface Rule {
   id: string;
@@ -121,6 +123,9 @@ export interface Rule {
   definition: RuleDefinition;
   createdAt: string;
   updatedAt: string;
+  // Absent on rules created before journeys existed.
+  journeyKey?: string | null;
+  unconfirmed?: JourneyField[];
 }
 
 export interface StarterRule {
@@ -171,3 +176,56 @@ export interface ApiIssue {
   path: string;
   message: string;
 }
+
+export type ImportAction =
+  | 'created'
+  | 'updated'
+  | 'unchanged'
+  | 'skipped_live'
+  | 'skipped_edited';
+
+export interface ImportProblem {
+  sheet: string;
+  row: number | null;
+  code: string;
+  column?: string;
+}
+
+export interface ImportJourney {
+  key: string;
+  name: string;
+  action?: string;
+  ruleId: string | null;
+  steps: number;
+  variants: string[];
+  unconfirmed: JourneyField[];
+}
+
+export interface ImportReport {
+  sheets: string[];
+  journeys: ImportJourney[];
+  problems: ImportProblem[];
+}
+
+export interface ImportRequest {
+  format: 'xlsx' | 'csv';
+  contentBase64: string;
+  dryRun: boolean;
+  options: { states: Record<string, string>; overwriteEdited?: boolean };
+}
+
+export interface StartResponse {
+  rule: Rule | null;
+  pinned: {
+    stepIndex: number;
+    variant: string;
+    templateId: string;
+    version: number;
+  }[];
+}
+
+export interface JourneySkipsResponse {
+  reasons: { reason: string; count: number }[];
+}
+
+export const MAX_IMPORT_BYTES = 512 * 1024;
