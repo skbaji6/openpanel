@@ -40,6 +40,16 @@ describe('chooseMessage', () => {
     expect(choice).toEqual({ ok: true, template: AP });
   });
 
+  it('a state named like an object property still gets the default', () => {
+    for (const state of ['constructor', '__proto__', 'toString']) {
+      const choice = chooseMessage(
+        step({ template: DEFAULT, variants: { TS } }),
+        { state }
+      );
+      expect(choice).toEqual({ ok: true, template: DEFAULT });
+    }
+  });
+
   it('unknown state falls back to the default', () => {
     const choice = chooseMessage(
       step({ template: DEFAULT, variants: { TS } }),

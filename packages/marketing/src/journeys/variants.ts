@@ -20,9 +20,8 @@ function variantFor(
   variants: Record<string, StepTemplate>,
   state: string
 ): StepTemplate | undefined {
-  const exact = variants[state];
-  if (exact) {
-    return exact;
+  if (Object.hasOwn(variants, state)) {
+    return variants[state];
   }
   const wanted = state.toLowerCase();
   const key = Object.keys(variants).find(
