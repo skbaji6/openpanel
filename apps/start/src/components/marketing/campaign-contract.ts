@@ -17,6 +17,19 @@ export const PROVIDER_TEMPLATE_CHANNELS = ['sms', 'whatsapp'] as const;
 export type ProviderTemplateChannel =
   (typeof PROVIDER_TEMPLATE_CHANNELS)[number];
 
+// The channels the Templates tab edits. Email templates arrive with the email editor.
+export const REGISTRY_TEMPLATE_CHANNELS = [
+  ...PROVIDER_TEMPLATE_CHANNELS,
+  'push',
+] as const;
+export type RegistryTemplateChannel =
+  (typeof REGISTRY_TEMPLATE_CHANNELS)[number];
+
+export const isProviderChannel = (
+  channel: string
+): channel is ProviderTemplateChannel =>
+  PROVIDER_TEMPLATE_CHANNELS.some((candidate) => candidate === channel);
+
 export const CAMPAIGN_STATES = [
   'draft',
   'scheduled',
@@ -334,6 +347,14 @@ export const zTemplateInput = z
   });
 export type TemplateInput = z.infer<typeof zTemplateInput>;
 
+// Push templates carry their text as content instead of a provider reference.
+export interface PushTemplateInput {
+  channel: 'push';
+  displayName: string;
+  category: 'promotional' | 'service';
+  content: { subject?: string; body: string };
+}
+
 export const zChannelSettings = z.strictObject({
   concurrency: z.number().int().min(1).max(MAX_CONCURRENCY),
   ratePerSecond: z.number().positive().max(MAX_RATE_PER_SECOND).nullable(),
@@ -559,13 +580,15 @@ export interface TemplateVersion {
   providerRef: unknown;
   approvedText: string;
   variables: { slot: string; value: string }[];
+  // Push and email versions carry content instead of a provider reference.
+  content?: unknown;
   createdBy: string;
   createdAt: string;
 }
 
 export interface TemplateRow extends TemplateVersion {
   projectId: string;
-  channel: ProviderTemplateChannel;
+  channel: ProviderTemplateChannel | 'push' | 'email';
   enabled: boolean;
   currentVersion: number;
   updatedAt: string;

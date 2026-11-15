@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { TemplatesPage } from '@/components/marketing/templates-page';
 
 interface TemplatesSearch {
-  channel?: 'sms' | 'whatsapp';
+  channel?: 'sms' | 'whatsapp' | 'push';
   id?: string;
   new?: true;
 }
@@ -13,7 +13,9 @@ export const Route = createFileRoute(
   component: TemplatesPage,
   validateSearch: (search: Record<string, unknown>): TemplatesSearch => ({
     channel:
-      search.channel === 'sms' || search.channel === 'whatsapp'
+      search.channel === 'sms' ||
+      search.channel === 'whatsapp' ||
+      search.channel === 'push'
         ? search.channel
         : undefined,
     id: typeof search.id === 'string' ? search.id : undefined,

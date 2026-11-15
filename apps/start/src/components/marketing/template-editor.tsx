@@ -7,7 +7,11 @@ import {
   useMarketingFetch,
   useMarketingQueryKey,
 } from './api';
-import type { TemplateInput, TemplateRow } from './campaign-contract';
+import type {
+  ProviderTemplateChannel,
+  TemplateInput,
+  TemplateRow,
+} from './campaign-contract';
 import {
   type FormVariable,
   nextSlot,
@@ -37,7 +41,7 @@ type Ref = Record<string, string | undefined>;
 
 export function formFromRow(row: TemplateRow): TemplateForm {
   return {
-    channel: row.channel,
+    channel: row.channel as ProviderTemplateChannel,
     displayName: row.displayName,
     category: row.category,
     providerRef: row.providerRef as TemplateInput['providerRef'],

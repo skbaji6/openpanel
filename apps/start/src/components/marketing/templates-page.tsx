@@ -9,10 +9,13 @@ import {
   useMarketingQueryKey,
 } from './api';
 import {
-  PROVIDER_TEMPLATE_CHANNELS,
-  type ProviderTemplateChannel,
+  isProviderChannel,
+  REGISTRY_TEMPLATE_CHANNELS,
+  type RegistryTemplateChannel,
   type TemplateRow,
 } from './campaign-contract';
+import { PushTemplateEditor, pushFormFromRow } from './push-template-editor';
+import { inlineContent } from './step-variants';
 import { formFromRow, TemplateEditor } from './template-editor';
 import { emptyTemplate } from './template-form';
 import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
@@ -25,10 +28,16 @@ const route = getRouteApi(
   '/_app/$organizationId/$projectId/marketing/_tabs/templates'
 );
 
-const CHANNEL_LABELS: Record<ProviderTemplateChannel, string> = {
+const CHANNEL_LABELS: Record<RegistryTemplateChannel, string> = {
   sms: 'SMS',
   whatsapp: 'WhatsApp',
+  push: 'Push',
 };
+
+const isRegistryChannel = (
+  channel: string | undefined
+): channel is RegistryTemplateChannel =>
+  REGISTRY_TEMPLATE_CHANNELS.some((candidate) => candidate === channel);
 
 const NOT_FOUND = 404;
 
@@ -38,7 +47,15 @@ function templateLoadErrorTitle(error: unknown): string {
   return notFound ? 'Template not found' : 'Could not load the template';
 }
 
+function pushMessage(row: TemplateRow): string {
+  const content = inlineContent(row.content);
+  return [content?.subject, content?.body].filter(Boolean).join(' - ');
+}
+
 function providerReference(row: TemplateRow): string {
+  if (row.channel === 'push') {
+    return pushMessage(row);
+  }
   const ref = row.providerRef;
   if (typeof ref !== 'object' || ref === null) {
     return '';
@@ -88,8 +105,10 @@ export function TemplatesPage() {
     enabled: Boolean(search.id),
     retry: false,
   });
-  const channel: ProviderTemplateChannel =
-    linked.data?.channel ?? search.channel ?? 'sms';
+  const linkedChannel = linked.data?.channel;
+  const channel: RegistryTemplateChannel = isRegistryChannel(linkedChannel)
+    ? linkedChannel
+    : (search.channel ?? 'sms');
   const templates = useQuery({
     queryKey: queryKey('templates', channel),
     queryFn: () =>
@@ -100,7 +119,13 @@ export function TemplatesPage() {
   const close = () => navigate({ search: { channel } });
 
   if (search.new && isAdmin) {
-    return (
+    return channel === 'push' ? (
+      <PushTemplateEditor
+        initial={emptyTemplate('push')}
+        isAdmin={isAdmin}
+        onClose={close}
+      />
+    ) : (
       <TemplateEditor
         initial={emptyTemplate(channel)}
         isAdmin={isAdmin}
@@ -122,7 +147,18 @@ export function TemplatesPage() {
       </FullPageEmptyState>
     );
   }
-  if (search.id && linked.data) {
+  if (search.id && linked.data?.channel === 'push') {
+    return (
+      <PushTemplateEditor
+        initial={pushFormFromRow(linked.data)}
+        isAdmin={isAdmin}
+        key={linked.data.templateId}
+        onClose={close}
+        row={linked.data}
+      />
+    );
+  }
+  if (search.id && linked.data && isProviderChannel(linked.data.channel)) {
     return (
       <TemplateEditor
         initial={formFromRow(linked.data)}
@@ -134,12 +170,24 @@ export function TemplatesPage() {
     );
   }
 
+  if (search.id && linked.data) {
+    return (
+      <FullPageEmptyState
+        description="This template is not edited on this tab yet."
+        icon={MessageSquareTextIcon}
+        title="Template cannot be edited here"
+      >
+        <Button onClick={close}>Back to templates</Button>
+      </FullPageEmptyState>
+    );
+  }
+
   const rows = templates.data?.templates ?? [];
   return (
     <div className="col gap-4">
       <div className="row items-center justify-between gap-2">
         <div aria-label="Channel" className="row gap-2" role="group">
-          {PROVIDER_TEMPLATE_CHANNELS.map((option) => (
+          {REGISTRY_TEMPLATE_CHANNELS.map((option) => (
             <Button
               aria-pressed={option === channel}
               key={option}
@@ -175,7 +223,11 @@ export function TemplatesPage() {
       )}
       {templates.data && rows.length === 0 && (
         <FullPageEmptyState
-          description={`Record a provider-approved ${CHANNEL_LABELS[channel]} template here, then pick it in a campaign.`}
+          description={
+            channel === 'push'
+              ? 'Write a push title and body here, then pick it in a journey step or a campaign.'
+              : `Record a provider-approved ${CHANNEL_LABELS[channel]} template here, then pick it in a campaign.`
+          }
           icon={MessageSquareTextIcon}
           title="No templates yet"
         />
@@ -186,7 +238,9 @@ export function TemplatesPage() {
             <tr>
               <th className="p-2">Name</th>
               <th className="p-2">Category</th>
-              <th className="p-2">Provider reference</th>
+              <th className="p-2">
+                {channel === 'push' ? 'Message' : 'Provider reference'}
+              </th>
               <th className="p-2">Version</th>
               <th className="p-2">Status</th>
               <th className="p-2">

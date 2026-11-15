@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TestSendStatus } from './campaign-contract';
 
 // Copied verbatim from packages/marketing/src/rules/rule.schema.ts; contract.test.ts fails unless the
 // text from MAX_SUBJECT_LENGTH to RuleDefinition matches the service file exactly.
@@ -229,3 +230,18 @@ export interface JourneySkipsResponse {
 }
 
 export const MAX_IMPORT_BYTES = 512 * 1024;
+
+export interface JourneyTestSendRow {
+  id: string;
+  stepIndex: number;
+  variant: string;
+  profileId: string;
+  status: TestSendStatus;
+  reason: string | null;
+  createdAt: string;
+  sentAt: string | null;
+}
+
+export interface JourneyTestSendsResponse {
+  testSends: JourneyTestSendRow[];
+}

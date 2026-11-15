@@ -4,6 +4,7 @@ import {
   emptyTemplate,
   nextSlot,
   nextSmsSlot,
+  pushTraitsOf,
   syncWhatsappVariables,
   templateProblems,
   toTemplateBody,
@@ -223,5 +224,37 @@ describe('more templateProblems', () => {
         providerRef: { ...whatsapp.providerRef, templateName: 'Offer 1' },
       }).map((p) => p.path)
     ).toEqual(['providerRef.templateName']);
+  });
+});
+
+describe('push templates', () => {
+  test('an empty push body is a problem', () => {
+    const form = emptyTemplate('push');
+    expect(form.content).toEqual({ subject: '', body: '' });
+    form.displayName = 'Nudge';
+    expect(templateProblems(form).map((p) => p.path)).toContain('content.body');
+    form.content.body = 'Hello {{profile.firstName}}';
+    expect(templateProblems(form)).toEqual([]);
+  });
+
+  test('toTemplateBody trims the name and drops an empty title', () => {
+    const form = emptyTemplate('push');
+    form.displayName = '  Nudge ';
+    form.content.body = 'Hi';
+    expect(toTemplateBody(form)).toEqual({
+      channel: 'push',
+      displayName: 'Nudge',
+      category: 'promotional',
+      content: { body: 'Hi' },
+    });
+  });
+
+  test('pushTraitsOf lists the traits a push text uses', () => {
+    expect(
+      pushTraitsOf({
+        subject: 'Hi {{profile.firstName}}',
+        body: '{{profile.state}} {{profile.state}} {{missing}}',
+      })
+    ).toEqual(['firstName', 'state']);
   });
 });

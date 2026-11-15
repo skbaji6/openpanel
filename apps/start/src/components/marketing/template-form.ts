@@ -1,7 +1,9 @@
 import type {
   ProviderTemplateChannel,
+  PushTemplateInput,
   TemplateInput,
 } from './campaign-contract';
+import { MAX_BODY_LENGTH, MAX_SUBJECT_LENGTH } from './contract';
 
 const FLOW_ID = /^[A-Za-z0-9]{1,64}$/;
 const SENDER_ID = /^[A-Z]{6}$/;
@@ -65,7 +67,26 @@ export interface TemplateProblem {
   message: string;
 }
 
-export function emptyTemplate(channel: ProviderTemplateChannel): TemplateForm {
+export interface PushTemplateForm {
+  channel: 'push';
+  displayName: string;
+  category: PushTemplateInput['category'];
+  content: { subject: string; body: string };
+}
+
+export function emptyTemplate(channel: 'push'): PushTemplateForm;
+export function emptyTemplate(channel: ProviderTemplateChannel): TemplateForm;
+export function emptyTemplate(
+  channel: ProviderTemplateChannel | 'push'
+): TemplateForm | PushTemplateForm {
+  if (channel === 'push') {
+    return {
+      channel,
+      displayName: '',
+      category: 'promotional',
+      content: { subject: '', body: '' },
+    };
+  }
   const providerRef =
     channel === 'sms'
       ? { flowId: '' }
@@ -214,15 +235,61 @@ function variableProblems(input: TemplateForm): TemplateProblem[] {
   return problems;
 }
 
-export function templateProblems(input: TemplateForm): TemplateProblem[] {
-  const problems: TemplateProblem[] = [];
-  const nameLength = input.displayName.trim().length;
-  if (nameLength === 0 || nameLength > MAX_DISPLAY_NAME_LENGTH) {
-    problems.push({
+function nameProblems(displayName: string): TemplateProblem[] {
+  const nameLength = displayName.trim().length;
+  if (nameLength > 0 && nameLength <= MAX_DISPLAY_NAME_LENGTH) {
+    return [];
+  }
+  return [
+    {
       path: 'displayName',
       message: `Name is required, at most ${MAX_DISPLAY_NAME_LENGTH} characters`,
+    },
+  ];
+}
+
+function pushProblems(input: PushTemplateForm): TemplateProblem[] {
+  const problems = nameProblems(input.displayName);
+  const bodyLength = input.content.body.trim().length;
+  if (bodyLength === 0 || input.content.body.length > MAX_BODY_LENGTH) {
+    problems.push({
+      path: 'content.body',
+      message: `Body is required, at most ${MAX_BODY_LENGTH} characters`,
     });
   }
+  if (input.content.subject.length > MAX_SUBJECT_LENGTH) {
+    problems.push({
+      path: 'content.subject',
+      message: `Title is at most ${MAX_SUBJECT_LENGTH} characters`,
+    });
+  }
+  return problems;
+}
+
+// Same {{profile.<trait>}} placeholders the journey preview renders.
+export function pushTraitsOf(content: {
+  subject?: string;
+  body: string;
+}): string[] {
+  const traits = new Set<string>();
+  for (const text of [content.subject ?? '', content.body]) {
+    for (const match of text.matchAll(ANY_PLACEHOLDER)) {
+      const trait = PROFILE_PLACEHOLDER.exec((match[1] ?? '').trim())?.[1];
+      if (trait) {
+        traits.add(trait);
+      }
+    }
+  }
+  return [...traits];
+}
+
+export function templateProblems(
+  input: TemplateForm | PushTemplateForm
+): TemplateProblem[] {
+  if (input.channel === 'push') {
+    return pushProblems(input);
+  }
+  const problems = nameProblems(input.displayName);
   const textLength = input.approvedText.length;
   if (textLength === 0 || textLength > MAX_APPROVED_TEXT_LENGTH) {
     problems.push({
@@ -244,7 +311,20 @@ export function templateProblems(input: TemplateForm): TemplateProblem[] {
   return problems;
 }
 
-export function toTemplateBody(form: TemplateForm): TemplateInput {
+export function toTemplateBody(form: PushTemplateForm): PushTemplateInput;
+export function toTemplateBody(form: TemplateForm): TemplateInput;
+export function toTemplateBody(
+  form: TemplateForm | PushTemplateForm
+): TemplateInput | PushTemplateInput {
+  if (form.channel === 'push') {
+    const subject = form.content.subject.trim();
+    return {
+      channel: 'push',
+      displayName: form.displayName.trim(),
+      category: form.category,
+      content: { ...(subject ? { subject } : {}), body: form.content.body },
+    };
+  }
   const kept = Object.fromEntries(
     Object.entries(refOf(form)).filter(
       ([, value]) => value !== undefined && value !== ''

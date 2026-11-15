@@ -191,6 +191,7 @@ export function RulesPage() {
       <RuleEditor
         initial={draft.definition}
         onClose={() => setDraft(null)}
+        rule={rules.data?.rules.find((row) => row.id === draft.ruleId)}
         ruleId={draft.ruleId}
       />
     );

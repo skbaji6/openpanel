@@ -8,22 +8,25 @@ import {
   useMarketingFetch,
   useMarketingQueryKey,
 } from './api';
+import type { DimensionValue } from './campaign-contract';
 import {
   CHANNELS,
   type Channel,
   GOAL_KINDS,
   type Goal,
   type GoalKind,
-  MAX_BODY_LENGTH,
+  type JourneyField,
   MAX_DELAY_SECONDS,
   MAX_STEPS,
-  MAX_SUBJECT_LENGTH,
-  type Preview,
   type ReferenceSetSummary,
+  type Rule,
   type RuleDefinition,
   type Step,
   zRuleDefinition,
 } from './contract';
+import { JourneyTestSend } from './journey-test-send';
+import { coverage, describeCoverage, emptyMessages } from './step-variants';
+import { StepMessagesEditor } from './step-variants-editor';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -37,7 +40,6 @@ import {
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useAppParams } from '@/hooks/use-app-params';
-import { useDebounceValue } from '@/hooks/use-debounce-value';
 import { useEventNames } from '@/hooks/use-event-names';
 import { cn } from '@/utils/cn';
 
@@ -49,7 +51,14 @@ const DELAY_UNITS = [
   { value: 'hours', label: 'hours', seconds: HOUR },
   { value: 'days', label: 'days', seconds: DAY },
 ] as const;
-const PREVIEW_DEBOUNCE_MS = 500;
+const STATE_DIMENSION = 'state';
+const ACTIVE_SAVE_NOTE =
+  'This journey is running. Saving pins the newest template versions; students already in it keep the text they were enrolled with.';
+const GUESS_NOTES: Record<JourneyField, string> = {
+  trigger:
+    'Imported guess, confirm: no student enters until this event is real.',
+  goal: 'Imported guess, confirm: no student finishes until this event is real.',
+};
 const EVENT_NAMES_LIST_ID = 'marketing-event-names';
 const CHANNEL_LABELS: Record<Channel, string> = {
   email: 'Email',
@@ -68,9 +77,6 @@ const GOAL_HELP: Record<GoalKind, string> = {
   inactivity:
     'Message only if the profile does nothing at all after the trigger.',
 };
-const CHANNELS_WITH_SUBJECT = new Set<Channel>(['email', 'push']);
-const SAMPLE_PROFILE = { firstName: 'Ada', email: 'ada@example.com' };
-const SAMPLE_MISSING = ['Section 2', 'Section 5'];
 
 export function emptyRuleDefinition(): RuleDefinition {
   return {
@@ -82,8 +88,6 @@ export function emptyRuleDefinition(): RuleDefinition {
     allowedEventProps: [],
   };
 }
-
-const EMPTY_TEMPLATE = { subject: '', body: '' };
 
 function newStep(previous: Step | undefined): Step {
   return {
@@ -567,72 +571,39 @@ function GoalFields({
   );
 }
 
-function StepPreview({
-  step,
-  allowedEventProps,
+function ConfirmGuess({
+  field,
+  checked,
+  onChange,
 }: {
-  step: Step;
-  allowedEventProps: string[];
+  field: JourneyField;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
 }) {
-  const marketingFetch = useMarketingFetch();
-  const queryKey = useMarketingQueryKey();
-  const request = useDebounceValue(
-    JSON.stringify({
-      channel: step.channel,
-      template: step.template ?? EMPTY_TEMPLATE,
-      allowedEventProps,
-      sample: {
-        profile: SAMPLE_PROFILE,
-        event: Object.fromEntries(
-          allowedEventProps.map((property) => [property, `sample ${property}`])
-        ),
-        missing: SAMPLE_MISSING,
-      },
-    }),
-    PREVIEW_DEBOUNCE_MS
-  );
-  const preview = useQuery({
-    queryKey: queryKey('preview', request),
-    queryFn: () =>
-      marketingFetch<Preview>('preview', { method: 'POST', body: request }),
-    placeholderData: (previous) => previous,
-    retry: false,
-  });
+  const id = useId();
   return (
-    <section
-      aria-label="Preview"
-      className="col gap-2 rounded-md bg-def-100 p-3"
+    <div
+      className="col gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2"
+      role="note"
     >
-      <h4 className="font-medium text-muted-foreground text-xs uppercase">
-        Preview with a sample profile
-      </h4>
-      {preview.error && (
-        <p className="text-destructive text-sm">
-          {describeMarketingError(preview.error)}
-        </p>
-      )}
-      {preview.data?.subject && (
-        <p className="font-medium text-sm">{preview.data.subject}</p>
-      )}
-      {preview.data && step.channel === 'email' && (
-        // Rendered HTML stays in a sandbox with scripts disabled.
-        <iframe
-          className="h-48 w-full rounded border bg-white"
-          sandbox=""
-          srcDoc={preview.data.body}
-          title="Email preview"
+      <p className="font-medium text-sm">{GUESS_NOTES[field]}</p>
+      <label className="row items-center gap-2 text-sm" htmlFor={id}>
+        <input
+          checked={checked}
+          id={id}
+          onChange={(event) => onChange(event.target.checked)}
+          type="checkbox"
         />
-      )}
-      {preview.data && step.channel !== 'email' && (
-        <pre className="whitespace-pre-wrap text-sm">{preview.data.body}</pre>
-      )}
-    </section>
+        {`The ${field} event is correct`}
+      </label>
+    </div>
   );
 }
 
 function StepFields({
   index,
   step,
+  states,
   allowedEventProps,
   canRemove,
   onChange,
@@ -640,13 +611,12 @@ function StepFields({
 }: {
   index: number;
   step: Step;
+  states: string[];
   allowedEventProps: string[];
   canRemove: boolean;
   onChange: (step: Step) => void;
   onRemove: () => void;
 }) {
-  const bodyId = useId();
-  const showSubject = CHANNELS_WITH_SUBJECT.has(step.channel);
   return (
     <div className="col gap-4">
       <div className="grid gap-4 md:grid-cols-2">
@@ -669,44 +639,17 @@ function StepFields({
           value={step.channel}
         />
       </div>
-      {showSubject && (
-        <InputWithLabel
-          label={step.channel === 'push' ? 'Title' : 'Subject'}
-          maxLength={MAX_SUBJECT_LENGTH}
-          onChange={(event) =>
-            onChange({
-              ...step,
-              template: {
-                ...(step.template ?? EMPTY_TEMPLATE),
-                subject: event.target.value,
-              },
-            })
-          }
-          value={step.template?.subject ?? ''}
-        />
+      <StepMessagesEditor
+        allowedEventProps={allowedEventProps}
+        onChange={onChange}
+        states={states}
+        step={step}
+      />
+      {step.note && (
+        <p className="whitespace-pre-wrap text-muted-foreground text-xs">
+          {step.note}
+        </p>
       )}
-      <WithLabel
-        hint="Use {{profile.firstName}}, {{event.<property>}} (listed under allowed event properties) and {{missing}}."
-        id={bodyId}
-        label="Body"
-      >
-        <Textarea
-          id={bodyId}
-          maxLength={MAX_BODY_LENGTH}
-          onChange={(event) =>
-            onChange({
-              ...step,
-              template: {
-                ...(step.template ?? EMPTY_TEMPLATE),
-                body: event.target.value,
-              },
-            })
-          }
-          rows={5}
-          value={step.template?.body ?? ''}
-        />
-      </WithLabel>
-      <StepPreview allowedEventProps={allowedEventProps} step={step} />
       {canRemove && (
         <Button
           className="self-start text-destructive"
@@ -724,10 +667,12 @@ function StepFields({
 
 export function RuleEditor({
   ruleId,
+  rule,
   initial,
   onClose,
 }: {
   ruleId?: string;
+  rule?: Rule;
   initial: RuleDefinition;
   onClose: () => void;
 }) {
@@ -739,13 +684,31 @@ export function RuleEditor({
   const [definition, setDefinition] = useState(initial);
   const stepKeys = useRowKeys(initial.steps.length);
   const [issues, setIssues] = useState<string[]>([]);
+  const [confirmed, setConfirmed] = useState<JourneyField[]>([]);
+  const unconfirmed = rule?.unconfirmed ?? [];
+  const states = useQuery({
+    queryKey: queryKey('audience-values', STATE_DIMENSION, ''),
+    queryFn: () =>
+      marketingFetch<{ values: DimensionValue[] }>(
+        `audience/dimensions/${STATE_DIMENSION}/values`
+      ),
+    retry: false,
+  });
+  const stateValues = (states.data?.values ?? []).map((item) => item.value);
+  const toggleConfirmed = (field: JourneyField, checked: boolean) =>
+    setConfirmed((current) =>
+      checked ? [...current, field] : current.filter((item) => item !== field)
+    );
 
   const save = useMutation({
     mutationFn: (valid: RuleDefinition) =>
       ruleId
         ? marketingFetch(`rules/${encodeURIComponent(ruleId)}`, {
             method: 'PATCH',
-            body: JSON.stringify({ definition: valid }),
+            body: JSON.stringify({
+              definition: valid,
+              ...(confirmed.length > 0 ? { confirmed } : {}),
+            }),
           })
         : marketingFetch('rules', {
             method: 'POST',
@@ -772,6 +735,11 @@ export function RuleEditor({
       );
       return;
     }
+    const empty = emptyMessages(parsed.data.steps);
+    if (empty.length > 0) {
+      setIssues(empty);
+      return;
+    }
     setIssues([]);
     save.mutate(parsed.data);
   };
@@ -783,130 +751,167 @@ export function RuleEditor({
     });
 
   return (
-    <form className="col gap-6" onSubmit={submit}>
-      <datalist id={EVENT_NAMES_LIST_ID}>
-        {eventNames.map((event) => (
-          <option key={event.name} value={event.name} />
-        ))}
-      </datalist>
-      <InputWithLabel
-        label="Rule name"
-        onChange={(event) =>
-          setDefinition({ ...definition, name: event.target.value })
-        }
-        value={definition.name}
-      />
-      <ol aria-label="Journey" className="col">
-        <TimelineNode icon={ZapIcon} title="When this happens">
-          <TriggerFields definition={definition} onChange={setDefinition} />
-        </TimelineNode>
-        <TimelineNode icon={FlagIcon} title="Goal">
-          <GoalFields definition={definition} onChange={setDefinition} />
-          <p
-            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-medium text-sm"
-            role="note"
-          >
-            Goal cancels the rest: once the goal is reached, every step below
-            that has not been sent yet is cancelled.
-          </p>
-        </TimelineNode>
-        {definition.steps.map((step, index) => (
-          <TimelineNode
-            icon={PlusIcon}
-            key={stepKeys.keys[index]}
-            title={`Step ${index + 1}`}
-          >
-            <StepFields
-              allowedEventProps={definition.allowedEventProps}
-              canRemove={definition.steps.length > 1}
-              index={index}
-              onChange={(next) => setStep(index, next)}
-              onRemove={() => {
-                stepKeys.remove(index);
+    <div className="col gap-6">
+      <form className="col gap-6" onSubmit={submit}>
+        <datalist id={EVENT_NAMES_LIST_ID}>
+          {eventNames.map((event) => (
+            <option key={event.name} value={event.name} />
+          ))}
+        </datalist>
+        <InputWithLabel
+          label="Rule name"
+          onChange={(event) =>
+            setDefinition({ ...definition, name: event.target.value })
+          }
+          value={definition.name}
+        />
+        <ol aria-label="Journey" className="col">
+          <TimelineNode icon={ZapIcon} title="When this happens">
+            <TriggerFields definition={definition} onChange={setDefinition} />
+            {unconfirmed.includes('trigger') && (
+              <ConfirmGuess
+                checked={confirmed.includes('trigger')}
+                field="trigger"
+                onChange={(checked) => toggleConfirmed('trigger', checked)}
+              />
+            )}
+          </TimelineNode>
+          <TimelineNode icon={FlagIcon} title="Goal">
+            <GoalFields definition={definition} onChange={setDefinition} />
+            {unconfirmed.includes('goal') && (
+              <ConfirmGuess
+                checked={confirmed.includes('goal')}
+                field="goal"
+                onChange={(checked) => toggleConfirmed('goal', checked)}
+              />
+            )}
+            <p
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-medium text-sm"
+              role="note"
+            >
+              Goal cancels the rest: once the goal is reached, every step below
+              that has not been sent yet is cancelled.
+            </p>
+          </TimelineNode>
+          {definition.steps.map((step, index) => (
+            <TimelineNode
+              icon={PlusIcon}
+              key={stepKeys.keys[index]}
+              title={`Step ${index + 1}`}
+            >
+              <StepFields
+                allowedEventProps={definition.allowedEventProps}
+                canRemove={definition.steps.length > 1}
+                index={index}
+                onChange={(next) => setStep(index, next)}
+                onRemove={() => {
+                  stepKeys.remove(index);
+                  setDefinition({
+                    ...definition,
+                    steps: definition.steps.filter((_, i) => i !== index),
+                  });
+                }}
+                states={stateValues}
+                step={step}
+              />
+            </TimelineNode>
+          ))}
+          <li className="pl-10">
+            <Button
+              disabled={definition.steps.length >= MAX_STEPS}
+              icon={PlusIcon}
+              onClick={() => {
+                stepKeys.add();
                 setDefinition({
                   ...definition,
-                  steps: definition.steps.filter((_, i) => i !== index),
+                  steps: [
+                    ...definition.steps,
+                    newStep(definition.steps.at(-1)),
+                  ],
                 });
               }}
-              step={step}
-            />
-          </TimelineNode>
-        ))}
-        <li className="pl-10">
-          <Button
-            disabled={definition.steps.length >= MAX_STEPS}
-            icon={PlusIcon}
-            onClick={() => {
-              stepKeys.add();
-              setDefinition({
-                ...definition,
-                steps: [...definition.steps, newStep(definition.steps.at(-1))],
-              });
-            }}
-            variant="outline"
-          >
-            Add step
-          </Button>
-        </li>
-      </ol>
-      <section aria-label="Limits" className="card col gap-4 p-4">
-        <h3 className="font-medium">Limits</h3>
-        <ListInput
-          hint="Comma separated. Only these trigger event properties may appear in templates."
-          label="Allowed event properties"
-          onChange={(allowedEventProps) =>
-            setDefinition({ ...definition, allowedEventProps })
-          }
-          values={definition.allowedEventProps}
-        />
-        <label
-          className="row items-center gap-2 text-sm"
-          htmlFor="marketing-reentry"
-        >
-          <Switch
-            checked={definition.reentry.enabled}
-            id="marketing-reentry"
-            onCheckedChange={(enabled) =>
-              setDefinition({
-                ...definition,
-                reentry: { ...definition.reentry, enabled },
-              })
-            }
-          />
-          Let a profile enter this journey again
-        </label>
-        {definition.reentry.enabled && (
-          <DelayField
-            label="Wait before re-entry"
-            onChange={(cooldownSeconds) =>
-              setDefinition({
-                ...definition,
-                reentry: { ...definition.reentry, cooldownSeconds },
-              })
-            }
-            seconds={definition.reentry.cooldownSeconds}
-          />
+              variant="outline"
+            >
+              Add step
+            </Button>
+          </li>
+        </ol>
+        {stateValues.length > 0 && (
+          <p className="text-muted-foreground text-sm" role="status">
+            {describeCoverage(coverage(definition.steps, stateValues))}
+          </p>
         )}
-      </section>
-      {issues.length > 0 && (
-        <ul
-          aria-live="polite"
-          className="text-destructive text-sm"
-          role="alert"
-        >
-          {issues.map((issue) => (
-            <li key={issue}>{issue}</li>
-          ))}
-        </ul>
+        <section aria-label="Limits" className="card col gap-4 p-4">
+          <h3 className="font-medium">Limits</h3>
+          <ListInput
+            hint="Comma separated. Only these trigger event properties may appear in templates."
+            label="Allowed event properties"
+            onChange={(allowedEventProps) =>
+              setDefinition({ ...definition, allowedEventProps })
+            }
+            values={definition.allowedEventProps}
+          />
+          <label
+            className="row items-center gap-2 text-sm"
+            htmlFor="marketing-reentry"
+          >
+            <Switch
+              checked={definition.reentry.enabled}
+              id="marketing-reentry"
+              onCheckedChange={(enabled) =>
+                setDefinition({
+                  ...definition,
+                  reentry: { ...definition.reentry, enabled },
+                })
+              }
+            />
+            Let a profile enter this journey again
+          </label>
+          {definition.reentry.enabled && (
+            <DelayField
+              label="Wait before re-entry"
+              onChange={(cooldownSeconds) =>
+                setDefinition({
+                  ...definition,
+                  reentry: { ...definition.reentry, cooldownSeconds },
+                })
+              }
+              seconds={definition.reentry.cooldownSeconds}
+            />
+          )}
+        </section>
+        {issues.length > 0 && (
+          <ul
+            aria-live="polite"
+            className="text-destructive text-sm"
+            role="alert"
+          >
+            {issues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        )}
+        {rule?.status === 'active' && (
+          <p className="text-sm" role="note">
+            {ACTIVE_SAVE_NOTE}
+          </p>
+        )}
+        <div className="row gap-2">
+          <Button loading={save.isPending} type="submit">
+            {ruleId ? 'Save rule' : 'Create rule'}
+          </Button>
+          <Button onClick={onClose} variant="ghost">
+            Cancel
+          </Button>
+        </div>
+      </form>
+      {rule ? (
+        <JourneyTestSend rule={rule} />
+      ) : (
+        <p className="text-muted-foreground text-xs">
+          Save the journey to send a test of a step.
+        </p>
       )}
-      <div className="row gap-2">
-        <Button loading={save.isPending} type="submit">
-          {ruleId ? 'Save rule' : 'Create rule'}
-        </Button>
-        <Button onClick={onClose} variant="ghost">
-          Cancel
-        </Button>
-      </div>
-    </form>
+    </div>
   );
 }
