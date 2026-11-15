@@ -249,6 +249,79 @@ Audiences need the project's audience source set to `http` (5c); without it the 
 
 While a campaign that uses an audience is scheduled, running or paused, the audience is locked (`audience_in_use`): it cannot be edited, frozen or deleted. To change the selection, unschedule or cancel that campaign, or create another audience.
 
+## 9a. Journeys from a workbook
+
+Import a workbook of journey messages as **drafts**. Nothing is sent until you start a journey.
+
+**File.** An `.xlsx` or `.csv` of at most 512 KiB, 2,000 rows and 200 columns per sheet. In the dashboard: Journeys, Import journeys.
+
+**Columns** (the header row; extra columns are ignored):
+
+| Column | Use |
+|---|---|
+| `Event Name` | Names the journey. The same name on several sheets and rows is one journey; its key is the name in lower case with other characters turned into `_`. |
+| `Platform` | Only `In-App Notification` is known. It is imported as a **push** step (see Open items). Any other value is reported as `unknown_platform`. |
+| `Timing` | `D0`, `D1`, ... up to the maximum delay, optionally followed by `Immediate`, `in session`, `on exit`, `after exit` or `confirmation`. `D<n>` is n days after the trigger. |
+| `Message (Content)` | The message text. An empty one (`empty_message`) or one over the body limit (`message_too_long`) is reported and skipped. |
+| `Instructions`, `Template Idea (Image/Visual)` | Optional. Kept as the step's note, never sent. |
+
+**Sheet to state.** Each sheet is the messages for one student state. Before importing you map every sheet to the value the `state` trait carries (see `AUDIENCE_CONTRACT.md`); a sheet left "Not mapped" is reported as `unknown_sheet`. Rows with the same journey and the same `D<n>` become one step with one message per state; a second row for the same state and timing is reported as `duplicate_timing`. A sheet named `Journey Rules` is ignored (`sheet_ignored`).
+
+**Timing rules.** A timing such as `D3 on next ...` depends on what the student does and cannot be a plain delay. It is reported as `conditional_timing` and left out. A timing that is not understood is `unparsed_timing`. A journey with more steps than the limit is `too_many_steps`, and one that is too large is `definition_too_large`.
+
+**What is reported.** Run a dry run first: it plans everything and saves nothing. The summary lists each journey with its steps, the states it covers and what the import does, then every skipped row with its sheet, row number and code. Every row is either imported or listed there.
+
+**Drafts only.** Imported journeys are saved with status `draft`, push channel, and re-entry allowed after 21 days.
+
+**Trigger and goal are guesses.** The workbook has labels, not production event names. The trigger starts as the journey key, and the goal is a guess (`registration_started` ends on `registration_completed`, for example; otherwise `<key>_resolved`). Both are marked unconfirmed, and **Start is refused (409 `journey_unconfirmed`) until you confirm or change them** on the draft. You can also supply the real names at import time.
+
+**Re-importing the same file** is safe. Each journey gets one result:
+
+| Result | Meaning |
+|---|---|
+| `unchanged` | The draft already matches the file. |
+| `skipped_edited` | Someone edited the steps in the dashboard since the last import. Left alone unless you tick "Overwrite drafts edited here". |
+| `skipped_live` | The journey is active or paused. Never touched; change it in the dashboard. |
+
+**Starting.** Start asks you to confirm, and warns about a guessed trigger or goal, a step with state messages but no default, and the need for the state trait. Starting pins the templates (see 9c).
+
+## 9b. Messages per state
+
+A step holds one message per state (`variants`) and an optional default (`template`). When the step is due, the student's `state` trait (from the audience lookup) picks the message: exact key first, then ignoring case and surrounding spaces. If that state has no message, the default is used.
+
+A step that cannot choose a message is **skipped**, with one of these reasons (counted per journey at `GET /marketing/rules/{id}/skips`):
+
+| Reason | When |
+|---|---|
+| `no_state_trait` | The lookup returned no `state` for the student and the step has no default. |
+| `no_variant_for_state` | The student has a state, but no message for it and no default. |
+| `template_not_pinned` | The chosen message has no body, because it was never pinned (the journey was not started through Start). |
+
+The state value and the chosen message are not stored. The editor has a tab per state plus Default, a preview with a sample profile, and a test send per tab (a test goes to a profile you name, through the fake FCM in development).
+
+## 9c. Templates and versions
+
+A step message can be written in the step or point to a saved push or email template. Editing a template makes a new version. **Start pins the version** each step uses: the journey keeps sending that version even if the template changes later. A step that follows the newest version is pinned to whatever is newest at Start. Start fails with 409 (`template_not_found`, `template_disabled` or `template_channel_mismatch`) and names the step and state if a template cannot be used. In the editor, "Use newest version" moves a pinned step to the latest version; a running journey is unaffected until you edit and start it again.
+
+## 9d. Email blocks
+
+An email template is built from blocks, not raw HTML. Block types: heading, paragraph, button (label and link), image (https source, alt text, optional width) and divider.
+
+Limits: at most 50 blocks and 10 images, image width at most 600 px, links and image sources must be `https` addresses without credentials or placeholders, and the compiled email (HTML and text each) at most 20,000 characters. Text is escaped; `{{profile.*}}` placeholders still work.
+
+The plain-text alternative is built from the same blocks (button as `label: link`, image as `[alt]`, divider as `---`) and is sent with every email, so there is nothing separate to write.
+
+Email goes only to the fake SMTP until an email provider is set up (see Limits); nothing reaches a real inbox yet.
+
+### Open items (owner decisions)
+
+1. In-app is imported as push. Every workbook row says `In-App Notification`, and its rules sheet says "in-app only, not OS pushes", but the plan says push (FCM). Confirm, or an in-app channel needs its own design.
+2. State value format. The `state` trait does not exist in the lookup yet. The value sia-backend sends (id, code such as `TS`, or name) must equal the sheet mapping used at import.
+3. No default message. The workbook has none, so students outside the mapped states get nothing (`no_variant_for_state`). Keep, or make one state the default.
+4. Trigger and goal events are guessed and must be confirmed per journey before Start, or supplied as real names.
+5. Workbook rules not built: the 1 per day and 3 per week caps, opt-out suppression, cross-journey collisions and priority, payment-status checks, and the conditional Invalid PIN and OTP rows.
+6. Re-entry is set to 21 days on imported drafts. Confirm the window.
+
 ## 10. Campaigns
 
 A campaign sends one message to an audience over one channel. It is drafted, checked and started; its recipient list is built ("materialised") and then delivered by the send engine. Channel credentials, templates and limits are in 10.1 to 10.7; read them before the first campaign.

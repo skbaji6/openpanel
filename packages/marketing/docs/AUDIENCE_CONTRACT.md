@@ -96,6 +96,8 @@ Called only by the send engine, for ids it is about to message.
 
 Entry fields: `id`; `status` (`ok`, `not_found`, `suppressed`, `unreachable`); `reason` (for `unreachable`); `email`; `phone` (digits, international format such as `91XXXXXXXXXX`, only for `sms` and `whatsapp`); `devices` (`[{ "token", "platform" }]`, only for `push`); `traits` (flat `string | number | boolean` values templates use, for example `firstName`); `consent` (`{ "whatsapp"?, "sms_promotional"? }`, optional). Return only the contact field the channel needs.
 
+**`traits.state` (required for per-state journeys).** A journey step can hold a different message per student state. For those steps the plugin reads `traits.state` from the lookup entry. Send it on every `ok` entry, for every channel, equal to the value of the `state` dimension for that student (the same value the importer's sheet mapping uses; a string or number, matched ignoring case and surrounding spaces). Without it, a step with no default message is skipped as `no_state_trait`. The value only chooses the message and is not stored. This paragraph is for the sia-backend team; the plugin does not default it.
+
 ### 7. `POST /members/resolve`
 
 ```json

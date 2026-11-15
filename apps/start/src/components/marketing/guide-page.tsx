@@ -399,6 +399,79 @@ export function GuidePage() {
         </dl>
       </Section>
 
+      <Section title="Journeys from a workbook">
+        <p className="text-muted-foreground">
+          Import a workbook (.xlsx or .csv, up to 512 KiB, 2,000 rows and 200
+          columns) to create journeys as drafts. Nothing is sent until you start
+          one. Each row needs <code>Event Name</code>, <code>Platform</code>,{' '}
+          <code>Timing</code> and <code>Message (Content)</code>. A sheet is the
+          messages for one student state: map each sheet to the state value your
+          backend sends. Timing is a day count such as <code>D3</code>. Timings
+          that depend on what the student does, and the{' '}
+          <code>Journey Rules</code> sheet, are left out and listed in the
+          summary. Run the dry run first: it shows every journey and every
+          skipped row and saves nothing.
+        </p>
+        <p className="text-muted-foreground">
+          The trigger and goal events are guesses, because the workbook only has
+          labels. Confirm or change them on each draft; a journey with a guessed
+          event cannot be started. Importing the same file again is safe: a
+          draft that matches is unchanged, one you edited here is skipped unless
+          you choose to overwrite, and a running or paused journey is never
+          touched.
+        </p>
+      </Section>
+
+      <Section title="Messages per state">
+        <p className="text-muted-foreground">
+          A step can have one message per state and a default. A student gets
+          the message for their state, or the default. With neither, the step is
+          skipped: "no state" means your backend sent no state for the student,
+          "no message for the state" means there is a state but no message for
+          it, and "not pinned" means the message was never fixed by starting the
+          journey. Use the tabs in the step editor, preview with a sample
+          profile, and send yourself a test for each tab.
+        </p>
+      </Section>
+
+      <Section title="Templates and versions">
+        <p className="text-muted-foreground">
+          A step can use a saved template. Editing a template makes a new
+          version. Starting a journey fixes the version each step uses, so later
+          edits do not change a running journey. To move a step to the latest
+          version, choose Use newest version, then start again.
+        </p>
+      </Section>
+
+      <Section title="Email blocks">
+        <p className="text-muted-foreground">
+          Emails are built from blocks: heading, paragraph, button, image and
+          divider. An email can have up to 50 blocks and 10 images, an image is
+          at most 600 px wide, links and images must be https, and the finished
+          email must stay under 20,000 characters. The plain-text version is
+          made from the same blocks and sent with every email. Until an email
+          provider is set up, email goes only to a test mailbox, not to
+          students.
+        </p>
+      </Section>
+
+      <Section title="Open decisions">
+        <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+          <li>The workbook says in-app; it is imported as push. Confirm.</li>
+          <li>The exact state value your backend sends is not settled.</li>
+          <li>
+            There is no default message, so students in other states get
+            nothing.
+          </li>
+          <li>Trigger and goal events must be confirmed before Start.</li>
+          <li>
+            Daily and weekly caps, opt-outs, collisions between journeys and
+            payment checks from the workbook are not built.
+          </li>
+          <li>Imported journeys let a student re-enter after 21 days.</li>
+        </ul>
+      </Section>
+
       <Section title="Connect your backend">
         <p className="text-muted-foreground">
           Your backend sends contacts, push tokens and item lists to the
