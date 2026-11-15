@@ -159,6 +159,7 @@ describe('audience routes', () => {
   it('schema validates and exposes purchase_status', async () => {
     const schema = await call(app, '/schema', undefined, zSchema, 'GET');
     expect(schema.dimensions.map((d) => d.key)).toContain('purchase_status');
+    expect(schema.dimensions.map((d) => d.key)).toContain('state');
     expect(schema.dimensions.find((d) => d.key === 'course')?.multiValued).toBe(
       true
     );
@@ -309,7 +310,7 @@ describe('lookup', () => {
   it('sms returns a digits-only phone and reports a missing one', async () => {
     const { entries } = await lookup(['s001', 's003'], 'sms');
     expect(entries[0]?.phone).toBe('919000000001');
-    expect(entries[0]?.traits).toEqual({ firstName: 'Asha' });
+    expect(entries[0]?.traits).toEqual({ firstName: 'Asha', state: 'TS' });
     expect(entries[1]?.reason).toBe('no_valid_phone');
   });
 });

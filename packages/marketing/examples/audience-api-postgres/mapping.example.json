@@ -37,6 +37,16 @@
       }
     },
     {
+      "key": "state",
+      "label": "State",
+      "type": "string",
+      "column": "state",
+      "staticValues": [
+        { "value": "TS", "label": "Telangana" },
+        { "value": "AP", "label": "Andhra Pradesh" }
+      ]
+    },
+    {
       "key": "joined",
       "label": "Joined on",
       "type": "date",
@@ -62,7 +72,7 @@
       "whatsapp": "whatsapp_consent",
       "smsPromotional": "sms_consent"
     },
-    "traits": { "firstName": "first_name" }
+    "traits": { "firstName": "first_name", "state": "state" }
   },
   "devices": {
     "table": "reference_demo.devices",

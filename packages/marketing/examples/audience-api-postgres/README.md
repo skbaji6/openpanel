@@ -25,6 +25,8 @@ Point a project's audience source at `http://host:4200<AUDIENCE_BASE_PATH>`. Use
 
 Optional `memberCondition`: a trusted boolean expression over `s` (same rules as `expression`); students failing it are never audience members (count, members, explain), while `lookup` still reports them, for example `NOT s.suppressed`.
 
+The example maps a `state` dimension (TS, AP) and returns it as `traits.state` on every ok lookup entry, as `docs/AUDIENCE_CONTRACT.md` requires for per-state journeys.
+
 Also mapped: the id column (ids are served as text), the display name, contact columns (email, verified flag, phone, suppression flag, consent), traits, and the devices table. Only mapped columns are ever selected, so a password column cannot leak.
 
 Contract notes: `not_in` includes students who have no value for the dimension (single valued: NULL; multi valued: no matching child row). Ids are compared and ordered as `id::text`; if your id column is already text, drop the cast in `idExpression` (compile.ts), otherwise add an expression index on `(id::text)` so paging and `id` conditions can use an index.

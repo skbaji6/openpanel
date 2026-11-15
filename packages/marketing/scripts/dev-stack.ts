@@ -55,11 +55,12 @@ await sql.unsafe(
 await sql.unsafe(`
   INSERT INTO reference_demo.students
     (id, first_name, last_name, email, email_verified, phone, password_hash,
-     university_id, course_id, semester, joined_on, withdrawn, whatsapp_consent, sms_consent)
+     university_id, course_id, semester, joined_on, withdrawn, whatsapp_consent, sms_consent, state)
   SELECT 's' || lpad(g::text, 3, '0'), 'Student', g::text, 's' || g || '@example.test', true,
          '9190000' || lpad(g::text, 5, '0'), 'unused', 'u1', 'c1',
          CASE WHEN g <= ${LAST_SEMESTER_SIX_STUDENT} THEN ${SEMESTER_SIX} ELSE ${OTHER_SEMESTER} END,
-         '2025-09-01', false, true, true
+         '2025-09-01', false, true, true,
+         CASE WHEN g % 2 = 0 THEN 'TS' ELSE 'AP' END
   FROM generate_series(${FIRST_EXTRA_STUDENT}, ${LAST_STUDENT}) g`);
 
 const mapping = parseMapping(

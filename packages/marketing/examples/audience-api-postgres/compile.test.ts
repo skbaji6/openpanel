@@ -101,6 +101,12 @@ describe('compileFilter', () => {
     expect(params).toEqual(['c1', 'c3']);
   });
 
+  it('state dimension compiles to a bound eq on the state column', () => {
+    const { sql, params } = compileFilter(cond('state', 'eq', ['TS']), mapping);
+    expect(sql).toBe('(s."state" = $1)');
+    expect(params).toEqual(['TS']);
+  });
+
   it('rejects unsafe identifiers at startup', () => {
     expect(() =>
       parseMapping({ ...example, idColumn: 'id"; DROP TABLE x; --' })

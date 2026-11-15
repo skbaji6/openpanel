@@ -20,7 +20,8 @@ CREATE TABLE reference_demo.students (
   joined_on date,
   withdrawn boolean NOT NULL DEFAULT false,
   whatsapp_consent boolean,
-  sms_consent boolean
+  sms_consent boolean,
+  state text
 );
 
 -- Extra enrollments beyond a student's primary course.
@@ -54,14 +55,14 @@ INSERT INTO reference_demo.universities VALUES ('u1', 'Alpha University'), ('u2'
 INSERT INTO reference_demo.courses VALUES ('c1', 'Medicine'), ('c2', 'Nursing'), ('c3', 'Pharmacy');
 
 INSERT INTO reference_demo.students
-  (id, first_name, last_name, email, email_verified, phone, password_hash, university_id, course_id, semester, joined_on, withdrawn, whatsapp_consent, sms_consent) VALUES
-  ('s001', 'Asha', 'Rao', 'asha@example.test', true, '+91 90000 00001', 'secret-hash-1', 'u1', 'c1', 3, '2025-06-01', false, true, true),
-  ('s002', 'Bala', 'Iyer', 'bala@example.test', false, '919000000002', 'secret-hash-2', 'u1', 'c1', 3, '2025-06-02', false, false, true),
-  ('s003', 'Chitra', 'Nair', 'chitra@example.test', true, NULL, 'secret-hash-3', 'u1', 'c2', 4, '2025-07-01', false, NULL, NULL),
-  ('s004', 'Dev', 'Menon', 'dev@example.test', true, '919000000004', 'secret-hash-4', 'u2', 'c2', 4, '2025-07-15', true, true, true),
-  ('s005', 'Esha', 'Pillai', NULL, false, '919000000005', 'secret-hash-5', 'u2', 'c3', 5, '2025-08-01', false, true, false),
-  ('s006', 'Farid', 'Khan', 'farid@example.test', true, '919000000006', 'secret-hash-6', 'u2', NULL, NULL, NULL, false, true, true),
-  ('s007', 'Gita', 'Sen', NULL, false, NULL, 'secret-hash-7', 'u1', NULL, 3, '2025-09-01', false, NULL, NULL);
+  (id, first_name, last_name, email, email_verified, phone, password_hash, university_id, course_id, semester, joined_on, withdrawn, whatsapp_consent, sms_consent, state) VALUES
+  ('s001', 'Asha', 'Rao', 'asha@example.test', true, '+91 90000 00001', 'secret-hash-1', 'u1', 'c1', 3, '2025-06-01', false, true, true, 'TS'),
+  ('s002', 'Bala', 'Iyer', 'bala@example.test', false, '919000000002', 'secret-hash-2', 'u1', 'c1', 3, '2025-06-02', false, false, true, 'AP'),
+  ('s003', 'Chitra', 'Nair', 'chitra@example.test', true, NULL, 'secret-hash-3', 'u1', 'c2', 4, '2025-07-01', false, NULL, NULL, 'TS'),
+  ('s004', 'Dev', 'Menon', 'dev@example.test', true, '919000000004', 'secret-hash-4', 'u2', 'c2', 4, '2025-07-15', true, true, true, 'AP'),
+  ('s005', 'Esha', 'Pillai', NULL, false, '919000000005', 'secret-hash-5', 'u2', 'c3', 5, '2025-08-01', false, true, false, 'TS'),
+  ('s006', 'Farid', 'Khan', 'farid@example.test', true, '919000000006', 'secret-hash-6', 'u2', NULL, NULL, NULL, false, true, true, 'AP'),
+  ('s007', 'Gita', 'Sen', NULL, false, NULL, 'secret-hash-7', 'u1', NULL, 3, '2025-09-01', false, NULL, NULL, 'TS');
 
 INSERT INTO reference_demo.enrollments VALUES ('s001', 'c3'), ('s003', 'c1'), ('s006', 'c3');
 
