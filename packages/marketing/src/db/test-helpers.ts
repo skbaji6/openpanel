@@ -26,8 +26,20 @@ export async function truncateMarketingTables(tables: string[]): Promise<void> {
 
 export async function resetMarketingTables(): Promise<void> {
   await assertTestDatabase();
+  // TRUNCATE syncs files per table, which is slow enough on a slow disk to blow the 5 s hook limit,
+  // so only tables that hold rows or own a sequence (RESTART IDENTITY) are truncated.
   const tables = await sql.$queryRawUnsafe<{ tablename: string }[]>(
-    `SELECT tablename FROM pg_tables WHERE schemaname = 'marketing' AND tablename <> 'schema_migrations'`
+    `SELECT t.tablename FROM pg_tables t
+     WHERE t.schemaname = 'marketing' AND t.tablename <> 'schema_migrations'
+       AND (
+         (xpath('/row/c/text()', query_to_xml(format('SELECT EXISTS (SELECT 1 FROM marketing.%I) AS c', t.tablename), false, true, '')))[1]::text::boolean
+         OR EXISTS (
+           SELECT 1 FROM pg_depend d
+           JOIN pg_class seq ON seq.oid = d.objid AND seq.relkind = 'S'
+           JOIN pg_class tbl ON tbl.oid = d.refobjid AND tbl.relname = t.tablename AND tbl.relnamespace = 'marketing'::regnamespace
+           WHERE d.deptype IN ('a', 'i')
+         )
+       )`
   );
   if (tables.length === 0) {
     return;
