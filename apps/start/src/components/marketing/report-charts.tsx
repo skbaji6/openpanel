@@ -129,17 +129,28 @@ export function DailyChart({ daily }: { daily: DailyRow[] }) {
           {rows.at(-1)?.day}
         </text>
         {DAILY_SERIES.map((series) => (
-          <polyline
-            fill="none"
-            key={series.key}
-            points={rows
-              .map((row, i) => `${x(i)},${y(Number(row[series.key]))}`)
-              .join(' ')}
-            stroke={series.color}
-            strokeDasharray={series.dash}
-            strokeLinejoin="round"
-            strokeWidth={2}
-          />
+          <g key={series.key}>
+            <polyline
+              fill="none"
+              points={rows
+                .map((row, i) => `${x(i)},${y(Number(row[series.key]))}`)
+                .join(' ')}
+              stroke={series.color}
+              strokeDasharray={series.dash}
+              strokeLinejoin="round"
+              strokeWidth={2}
+            />
+            {/* A single day has no line to draw, so every point gets a marker. */}
+            {rows.map((row, i) => (
+              <circle
+                cx={x(i)}
+                cy={y(Number(row[series.key]))}
+                fill={series.color}
+                key={row.day}
+                r={3}
+              />
+            ))}
+          </g>
         ))}
       </svg>
       <ul className="row gap-4 text-sm">
