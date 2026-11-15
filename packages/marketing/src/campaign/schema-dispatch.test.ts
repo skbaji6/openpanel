@@ -88,8 +88,8 @@ describe('dispatch schema', () => {
     );
   });
 
-  it("a template channel 'push' is rejected", async () => {
-    expect(await errorCode(insertTemplate('push'))).toBe(CHECK_VIOLATION);
+  it("a template channel 'webhook' is rejected", async () => {
+    expect(await errorCode(insertTemplate('webhook'))).toBe(CHECK_VIOLATION);
   });
 
   it('a template version category outside promotional and service is rejected', async () => {
