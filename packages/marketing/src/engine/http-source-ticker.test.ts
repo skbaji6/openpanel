@@ -11,7 +11,11 @@ import {
 import { randomUUID } from 'node:crypto';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
-import type { LookupChannel, LookupEntry } from '../audience/contract';
+import {
+  type LookupChannel,
+  type LookupEntry,
+  MAX_LOOKUP_IDS,
+} from '../audience/contract';
 import {
   SourceAuthError,
   SourceProtocolError,
@@ -191,6 +195,38 @@ async function enroll(
     (opts.dueAt ?? DUE).toISOString()
   );
   return id;
+}
+
+async function enrollMany(definition: RuleDefinition, total: number) {
+  const ruleId = randomUUID();
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
+     VALUES ($1::uuid, $2, $3, 'active', $4::jsonb)`,
+    ruleId,
+    HTTP_PROJECT,
+    definition.name,
+    JSON.stringify(definition)
+  );
+  await sql.$executeRawUnsafe(
+    `WITH e AS (
+       INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+       SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, 'p' || g, 'active', $4::timestamptz - interval '1 hour'
+       FROM generate_series(1, $5::int) g
+       RETURNING id)
+     INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
+     SELECT id, 0, $4::timestamptz, 'pending' FROM e`,
+    HTTP_PROJECT,
+    ruleId,
+    JSON.stringify(definition),
+    DUE.toISOString(),
+    total
+  );
+}
+
+async function resetSteps() {
+  await sql.$executeRawUnsafe(
+    'TRUNCATE marketing.steps, marketing.enrollments, marketing.rules, marketing.send_ledger CASCADE'
+  );
 }
 
 interface StepRow {
@@ -464,6 +500,38 @@ describe('runTick with an http audience source', () => {
     expect(lookups).toHaveLength(1);
     expect(lookups[0]?.ids.sort()).toEqual(['u1', 'u2', 'u3']);
   });
+
+  it('1,200 due steps across two states use the same number of lookup calls as without variants', async () => {
+    const DUE_STEPS = 1200;
+    const plain = rule('webhook');
+    const withVariants: RuleDefinition = {
+      ...plain,
+      steps: [
+        {
+          delaySeconds: HOUR,
+          channel: 'webhook',
+          variants: { TS: { body: 'ts' }, AP: { body: 'ap' } },
+        },
+      ],
+    };
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      traits: { state: Number(id.slice(1)) % 2 === 0 ? 'TS' : 'AP' },
+    });
+    const lookupsPerRun: number[] = [];
+    for (const definition of [plain, withVariants]) {
+      await resetSteps();
+      lookups = [];
+      await enrollMany(definition, DUE_STEPS);
+      expect(
+        await tick({ ...CFG, claimBatch: DUE_STEPS, sendConcurrency: 20 })
+      ).toMatchObject({ sent: DUE_STEPS, skipped: 0 });
+      lookupsPerRun.push(lookups.length);
+    }
+    const expected = Math.ceil(DUE_STEPS / MAX_LOOKUP_IDS);
+    expect(lookupsPerRun).toEqual([expected, expected]);
+  }, 300_000);
 
   it('a lookup that outlasts the lease requeues its steps unsent with the attempt restored', async () => {
     onLookup = () => {

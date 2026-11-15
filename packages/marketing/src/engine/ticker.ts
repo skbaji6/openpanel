@@ -21,8 +21,9 @@ import type {
   SendResult,
 } from '../channels/types';
 import type { MarketingConfig } from '../config';
+import { chooseMessage } from '../journeys/variants';
 import { redactSecrets } from '../redact';
-import type { Step } from '../rules/rule.schema';
+import type { Step, StepTemplate } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
 import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
 import {
@@ -33,21 +34,8 @@ import {
   type RuleSnapshot,
   type Sql,
 } from './engine';
-import {
-  capAllows,
-  inQuietHours,
-  lagAllowsSending,
-  nextAllowedTime,
-} from './gates';
-import {
-  capLockKey,
-  countRecentSends,
-  deleteLedger,
-  type EffectiveCap,
-  effectiveCap,
-  ledgerRef,
-  lockCap,
-} from './ledger';
+import { inQuietHours, lagAllowsSending, nextAllowedTime } from './gates';
+import { capLockKey, deleteLedger, ledgerRef } from './ledger';
 import { gatherLookupBatch } from './lookup-batch';
 
 const MAX_ATTEMPTS = 5;
@@ -141,7 +129,6 @@ interface StepContext {
   attributes: unknown;
   opted_out: boolean;
   device_tokens: string[];
-  caps: unknown;
   quiet_hours: unknown;
   config_encrypted: string | null;
   trigger_properties: unknown;
@@ -232,7 +219,7 @@ const CONTEXT_SQL = `
     ARRAY (SELECT d.token FROM marketing.devices d
            WHERE d.project_id = en.project_id AND d.profile_id = en.profile_id
            ORDER BY d.token) AS device_tokens,
-    ps.caps, ps.quiet_hours, cc.config_encrypted,
+    ps.quiet_hours, cc.config_encrypted,
     (SELECT ev.properties FROM marketing.events ev
      WHERE ev.project_id = en.project_id AND ev.profile_id = en.profile_id
        AND ev.name = en.rule_snapshot->'trigger'->>'event'
@@ -256,7 +243,7 @@ const CONTEXT_NO_CONTACT_SQL = `
     EXISTS (SELECT 1 FROM marketing.opt_outs o
             WHERE o.project_id = en.project_id AND o.profile_id = en.profile_id
               AND o.channel = en.channel) AS opted_out,
-    ps.caps, ps.quiet_hours, cc.config_encrypted,
+    ps.quiet_hours, cc.config_encrypted,
     (SELECT ev.properties FROM marketing.events ev
      WHERE ev.project_id = en.project_id AND ev.profile_id = en.profile_id
        AND ev.name = en.rule_snapshot->'trigger'->>'event'
@@ -875,21 +862,6 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
     return row.status === 'pending' ? 'postponed' : 'skipped';
   }
 
-  async function skipForCap(tx: Queryable): Promise<Outcome> {
-    const [row] = await tx.$queryRawUnsafe<{ updated: number }[]>(
-      MARK_SQL,
-      ...owned,
-      'skipped',
-      outcomeJson('cap'),
-      null
-    );
-    if (!row?.updated) {
-      return 'lost';
-    }
-    await tx.$executeRawUnsafe(COMPLETE_IF_DONE_SQL, claim.enrollment_id);
-    return 'skipped';
-  }
-
   return {
     owned,
     finish,
@@ -935,59 +907,25 @@ function createStepWriter(deps: TickDeps, claim: Claim) {
       );
       return cancelled?.updated ? 'skipped' : 'lost';
     },
-    // Writes the step's ledger row, or marks the step skipped when the cap is used up. Runs for
-    // uncapped projects too: a campaign's cap, or a cap added later, must see every journey send.
-    reserve(args: {
+    // Journeys are never capped, but the ledger row lets a campaign's cap see every journey send.
+    async reserve(args: {
       projectId: string;
       profileId: string;
       channel: string;
-      cap: EffectiveCap | null;
       now: Date;
     }): Promise<Outcome | true> {
-      const { projectId, profileId, channel, cap, now } = args;
-      const lock = {
+      const { projectId, profileId, channel, now } = args;
+      const lock = { projectId, profileId, channel, scope: 'channel' } as const;
+      const [row] = await deps.sql.$queryRawUnsafe<{ updated: number }[]>(
+        RESERVE_SQL,
+        ...owned,
+        now.toISOString(),
+        capLockKey(lock),
         projectId,
         profileId,
-        channel,
-        scope: cap?.scope ?? 'channel',
-      } as const;
-      const reserveAndRecord = async (
-        db: Queryable
-      ): Promise<Outcome | true> => {
-        const [row] = await db.$queryRawUnsafe<{ updated: number }[]>(
-          RESERVE_SQL,
-          ...owned,
-          now.toISOString(),
-          capLockKey(lock),
-          projectId,
-          profileId,
-          channel
-        );
-        return row?.updated ? true : 'lost';
-      };
-      // An uncapped send must not wait behind a consumer batch holding the engine's profile lock;
-      // only a cap skip, which may complete the enrollment, needs it.
-      if (!cap) {
-        return reserveAndRecord(deps.sql);
-      }
-      return underProfileLock(
-        deps.sql,
-        claim.enrollment_id,
-        async (tx): Promise<Outcome | true> => {
-          await lockCap(tx, lock);
-          const counts = await countRecentSends(tx, {
-            projectId,
-            profileIds: [profileId],
-            channel: cap.scope === 'all' ? null : channel,
-            since: new Date(now.getTime() - cap.periodSeconds * 1000),
-            excludeRefs: [stepRef],
-          });
-          if (!capAllows(counts.get(profileId) ?? 0, cap)) {
-            return await skipForCap(tx);
-          }
-          return await reserveAndRecord(tx);
-        }
+        channel
       );
+      return row?.updated ? true : 'lost';
     },
   };
 }
@@ -1016,10 +954,13 @@ export function loadChannelConfig(
   }
 }
 
-function render(
-  stepDef: Step,
-  template: { subject?: string; body: string },
-  context: StepContext,
+export function render(
+  template: StepTemplate & { body: string },
+  channel: ChannelId,
+  context: Pick<
+    StepContext,
+    'attributes' | 'trigger_properties' | 'rule_snapshot'
+  >,
   goal: GoalResult,
   meta: RenderedMessage['meta']
 ): RenderedMessage {
@@ -1031,7 +972,6 @@ function render(
     missing: goal.missing,
     allowedEventProps: context.rule_snapshot.allowedEventProps,
   };
-  const { channel } = stepDef;
   const heading =
     template.subject === undefined
       ? undefined
@@ -1139,6 +1079,14 @@ async function deliver(
   if (skip) {
     return await step.finish('skipped', skip);
   }
+  // Decided before reserving, from this attempt's lookup, so a skip holds no ledger row.
+  const choice = chooseMessage(
+    stepDef,
+    isRecord(context.attributes) ? context.attributes : {}
+  );
+  if (!choice.ok) {
+    return await step.finish('skipped', choice.reason);
+  }
   const quietHours = zQuietHours.parse(context.quiet_hours ?? null);
   const now = deps.now();
   if (inQuietHours(now, quietHours)) {
@@ -1163,34 +1111,22 @@ async function deliver(
     return await step.finish('skipped', 'invalid_channel_config');
   }
 
-  const template = stepDef.template;
-  if (template?.body === undefined) {
-    return await step.finish('skipped', 'no_message');
-  }
-
   const reserved = await step.reserve({
     projectId: context.project_id,
     profileId: context.profile_id,
     channel: stepDef.channel,
-    cap: effectiveCap(null, zCaps.parse(context.caps ?? null)),
     now,
   });
   if (reserved !== true) {
     return reserved;
   }
 
-  const message = render(
-    stepDef,
-    { ...template, body: template.body },
-    context,
-    goal,
-    {
-      projectId: context.project_id,
-      enrollmentId: claim.enrollment_id,
-      ruleId: context.rule_id,
-      stepIndex: claim.step_index,
-    }
-  );
+  const message = render(choice.template, stepDef.channel, context, goal, {
+    projectId: context.project_id,
+    enrollmentId: claim.enrollment_id,
+    ruleId: context.rule_id,
+    stepIndex: claim.step_index,
+  });
   const leased = await step.extendLease(deps.now());
   if (leased !== true) {
     return leased;

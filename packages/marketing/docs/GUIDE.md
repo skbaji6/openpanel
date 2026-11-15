@@ -35,7 +35,7 @@ Example: an ed-tech app. Rule "added a book to the cart, did not buy": trigger `
 | Contact | A person's email and attributes, synced from your backend. Attributes feed `{{profile.*}}`. |
 | Device | A person's Firebase token, synced from your backend. |
 | Grace window | `MARKETING_GRACE_SECONDS` (default 300): a goal seen this late still cancels a pending step. |
-| Caps, quiet hours | Per project: at most N journey messages per period per person, and no sends in a time window. |
+| Caps, quiet hours | Per project: at most N campaign messages per period per person, and no journey or campaign sends in a time window. |
 | Audience | A saved selection of people from the `http` audience source: a filter, hand-picked ids to include, ids and a filter to exclude. Dynamic (evaluated when a campaign starts) or snapshot (ids frozen on request). |
 | Campaign | A one-off message to an audience over one channel (push, email, webhook, SMS or WhatsApp), started now or at a scheduled time. A worker builds the recipient list and then sends it in batches (section 10). |
 
@@ -232,7 +232,9 @@ Marketing, Channels tab (or `PUT /marketing/settings`):
   "quietHours": { "start": "21:00", "end": "08:00", "timezone": "Asia/Kolkata" } }
 ```
 
-`caps` limits journey messages per person per period; `null` for none. Quiet hours hold messages until the window ends. A step that is held or capped is recorded as skipped (visible in Results).
+`caps` limits campaign messages per person per period; `null` for none. Journeys are never capped, but their sends count toward a campaign's cap. Quiet hours hold journey and campaign messages until the window ends.
+
+A journey step can hold one message per state (`variants`, keyed by the student's `state` trait from the audience lookup, matched ignoring case and spaces) plus a default (`template`). A student whose state has no variant gets the default; without a default the step is skipped as `no_variant_for_state`, or `no_state_trait` when the lookup returned no state, and as `template_not_pinned` when the chosen message has no body yet. Neither the state nor the chosen variant is stored.
 
 ## 9. Audiences
 
@@ -358,7 +360,7 @@ Guidance for when it is set up:
 ### 10.5 Consent, frequency cap and skip reasons
 
 - **Consent.** With `requireConsent` on for `whatsapp`, a person is sent only when the audience API returns `consent.whatsapp: true`; for `sms` the check applies to `promotional` templates and needs `consent.sms_promotional: true`. Anyone else is skipped as `consent`. Off by default; `service` SMS templates ignore it.
-- **Frequency cap.** `caps` in the project settings (`{ max, periodSeconds, scope }`, section 8) and the campaign's own `frequencyCap` count sends from the shared send ledger: journey steps and campaigns together. `scope: "channel"` (default) counts only the same channel; `"all"` counts every channel. A capped person is skipped as `capped`. The ledger keeps 400 days of sends.
+- **Frequency cap.** `caps` in the project settings (`{ max, periodSeconds, scope }`, section 8) and the campaign's own `frequencyCap` count sends from the shared send ledger: journey steps and campaigns together. They hold back campaigns only; journey steps are never capped. `scope: "channel"` (default) counts only the same channel; `"all"` counts every channel. A capped person is skipped as `capped`. The ledger keeps 400 days of sends.
 - **Skip and failure reasons** (`GET /marketing/campaigns/{id}/skip-reasons` counts them; `GET .../recipients?status=&cursor=&limit=` lists rows): `not_found`, `suppressed`, `unreachable:<reason>` (from the audience source), `opted_out`, `consent`, `capped`, `cancelled`, `already_received`, `missing_variable`, `render_failed`, `max_attempts` (retried too often), `lease_expired` (a worker died mid-send), `operator_retry`, `rate_limited`, `channel_error`, `failed` and `cancelled` (rows left unsent when the campaign failed or was cancelled), `unreachable:no_live_token` (every device token is known dead), `no_phone`, `no email`, `invalid email`, `invalid unsubscribe url`, `no device tokens`, `blocked url` (a webhook host not allowed), `timeout`, `network`, `network error`, `exception`, `deadline` and `breaker` (the batch ran out of time, or too many single rejections stopped it, before this row was tried), `msg91 failed`, `msg91 conflicting` and `msg91 unlisted` (a partial WhatsApp answer that contradicts itself or leaves the row out; the row is `uncertain`), and provider codes `msg91 <code>`, `fcm <code>`, `smtp <code>`, `http <status>`.
 
 ### 10.6 How delivery behaves
@@ -445,7 +447,7 @@ MARKETING_E2E=1 MARKETING_E2E_MSG91_URL=<fake MSG91 base URL from dev-stack> bun
 |---|---|
 | No "Marketing" in the sidebar, or the pages 404 | The dashboard is the stock image, or `MARKETING_URL` / `MARKETING_PROXY_SECRET` are not set on it. |
 | Unsubscribe link 404s | The same, or `MARKETING_PUBLIC_URL` is not the dashboard's public origin. |
-| Rule is active but nobody is messaged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours or caps hold it back. Check Results (skipped / failed). |
+| Rule is active but nobody is messaged | The event names differ from what your SDK sends; events have no `profileId`; no contact email or device synced; the lag gate is closed; quiet hours hold it back; the step has no message for the student's state (`no_variant_for_state`, `no_state_trait`). Check Results (skipped / failed). |
 | Steps show `skipped: expired` | The step was more than `MARKETING_MAX_LATENESS` past its scheduled time (an outage, a failing audience source or a long backlog). Intended. |
 | Steps show `unreachable:...` or `suppressed` | The audience source says the person cannot be reached on that channel (HTTP source). |
 | Source shows failing | Wrong key or secret (401), the API is down, or its answers do not match the contract; run the conformance suite. |

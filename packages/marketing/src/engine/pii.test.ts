@@ -69,7 +69,9 @@ const CANARY_PHONE = '919999900001';
 const CANARY_TOKEN = 'canary-fcm-token-1';
 const CANARY_NAME = 'Canary Student';
 const CANARY_AUTH_KEY = 'msg91-pii-canary-auth-key-0123456789';
+const CANARY_STATE = 'ZZ-canary-state';
 const CANARIES = [
+  CANARY_STATE,
   CANARY_EMAIL,
   CANARY_PHONE,
   CANARY_TOKEN,
@@ -178,7 +180,11 @@ function canaryEntry(id: string) {
     email: CANARY_EMAIL,
     phone: CANARY_PHONE,
     devices: [{ token: CANARY_TOKEN, platform: 'android' }],
-    traits: { firstName: CANARY_NAME, phone: CANARY_PHONE },
+    traits: {
+      firstName: CANARY_NAME,
+      phone: CANARY_PHONE,
+      state: CANARY_STATE,
+    },
   };
 }
 
@@ -244,6 +250,10 @@ function definition(): RuleDefinition {
         delaySeconds: HOUR,
         channel: 'email',
         template: { subject: 'Hi {{profile.firstName}}', body: 'one' },
+        variants: {
+          TS: { subject: 'TS {{profile.firstName}}', body: 'ts' },
+          AP: { subject: 'AP {{profile.firstName}}', body: 'ap' },
+        },
       },
       {
         delaySeconds: 2 * HOUR,
@@ -436,6 +446,7 @@ describe('personal data from an http audience source', () => {
       sends.find((send) => send.channel === 'webhook')?.to.attributes
     ).toMatchObject({
       firstName: CANARY_NAME,
+      state: CANARY_STATE,
     });
     // The semaphore key was live while a lookup ran, so the Redis scan saw real marketing keys.
     expect(redisKeysDuringLookup.length).toBeGreaterThan(0);

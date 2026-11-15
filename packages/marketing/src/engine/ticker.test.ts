@@ -12,6 +12,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
+import type { AudienceSource } from '../audience/source';
 import { registerAdapter } from '../channels/registry';
 import type {
   ChannelAdapter,
@@ -388,6 +389,20 @@ const PUSH_RULE = rule({
   steps: [{ delaySeconds: HOUR, channel: 'push', template: { body: 'one' } }],
 });
 
+const VARIANTS_ONLY_RULE = rule({
+  name: 'variants',
+  steps: [
+    {
+      delaySeconds: HOUR,
+      channel: 'email',
+      variants: {
+        TS: { subject: 'Hi', body: 'telangana {{profile.firstName}}' },
+        AP: { subject: 'Hi', body: 'andhra' },
+      },
+    },
+  ],
+});
+
 async function enrollmentStatus(enrollmentId: string): Promise<string> {
   const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
     'SELECT status FROM marketing.enrollments WHERE id = $1::uuid',
@@ -568,6 +583,55 @@ describe('runTick', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("a step with no variant for the student's state is skipped with reason no_variant_for_state and nothing is sent", async () => {
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.contacts SET attributes = $1::jsonb',
+      JSON.stringify({ firstName: 'Ada', state: 'KA' })
+    );
+    const { enrollmentId } = await enrollOne(VARIANTS_ONLY_RULE);
+    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
+    const [step] = await steps(enrollmentId);
+    expect(step?.status).toBe('skipped');
+    expect(step?.outcome).toEqual({ reason: 'no_variant_for_state' });
+    expect(step?.sent_at).toBeNull();
+    expect(calls).toHaveLength(0);
+    expect(await ledgerRefs()).toEqual([]);
+  });
+
+  it("a step with a variant for the student's state sends that variant", async () => {
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.contacts SET attributes = $1::jsonb',
+      JSON.stringify({ firstName: 'Ada', state: 'ts' })
+    );
+    await enrollOne(VARIANTS_ONLY_RULE);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect(calls[0]?.msg.body).toBe('telangana Ada');
+  });
+
+  it('an unreachable student on a variants-only step keeps reason unreachable:no_active_device, not no_state_trait', async () => {
+    const source = {
+      lookup: (ids: string[]) =>
+        Promise.resolve(
+          ids.map((id) => ({
+            id,
+            status: 'unreachable' as const,
+            reason: 'no_active_device',
+          }))
+        ),
+    } as unknown as AudienceSource;
+    const { enrollmentId } = await enrollOne(VARIANTS_ONLY_RULE);
+    expect(
+      await tick(
+        { ...CFG, lookupWindowMs: 0 },
+        { sources: { forProject: () => Promise.resolve(source) } }
+      )
+    ).toEqual({ ...ZERO, skipped: 1 });
+    expect((await steps(enrollmentId))[0]?.outcome).toEqual({
+      reason: 'unreachable:no_active_device',
+    });
+    expect(calls).toHaveLength(0);
+  });
+
   it('push step goes to the profile device tokens with title and plain-text body', async () => {
     await sql.$executeRawUnsafe(
       `INSERT INTO marketing.devices (token, project_id, profile_id, platform)
@@ -693,7 +757,7 @@ describe('runTick', () => {
     expect((await steps(enrollmentId))[0]?.status).toBe('failed');
   });
 
-  it('quiet hours postpone instead of send', async () => {
+  it('quiet hours still defer a journey step', async () => {
     await setSettings(null, { start: '11:00', end: '13:00', timezone: 'UTC' });
     const { enrollmentId } = await enrollOne();
     expect(await tick()).toEqual({ ...ZERO, postponed: 1 });
@@ -706,61 +770,47 @@ describe('runTick', () => {
     expect(await enrollmentStatus(enrollmentId)).toBe('active');
   });
 
-  it('cap: with caps {max:1, periodSeconds:3600} a second step for the same profile and channel from another rule is skipped', async () => {
-    await setSettings({ max: 1, periodSeconds: 3600 }, null);
+  it('a student over the project frequency cap still receives a journey step', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY }, null);
     await enrollOne(rule({ name: 'earlier' }), [
       {
         dueAt: DUE,
         status: 'sent',
-        sentAt: new Date(NOW.getTime() - 30 * MINUTE_MS),
+        sentAt: new Date(NOW.getTime() - HOUR * 1000),
       },
     ]);
     const { enrollmentId } = await enrollOne(rule({ name: 'second' }));
-    const webhook = await enrollOne(
-      rule({
-        name: 'other channel',
-        steps: [
-          { delaySeconds: HOUR, channel: 'webhook', template: { body: 'w' } },
-        ],
-      })
-    );
-    expect(await tick()).toEqual({ ...ZERO, sent: 1, skipped: 1 });
-    const [step] = await steps(enrollmentId);
-    expect(step?.status).toBe('skipped');
-    expect(step?.outcome).toEqual({ reason: 'cap' });
-    expect((await steps(webhook.enrollmentId))[0]?.status).toBe('sent');
-    expect(calls.map((call) => call.opts.idempotencyKey)).toEqual([
-      `${webhook.enrollmentId}:0`,
-    ]);
+    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect((await steps(enrollmentId))[0]?.status).toBe('sent');
   });
 
-  it('cap: two due steps of different rules for one profile in the same tick send exactly one', async () => {
+  it('two due journey steps for one student in the same tick both send although the project cap is 1', async () => {
     await setSettings({ max: 1, periodSeconds: 3600 }, null);
-    const first = await enrollOne(rule({ name: 'a' }));
-    const second = await enrollOne(rule({ name: 'b' }));
-    expect(await tick()).toEqual({ ...ZERO, sent: 1, skipped: 1 });
-    const statuses = [
-      (await steps(first.enrollmentId))[0]?.status,
-      (await steps(second.enrollmentId))[0]?.status,
-    ].sort();
-    expect(statuses).toEqual(['sent', 'skipped']);
-    expect(calls).toHaveLength(1);
+    await enrollOne(rule({ name: 'a' }));
+    await enrollOne(rule({ name: 'b' }));
+    expect(await tick()).toEqual({ ...ZERO, sent: 2 });
+    expect(calls).toHaveLength(2);
   });
 
-  it('cap: a sent step older than the period does not count', async () => {
-    await setSettings({ max: 1, periodSeconds: 3600 }, null);
-    await enrollOne(rule({ name: 'old' }), [
+  it('a campaign ledger row does not hold back a journey push step', async () => {
+    await setSettings({ max: 1, periodSeconds: DAY, scope: 'all' }, null);
+    await addDevice();
+    await recordLedger(sql, [
       {
-        dueAt: DUE,
-        status: 'sent',
-        sentAt: new Date(NOW.getTime() - 2 * HOUR * 1000),
+        sourceRef: ledgerRef.campaign(randomUUID(), PROFILE),
+        projectId: PROJECT,
+        profileId: PROFILE,
+        channel: 'push',
+        sentAt: new Date(NOW.getTime() - 20 * HOUR * 1000),
       },
     ]);
-    await enrollOne(rule({ name: 'new' }));
+    const { enrollmentId } = await enrollOne(PUSH_RULE);
     expect(await tick()).toEqual({ ...ZERO, sent: 1 });
+    expect(await ledgerRefs()).toContain(ledgerRef.step(enrollmentId, 0));
+    expect(await ledgerRefs()).toHaveLength(2);
   });
 
-  it('a journey push step reserving under cap writes a ledger row', async () => {
+  it('a journey send still writes a send_ledger row', async () => {
     await setSettings({ max: 1, periodSeconds: DAY }, null);
     await addDevice();
     const { enrollmentId } = await enrollOne(PUSH_RULE);
@@ -821,70 +871,6 @@ describe('runTick', () => {
       'SELECT sent_at FROM marketing.send_ledger'
     );
     expect(row?.sent_at).toEqual(markedAt);
-  });
-
-  it('a campaign ledger row counts against a journey cap of 1 per day on push', async () => {
-    await setSettings({ max: 1, periodSeconds: DAY }, null);
-    await addDevice();
-    await recordLedger(sql, [
-      {
-        sourceRef: ledgerRef.campaign(randomUUID(), PROFILE),
-        projectId: PROJECT,
-        profileId: PROFILE,
-        channel: 'push',
-        sentAt: new Date(NOW.getTime() - 20 * HOUR * 1000),
-      },
-    ]);
-    const { enrollmentId } = await enrollOne(PUSH_RULE);
-    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
-    expect((await steps(enrollmentId))[0]?.outcome).toEqual({ reason: 'cap' });
-    expect(await ledgerRefs()).toHaveLength(1);
-    expect(calls).toHaveLength(0);
-  });
-
-  it('a ledger row exactly one period old does not count', async () => {
-    await setSettings({ max: 1, periodSeconds: DAY }, null);
-    await addDevice();
-    await recordLedger(sql, [
-      {
-        sourceRef: ledgerRef.campaign(randomUUID(), PROFILE),
-        projectId: PROJECT,
-        profileId: PROFILE,
-        channel: 'push',
-        sentAt: new Date(NOW.getTime() - DAY * 1000),
-      },
-    ]);
-    await enrollOne(PUSH_RULE);
-    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
-  });
-
-  it('scope all counts an email send against a push step', async () => {
-    await setSettings({ max: 1, periodSeconds: DAY, scope: 'all' }, null);
-    await addDevice();
-    await enrollOne(rule({ name: 'email earlier' }), [
-      {
-        dueAt: DUE,
-        status: 'sent',
-        sentAt: new Date(NOW.getTime() - HOUR * 1000),
-      },
-    ]);
-    const { enrollmentId } = await enrollOne(PUSH_RULE);
-    expect(await tick()).toEqual({ ...ZERO, skipped: 1 });
-    expect((await steps(enrollmentId))[0]?.outcome).toEqual({ reason: 'cap' });
-  });
-
-  it('scope channel (the default) does not count an email send against a push step', async () => {
-    await setSettings({ max: 1, periodSeconds: DAY }, null);
-    await addDevice();
-    await enrollOne(rule({ name: 'email earlier' }), [
-      {
-        dueAt: DUE,
-        status: 'sent',
-        sentAt: new Date(NOW.getTime() - HOUR * 1000),
-      },
-    ]);
-    await enrollOne(PUSH_RULE);
-    expect(await tick()).toEqual({ ...ZERO, sent: 1 });
   });
 
   it('a requeued step deletes its ledger row', async () => {
@@ -1353,7 +1339,7 @@ describe('runTick', () => {
     expect((await steps(enrollmentId))[0]?.status).toBe('pending');
   });
 
-  it('an expired sending step under a completed enrollment or a paused rule is cancelled and its cap reservation cleared', async () => {
+  it('an expired sending step under a completed enrollment or a paused rule is cancelled and its ledger reservation cleared', async () => {
     const expired = {
       dueAt: DUE,
       status: 'sending',
