@@ -9,6 +9,24 @@ export const MAX_PARAGRAPH_LENGTH = 5000;
 export const MAX_LABEL_LENGTH = 80;
 export const MAX_ALT_LENGTH = 200;
 export const MAX_URL_LENGTH = 2000;
+export const MAX_COMPILED_LENGTH = 20_000;
+// Markup the backend compiler wraps around each block and the whole email (measured from it).
+const FRAME_OVERHEAD = 240;
+const BLOCK_OVERHEAD: Record<EmailBlockType, number> = {
+  heading: 145,
+  paragraph: 128,
+  button: 247,
+  image: 122,
+  divider: 125,
+};
+const IMAGE_WIDTH_OVERHEAD = 12;
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+};
 const UNSAFE_URL_CHARACTERS = /[\s\p{Cc}]/u;
 const URL_MESSAGE =
   'Use a full https:// address, without {{placeholders}} or a user name and password';
@@ -139,6 +157,53 @@ function blockProblem(block: EmailBlock): string | null {
   }
 }
 
+const escaped = (value: string) =>
+  value.replace(/[&<>"']/g, (char) => HTML_ESCAPES[char] ?? char);
+
+function blockLengths(block: EmailBlock): { html: number; text: number } {
+  const html = BLOCK_OVERHEAD[block.type];
+  switch (block.type) {
+    case 'heading':
+      return {
+        html: html + escaped(block.text).length,
+        text: block.text.length,
+      };
+    case 'paragraph':
+      return {
+        html: html + escaped(block.text).replace(/\r?\n/g, '<br>').length,
+        text: block.text.length,
+      };
+    case 'button':
+      return {
+        html: html + escaped(block.url).length + escaped(block.label).length,
+        text: block.label.length + 2 + block.url.length,
+      };
+    case 'image':
+      return {
+        html:
+          html +
+          escaped(block.src).length +
+          escaped(block.alt).length +
+          (block.width === undefined ? 0 : IMAGE_WIDTH_OVERHEAD),
+        text: block.alt.length + 2,
+      };
+    default:
+      return { html, text: 3 };
+  }
+}
+
+// The server refuses an email whose compiled body or text passes 20,000 characters.
+export function isEmailTooLarge(blocks: EmailBlock[]): boolean {
+  let html = FRAME_OVERHEAD;
+  let text = Math.max(0, blocks.length - 1) * 2;
+  for (const block of blocks) {
+    const lengths = blockLengths(block);
+    html += lengths.html;
+    text += lengths.text;
+  }
+  return html > MAX_COMPILED_LENGTH || text > MAX_COMPILED_LENGTH;
+}
+
 export function emailProblems(content: EmailContent): EmailProblem[] {
   const problems: EmailProblem[] = [];
   const subjectLength = content.subject.trim().length;
@@ -162,6 +227,12 @@ export function emailProblems(content: EmailContent): EmailProblem[] {
     problems.push({
       index: null,
       message: `At most ${MAX_EMAIL_IMAGES} images`,
+    });
+  }
+  if (isEmailTooLarge(content.blocks)) {
+    problems.push({
+      index: null,
+      message: `The email is too large. Shorten the text or remove blocks (limit ${MAX_COMPILED_LENGTH} characters once formatted)`,
     });
   }
   for (const [index, block] of content.blocks.entries()) {

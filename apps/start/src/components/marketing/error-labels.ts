@@ -21,6 +21,8 @@ export const ERROR_LABELS: Record<string, string> = {
     'A daily quota is only available for email. Clear it in the channel settings.',
   template_not_found: 'The message template no longer exists.',
   template_disabled: 'The message template is disabled. Enable it first.',
+  definition_too_large:
+    'The journey is too large once its templates are included. Shorten the messages or remove steps.',
   template_mapping_missing:
     'The message template has no variable mapping. Edit the template.',
   template_channel_mismatch: 'The message template belongs to another channel.',

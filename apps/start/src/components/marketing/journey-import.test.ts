@@ -18,6 +18,7 @@ const PROBLEM_CODES = [
   'conditional_timing',
   'duplicate_timing',
   'message_too_long',
+  'invalid_placeholder',
   'too_many_steps',
   'definition_too_large',
 ];

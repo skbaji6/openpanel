@@ -2,8 +2,13 @@ import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
-import type { RuleDefinition, Step } from '../rules/rule.schema';
-import { pinDefinition } from './pin';
+import {
+  MAX_BODY_LENGTH,
+  MAX_DEFINITION_BYTES,
+  type RuleDefinition,
+  type Step,
+} from '../rules/rule.schema';
+import { definitionBytes, pinDefinition, pinOrThrow } from './pin';
 import { createTemplateRegistry } from './registry';
 
 const CTX = { projectId: 'p1', userId: 'u1' };
@@ -195,5 +200,24 @@ describe('pinDefinition', () => {
     ]);
     const result = await pinDefinition(registry, 'p1', def);
     expect(result).toEqual({ ok: true, definition: def, pinned: [] });
+  });
+});
+
+describe('pinOrThrow size cap', () => {
+  it('refuses a definition whose pinned form exceeds the byte cap', async () => {
+    const t = await registry.create(CTX, {
+      ...PUSH,
+      content: { subject: 'Hello', body: 'x'.repeat(MAX_BODY_LENGTH) },
+    });
+    const steps: Step[] = Array.from({ length: 5 }, (_, i) => ({
+      delaySeconds: i,
+      channel: 'push',
+      template: { templateId: t.templateId },
+    }));
+    const small = definition(steps);
+    expect(definitionBytes(small)).toBeLessThan(MAX_DEFINITION_BYTES);
+    await expect(pinOrThrow(registry, 'p1', small)).rejects.toMatchObject({
+      code: 'definition_too_large',
+    });
   });
 });

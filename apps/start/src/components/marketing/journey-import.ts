@@ -16,6 +16,8 @@ const IMPORT_PROBLEM_LABELS: Record<string, string> = {
   duplicate_timing:
     'Two rows have the same timing for this state, so one was left out.',
   message_too_long: 'The message is too long.',
+  invalid_placeholder:
+    'The message has a {{placeholder}} that is not valid, so this row was left out. Use {{profile.name}} style names.',
   too_many_steps: 'The journey has more steps than one journey can hold.',
   definition_too_large: 'The journey is too large to save.',
 };

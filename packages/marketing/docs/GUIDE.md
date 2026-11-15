@@ -262,7 +262,7 @@ Import a workbook of journey messages as **drafts**. Nothing is sent until you s
 | `Event Name` | Names the journey. The same name on several sheets and rows is one journey; its key is the name in lower case with other characters turned into `_`. |
 | `Platform` | Only `In-App Notification` is known. It is imported as a **push** step (see Open items). Any other value is reported as `unknown_platform`. |
 | `Timing` | `D0`, `D1`, ... up to the maximum delay, optionally followed by `Immediate`, `in session`, `on exit`, `after exit` or `confirmation`. `D<n>` is n days after the trigger. |
-| `Message (Content)` | The message text. An empty one (`empty_message`) or one over the body limit (`message_too_long`) is reported and skipped. |
+| `Message (Content)` | The message text. An empty one (`empty_message`) or one over the body limit (`message_too_long`), or one with a `{{...}}` placeholder other than `profile.<trait>`, `event.<prop>` or `missing` (`invalid_placeholder`), is reported and skipped. |
 | `Instructions`, `Template Idea (Image/Visual)` | Optional. Kept as the step's note, never sent. |
 
 **Sheet to state.** Each sheet is the messages for one student state. Before importing you map every sheet to the value the `state` trait carries (see `AUDIENCE_CONTRACT.md`); a sheet left "Not mapped" is reported as `unknown_sheet`. Rows with the same journey and the same `D<n>` become one step with one message per state; a second row for the same state and timing is reported as `duplicate_timing`. A sheet named `Journey Rules` is ignored (`sheet_ignored`).

@@ -63,6 +63,7 @@ export type ImportProblem = {
     | 'conditional_timing'
     | 'duplicate_timing'
     | 'message_too_long'
+    | 'invalid_placeholder'
     | 'too_many_steps'
     | 'definition_too_large';
   column?: string;
@@ -123,6 +124,16 @@ function missingColumns(sheet: SheetRows): string[] {
   );
 }
 
+// The renderer turns any other placeholder into empty text ("Hi , your cart"), so it is refused at import.
+const VALID_PLACEHOLDER = /^(?:missing|(?:profile|event)\.[^.\s][^\s]*)$/;
+const PLACEHOLDER_TOKEN = /\{\{([^{}]*)\}\}/g;
+
+function hasInvalidPlaceholder(body: string): boolean {
+  return [...body.matchAll(PLACEHOLDER_TOKEN)].some(
+    ([, path]) => !VALID_PLACEHOLDER.test((path ?? '').trim())
+  );
+}
+
 type RowOutcome = ImportProblem['code'] | null;
 
 function planRow(
@@ -154,6 +165,9 @@ function planRow(
   if (body.length > MAX_BODY_LENGTH) {
     return 'message_too_long';
   }
+  if (hasInvalidPlaceholder(body)) {
+    return 'invalid_placeholder';
+  }
   let journey = journeys.get(key);
   if (!journey) {
     journey = { name: label, firstSheet: sheet, steps: new Map() };
@@ -180,6 +194,7 @@ const COLUMN_OF_CODE: Partial<Record<ImportProblem['code'], string>> = {
   duplicate_timing: 'Timing',
   empty_message: 'Message (Content)',
   message_too_long: 'Message (Content)',
+  invalid_placeholder: 'Message (Content)',
 };
 
 function problemFor(

@@ -36,6 +36,22 @@ describe('email blocks', () => {
     ]);
   });
 
+  it('flags an email that would compile past 20,000 characters', () => {
+    const paragraph = (text: string): EmailBlock => ({
+      type: 'paragraph',
+      text,
+    });
+    const fits = [paragraph('x'.repeat(5000)), paragraph('x'.repeat(5000))];
+    expect(problems(fits)).toEqual([]);
+    // Escaping makes each & five characters in the body, so five blocks overflow.
+    const escapedBlocks = Array.from({ length: 5 }, () =>
+      paragraph('&'.repeat(5000))
+    );
+    expect(problems(escapedBlocks)).toEqual([
+      { index: null, message: expect.stringContaining('too large') },
+    ]);
+  });
+
   it('problems match the backend limits', () => {
     expect(problems([heading('ok')])).toEqual([]);
     expect(problems([])).toHaveLength(1);

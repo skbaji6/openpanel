@@ -25,7 +25,7 @@ import {
 import { STARTER_RULES } from '../rules/starter-rules';
 import { renderTemplate } from '../template/render';
 import { compileEmailContent, zEmailContent } from '../templates/email-blocks';
-import { pinOrThrow } from '../templates/pin';
+import { definitionBytes, pinOrThrow } from '../templates/pin';
 import type { createTemplateRegistry } from '../templates/registry';
 import { HttpError, json, parseJsonBody, type Route, validate } from './http';
 import { zIdentifier } from './routes-sync';
@@ -55,12 +55,9 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const zBoundedRule = zRuleDefinition
-  .refine(
-    (rule) =>
-      new TextEncoder().encode(JSON.stringify(rule)).length <=
-      MAX_DEFINITION_BYTES,
-    { message: 'definition is too large' }
-  )
+  .refine((rule) => definitionBytes(rule) <= MAX_DEFINITION_BYTES, {
+    message: 'definition is too large',
+  })
   .refine(
     (rule) =>
       rule.name.length <= MAX_NAME_LENGTH &&
@@ -263,8 +260,22 @@ function containsMask(value: unknown): boolean {
   return value === MASK || (Array.isArray(value) && value.includes(MASK));
 }
 
+// Postgres jsonb reorders object keys, so stored and submitted values only compare equal with sorted keys.
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonical).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
 function sameValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  return canonical(left) === canonical(right);
 }
 
 // A secret sent back as the mask keeps its stored value, but only while every public field is unchanged:
@@ -342,7 +353,7 @@ function remainingUnconfirmed(
     if (body.definition.trigger.event !== stored.trigger?.event) {
       confirmed.add('trigger');
     }
-    if (JSON.stringify(body.definition.goal) !== JSON.stringify(stored.goal)) {
+    if (!sameValue(body.definition.goal, stored.goal)) {
       confirmed.add('goal');
     }
   }

@@ -386,6 +386,50 @@ describe('journey lifecycle', () => {
   });
 });
 
+describe('pinned size and goal confirmation', () => {
+  it('start refuses a definition whose pinned form is over the byte cap', async () => {
+    const t = await newTemplate('x'.repeat(20_000));
+    const base = definition({ templateId: t.templateId });
+    const step = base.steps[0];
+    const rule = await createRule({
+      ...base,
+      steps: Array.from({ length: 5 }, (_, i) => ({
+        ...step,
+        delaySeconds: i,
+      })),
+    });
+    const res = await call('POST', `/marketing/rules/${rule.id}/start`, {
+      expectedVersion: rule.version,
+    });
+    expect((await errorOf(res)).slice(0, 2)).toEqual([
+      409,
+      'definition_too_large',
+    ]);
+  });
+
+  it('an unchanged set goal sent in another key order stays unconfirmed', async () => {
+    const goalKeys = { event: 'e', kind: 'set', property: 'p', setKey: 'k' };
+    const rule = await createRule(
+      { ...definition({ body: 'x' }), goal: goalKeys },
+      'draft',
+      ['goal']
+    );
+    const reordered = {
+      ...definition({ body: 'x' }),
+      goal: { setKey: 'k', property: 'p', kind: 'set', event: 'e' },
+    };
+    const res = await call('PATCH', `/marketing/rules/${rule.id}`, {
+      definition: reordered,
+    });
+    expect(res.status).toBe(200);
+    const [row] = await sql.$queryRawUnsafe<{ unconfirmed: string[] }[]>(
+      'SELECT unconfirmed FROM marketing.rules WHERE id = $1::uuid',
+      rule.id
+    );
+    expect(row?.unconfirmed).toEqual(['goal']);
+  });
+});
+
 describe('journey import', () => {
   const csv = (rows: string[]) =>
     Buffer.from(

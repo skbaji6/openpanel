@@ -231,6 +231,28 @@ describe('planImport', () => {
     ]);
   });
 
+  it('reports invalid_placeholder by row and code and does not import the message', () => {
+    const { journeys, problems } = planImport(
+      [
+        sheet('TS', [
+          ['Cart Abandoned', PLATFORM, 'D0 confirmation', 'Hi {{name}}, ok'],
+          ['Cart Abandoned', PLATFORM, 'D1', 'Hi {{ profile.firstName }}'],
+        ]),
+      ],
+      options
+    );
+    expect(problems).toEqual([
+      {
+        sheet: 'TS',
+        row: 2,
+        code: 'invalid_placeholder',
+        column: 'Message (Content)',
+      },
+    ]);
+    expect(JSON.stringify(problems)).not.toContain('name}}');
+    expect(journeys[0]?.definition.steps).toHaveLength(1);
+  });
+
   it('reports definition_too_large', () => {
     const rows: Row[] = Array.from({ length: 20 }, (_, i) => [
       'Huge',

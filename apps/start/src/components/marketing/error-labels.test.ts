@@ -14,6 +14,7 @@ const REQUIRED_CODES = [
   'quota_not_supported',
   'template_not_found',
   'template_disabled',
+  'definition_too_large',
   'template_mapping_missing',
   'template_channel_mismatch',
   'count_preview_required',

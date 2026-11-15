@@ -1,5 +1,6 @@
 import { HttpError } from '../api/http';
 import {
+  MAX_DEFINITION_BYTES,
   type RuleDefinition,
   type Step,
   type StepTemplate,
@@ -151,6 +152,9 @@ export async function pinDefinition(
 
 const PIN_FAILURE_STATUS = 409;
 
+export const definitionBytes = (rule: unknown): number =>
+  new TextEncoder().encode(JSON.stringify(rule)).length;
+
 export async function pinOrThrow(
   registry: TemplateRegistry,
   projectId: string,
@@ -162,6 +166,10 @@ export async function pinOrThrow(
       stepIndex: result.stepIndex,
       variant: result.variant,
     });
+  }
+  // Pinning copies full template content into the definition, so the request-body cap no longer bounds it.
+  if (definitionBytes(result.definition) > MAX_DEFINITION_BYTES) {
+    throw new HttpError(PIN_FAILURE_STATUS, 'definition_too_large');
   }
   return { definition: result.definition, pinned: result.pinned };
 }
