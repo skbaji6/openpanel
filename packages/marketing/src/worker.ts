@@ -9,6 +9,11 @@ import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
 import { purgeTracking } from './tracking/purge';
 import {
+  createReportMatcher,
+  HOLD_RETRY_MS,
+  type ReportMatcher,
+} from './tracking/report-matcher';
+import {
   createTrackingSettingsCache,
   type TrackingSettingsCache,
 } from './tracking/settings';
@@ -30,6 +35,7 @@ export interface WorkerContext {
   redis: Redis;
   sources: SourceResolver;
   trackingSettings: TrackingSettingsCache;
+  reportMatcher: ReportMatcher;
 }
 
 export interface WorkerDeps {
@@ -183,6 +189,11 @@ export async function startWorker(
     const sources = createSourceResolver({ sql, cfg, redis });
     const trackingSettings = createTrackingSettingsCache({ sql });
     deps.onTrackingSettings?.(trackingSettings);
+    const reportMatcher = createReportMatcher({
+      sql,
+      sources,
+      log: (message) => console.warn(LOG_PREFIX, message),
+    });
     const sourceFor = (projectId: string) => sources.forProject(projectId);
     const templates = createTemplateRegistry({ sql, now });
     const campaigns = createCampaignService({
@@ -295,6 +306,13 @@ export async function startWorker(
       )
     );
 
+    // Reports that beat their message's mark are retried until they match or expire.
+    started.push(
+      every(HOLD_RETRY_MS, 'flush held reports', secrets, () =>
+        reportMatcher.flushHeld()
+      )
+    );
+
     // Separate jobs: a persistent failure in one must not stop the other's retention.
     started.push(
       every(PURGE_INTERVAL_MS, 'purge dead tokens', secrets, () =>
@@ -321,6 +339,7 @@ export async function startWorker(
           redis,
           sources,
           trackingSettings,
+          reportMatcher,
         })
       );
     }

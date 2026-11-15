@@ -57,9 +57,12 @@ export function json(data: unknown, status = 200): Response {
 }
 
 // Counts bytes as they arrive, so a body without (or lying about) content-length is cut off too.
-export async function readBodyText(req: Request): Promise<string> {
+export async function readBodyText(
+  req: Request,
+  maxBytes = MAX_BODY_BYTES
+): Promise<string> {
   const declared = Number(req.headers.get('content-length'));
-  if (declared > MAX_BODY_BYTES) {
+  if (declared > maxBytes) {
     throw new HttpError(413, 'payload_too_large');
   }
   if (!req.body) {
@@ -74,7 +77,7 @@ export async function readBodyText(req: Request): Promise<string> {
       break;
     }
     total += value.byteLength;
-    if (total > MAX_BODY_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel();
       throw new HttpError(413, 'payload_too_large');
     }

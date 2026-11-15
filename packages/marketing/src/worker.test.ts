@@ -182,6 +182,7 @@ describe('startWorker', () => {
         'engine',
         'redis',
         'refreshInterest',
+        'reportMatcher',
         'sources',
         'sql',
         'trackingSettings',

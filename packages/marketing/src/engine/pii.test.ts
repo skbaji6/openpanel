@@ -8,7 +8,7 @@ import {
   it,
   spyOn,
 } from 'bun:test';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { getRedisCache } from '@openpanel/redis';
 import { encryptCredential } from '@openpanel/shared/server';
 import { z } from 'zod';
@@ -30,6 +30,7 @@ import { runTestSendTick } from '../campaign/test-sends';
 import { perRecipientBatch } from '../channels/batch';
 import { createPooledEmailAdapter } from '../channels/email';
 import { createFakeFcm } from '../channels/fakes/fcm';
+import { smsReportFor } from '../channels/fakes/msg91-reports';
 import {
   extractPhones,
   SMS_PATH,
@@ -60,6 +61,7 @@ import { resetMarketingTables } from '../db/test-helpers';
 import { redactSecrets } from '../redact';
 import type { RuleDefinition } from '../rules/rule.schema';
 import { createTemplateRegistry } from '../templates/registry';
+import { webhookPath, webhookSecret } from '../tracking/keys';
 import { createEngine } from './engine';
 import { recipientValues, runTick } from './ticker';
 
@@ -926,6 +928,93 @@ describe('personal data from an http audience source', () => {
       } finally {
         await msg91.close();
         await smtp.close();
+      }
+    });
+
+    it('a delivery report for the canary student stores no phone-derived value', async () => {
+      const testClock = createClock();
+      const msg91 = await startFakeMsg91();
+      try {
+        const nowMs = testClock.ms;
+        registerBatchAdapter(
+          createMsg91SmsAdapter({
+            now: nowMs,
+            allowHosts: [new URL(msg91.baseUrl).hostname],
+          })
+        );
+        const source = createFakeSource({ members: [canaryMember('c-sms')] });
+        const deps = dispatchDeps(source, testClock);
+        const smsTemplate = await providerTemplate('sms', testClock.now);
+        await insertRunningCampaign({
+          project: projectOf('sms'),
+          now: testClock.now(),
+          channel: 'sms',
+          recipients: ['c-sms'],
+          template: { templateId: smsTemplate },
+          templateVersion: 1,
+          settings: { ratePerSecond: RATE_PER_SECOND },
+        });
+        await setChannelConfig('sms', {
+          authKey: CANARY_AUTH_KEY,
+          baseUrl: msg91.baseUrl,
+        });
+        await drain(deps, testClock);
+        const [tracked] = await sql.$queryRawUnsafe<{ provider_ref: string }[]>(
+          'SELECT provider_ref FROM marketing.message_tracking WHERE project_id = $1',
+          projectOf('sms')
+        );
+        expect(tracked?.provider_ref).toBeTruthy();
+
+        const project = projectOf('sms');
+        const response = await createServer({
+          cfg: { ...CFG, proxySecret: PROXY_SECRET },
+          sql,
+          redis,
+          sources: deps.sources,
+        }).fetch(
+          new Request(
+            `http://marketing.internal${webhookPath(project, webhookSecret(ENCRYPTION_KEY, project))}`,
+            {
+              method: 'POST',
+              body: JSON.stringify(
+                smsReportFor(tracked?.provider_ref ?? '', [
+                  { phone: CANARY_PHONE, status: '1' },
+                ])
+              ),
+            }
+          )
+        );
+        expect(await response.json()).toEqual({
+          applied: 1,
+          unmatched: 0,
+          ignored: 0,
+        });
+        const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
+          'SELECT status FROM marketing.message_tracking WHERE project_id = $1',
+          project
+        );
+        expect(row?.status).toBe('delivered');
+
+        const lastTen = CANARY_PHONE.slice(-10);
+        const sha = (value: string) =>
+          createHash('sha256').update(value).digest('hex');
+        const derived = [
+          lastTen,
+          sha(lastTen),
+          sha(CANARY_PHONE),
+          createHash('md5').update(lastTen).digest('hex'),
+          Buffer.from(lastTen).toString('base64'),
+        ];
+        const { text } = await scanTables();
+        const haystack = [...text, ...(await scanRedis()), ...logged];
+        expect(
+          haystack.filter((line) =>
+            derived.some((value) => line.includes(value))
+          )
+        ).toEqual([]);
+        expect(await scanEverything()).toEqual({ scanned: true, leaked: [] });
+      } finally {
+        await msg91.close();
       }
     });
   });

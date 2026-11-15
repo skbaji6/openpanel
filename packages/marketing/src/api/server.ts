@@ -9,9 +9,14 @@ import { redactSecrets } from '../redact';
 import { createTemplateRegistry } from '../templates/registry';
 import { createRedirectHandler } from '../tracking/redirect';
 import {
+  createReportMatcher,
+  type ReportMatcher,
+} from '../tracking/report-matcher';
+import {
   createTrackingSettingsCache,
   type TrackingSettingsCache,
 } from '../tracking/settings';
+import { createMsg91WebhookHandler } from '../tracking/webhook';
 import type { WorkerContext } from '../worker';
 import {
   authenticateDashboard,
@@ -49,6 +54,8 @@ export interface ServerDeps {
   sourceFetch?: typeof fetch;
   // Shared with the worker so a saved public url applies to its next unsubscribe link at once.
   trackingSettings?: TrackingSettingsCache;
+  // Shared with the worker, whose timer retries the reports that arrived before their messages were marked.
+  reportMatcher?: ReportMatcher;
   // Tests shorten it so a lost lock shows within a freeze.
   freezeLockTtlMs?: number;
 }
@@ -114,6 +121,35 @@ export function createServer(deps: ServerDeps) {
         ),
     },
   });
+
+  const reportMatcher =
+    deps.reportMatcher ??
+    (deps.sources
+      ? createReportMatcher({ sql, sources: deps.sources })
+      : undefined);
+  const msg91Webhook =
+    reportMatcher &&
+    createMsg91WebhookHandler({
+      matcher: reportMatcher,
+      sql,
+      encryptionKey: cfg.encryptionKey,
+      failedAuthLimiter: createRateLimiter({
+        limit: RATE_LIMIT,
+        windowMs: RATE_WINDOW_MS,
+        now: deps.now,
+      }),
+      now: () => new Date((deps.now ?? Date.now)()),
+      // Database errors can quote bound values, so only the error type is logged.
+      log: {
+        warn: (message) => console.warn(LOG_PREFIX, message),
+        error: (message, error) =>
+          console.error(
+            LOG_PREFIX,
+            message,
+            error instanceof Error ? error.name : 'unknown'
+          ),
+      },
+    });
 
   // The rule is already saved; a failed refresh is caught up by the worker's periodic refresh.
   async function onRulesChanged() {
@@ -210,6 +246,23 @@ export function createServer(deps: ServerDeps) {
       auth: 'public',
       handle: (ctx) => redirect(ctx.params[0] ?? '', ctx.ip),
     },
+    ...(msg91Webhook
+      ? [
+          {
+            method: 'POST',
+            pattern:
+              /^\/marketing\/webhooks\/msg91\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_-]{43})$/,
+            auth: 'public',
+            handle: (ctx) =>
+              msg91Webhook(
+                ctx.params[0] ?? '',
+                ctx.params[1] ?? '',
+                ctx.req,
+                ctx.ip
+              ),
+          } satisfies Route,
+        ]
+      : []),
     {
       method: 'GET',
       pattern: /^\/marketing\/unsubscribe$/,
@@ -297,6 +350,7 @@ export function startHttpServer(context: WorkerContext) {
     redis: context.redis,
     sources: context.sources,
     trackingSettings: context.trackingSettings,
+    reportMatcher: context.reportMatcher,
   });
   const server = Bun.serve({
     port: context.cfg.port,
