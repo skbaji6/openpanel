@@ -421,6 +421,7 @@ async function throughput(
   const engine = createEngine({ sql });
   let kept = 0;
   const handle = createBatchHandler({
+    conversions: { record: () => Promise.resolve(0) },
     engine: {
       handleEvents: (events) => {
         kept += events.length;

@@ -28,6 +28,7 @@ const MIN_HEARTBEATS_DURING_HANDLER = 3;
 
 process.env.KAFKAJS_NO_PARTITIONER_WARNING = '1';
 
+const noConversions = { record: () => Promise.resolve(0) };
 const logger = { warn: mock(() => undefined), error: mock(() => undefined) };
 
 function payload(
@@ -108,6 +109,7 @@ describe('batch handler', () => {
   it('handler drops a malformed message without throwing', async () => {
     const engine = fakeEngine();
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       logger,
@@ -123,6 +125,7 @@ describe('batch handler', () => {
   it('handler ignores an event whose name is not in the interest set and whose profile has no active enrollment', async () => {
     const engine = fakeEngine();
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       logger,
@@ -134,6 +137,7 @@ describe('batch handler', () => {
   it('handler passes an event for an enrolled profile even if its name is not a rule event (inactivity activity)', async () => {
     const engine = fakeEngine();
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       logger,
@@ -147,6 +151,7 @@ describe('batch handler', () => {
   it('handler calls engine.handleEvents once per batch with every kept message', async () => {
     const engine = fakeEngine();
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       logger,
@@ -176,6 +181,7 @@ describe('batch handler', () => {
       return Promise.resolve();
     });
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: { ...fakeInterest, add },
     });
@@ -209,7 +215,11 @@ describe('batch handler', () => {
     querySpy.mockClear();
     interestNames.mockClear();
 
-    const handle = createBatchHandler({ engine, interest });
+    const handle = createBatchHandler({
+      conversions: noConversions,
+      engine,
+      interest,
+    });
     await handle([payload('page_view', 'stranger')]);
     expect(engine.handleEvents).not.toHaveBeenCalled();
     expect(interestNames).not.toHaveBeenCalled();
@@ -223,7 +233,12 @@ describe('batch handler', () => {
     const engine = createEngine({ sql });
     const interest = createMemoryInterestSet({ engine, sql });
     await interest.refresh();
-    const handle = createBatchHandler({ engine, interest, logger });
+    const handle = createBatchHandler({
+      conversions: noConversions,
+      engine,
+      interest,
+      logger,
+    });
     await handle([payload('page_view', 'stranger')]);
     const rows = await sql.$queryRawUnsafe<{ name: string }[]>(
       `SELECT name FROM marketing.events WHERE project_id = $1 AND profile_id = 'stranger'`,
@@ -238,9 +253,63 @@ describe('batch handler', () => {
       ...fakeInterest,
       hasMany: (queries) => Promise.resolve(queries.map(() => true)),
     };
-    const handle = createBatchHandler({ engine, interest: keepAll, logger });
+    const handle = createBatchHandler({
+      conversions: noConversions,
+      engine,
+      interest: keepAll,
+      logger,
+    });
     await handle([payload('page_view', undefined)]);
     expect(engine.handleEvents).not.toHaveBeenCalled();
+  });
+
+  it('a conversion event for a profile outside the interest set is recorded and then dropped by the filter', async () => {
+    const engine = fakeEngine();
+    const record = mock((_events: NormalizedEvent[]) => Promise.resolve(0));
+    const handle = createBatchHandler({
+      conversions: { record },
+      engine,
+      interest: fakeInterest,
+      logger,
+    });
+    await handle([payload('app_open', 'stranger')]);
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]?.[0].map((event) => event.name)).toEqual([
+      'app_open',
+    ]);
+    expect(engine.handleEvents).not.toHaveBeenCalled();
+  });
+
+  it('a transient conversion error retries the batch', async () => {
+    let calls = 0;
+    const record = mock(() => {
+      calls++;
+      return calls === 1 ? Promise.reject(deadlock()) : Promise.resolve(0);
+    });
+    const handle = createBatchHandler({
+      conversions: { record },
+      engine: fakeEngine(),
+      interest: fakeInterest,
+      retryDelaysMs: FAST_RETRIES,
+      logger,
+    });
+    await handle([payload('app_open', 'stranger')]);
+    expect(record).toHaveBeenCalledTimes(2);
+  });
+
+  it('a non-transient conversion error rejects so the batch replays', async () => {
+    const record = mock(() => Promise.reject(new Error('boom')));
+    const handle = createBatchHandler({
+      conversions: { record },
+      engine: fakeEngine(),
+      interest: fakeInterest,
+      retryDelaysMs: FAST_RETRIES,
+      logger,
+    });
+    await expect(handle([payload('app_open', 'stranger')])).rejects.toThrow(
+      'boom'
+    );
+    expect(record).toHaveBeenCalledTimes(1);
   });
 
   it('a deadlock is retried and the batch then succeeds', async () => {
@@ -250,6 +319,7 @@ describe('batch handler', () => {
       return calls === 1 ? Promise.reject(deadlock()) : Promise.resolve();
     });
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       retryDelaysMs: FAST_RETRIES,
@@ -266,6 +336,7 @@ describe('batch handler', () => {
       )
     );
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       retryDelaysMs: FAST_RETRIES,
@@ -282,6 +353,7 @@ describe('batch handler', () => {
       Promise.reject(new Error('relation does not exist'))
     );
     const handle = createBatchHandler({
+      conversions: noConversions,
       engine,
       interest: fakeInterest,
       retryDelaysMs: FAST_RETRIES,
@@ -325,7 +397,12 @@ describe('eachBatch', () => {
         })
     );
     const eachBatch = createEachBatch(
-      createBatchHandler({ engine, interest: fakeInterest, logger })
+      createBatchHandler({
+        conversions: noConversions,
+        engine,
+        interest: fakeInterest,
+        logger,
+      })
     );
     const ok = fakeBatch();
     const running = eachBatch(ok.payloadArg);
@@ -342,6 +419,7 @@ describe('eachBatch', () => {
 
     const failing = createEachBatch(
       createBatchHandler({
+        conversions: noConversions,
         engine: fakeEngine(() => Promise.reject(new Error('db down'))),
         interest: fakeInterest,
       })
@@ -402,7 +480,7 @@ describe('real broker', () => {
       await interest.refresh();
       const consumer = await startConsumer(
         kafkaConfig,
-        createBatchHandler({ engine, interest })
+        createBatchHandler({ conversions: noConversions, engine, interest })
       );
       try {
         const deadline = Date.now() + BROKER_WAIT_MS;

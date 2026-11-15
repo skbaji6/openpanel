@@ -11,6 +11,7 @@ import type { KafkaConfig } from '../config';
 import type { createEngine } from '../engine/engine';
 import { type NormalizedEvent, normalizeEvent } from '../events/normalize';
 import { redactSecrets } from '../redact';
+import type { ConversionRecorder } from '../tracking/conversions';
 import type { InterestSet, ProfileKey } from './interest';
 
 const LOG_PREFIX = 'marketing consumer:';
@@ -93,6 +94,7 @@ export function createBatchHandler(
   deps: ConsumerLogDeps & {
     engine: Pick<ReturnType<typeof createEngine>, 'handleEvents'>;
     interest: InterestSet;
+    conversions: Pick<ConversionRecorder, 'record'>;
     retryDelaysMs?: number[];
   }
 ): HandleBatch {
@@ -111,10 +113,13 @@ export function createBatchHandler(
     }
   }
 
-  async function write(events: NormalizedEvent[]): Promise<void> {
+  async function withTransientRetry(
+    run: () => Promise<unknown>
+  ): Promise<void> {
     for (const delay of [...retryDelaysMs, null]) {
       try {
-        return await deps.engine.handleEvents(events);
+        await run();
+        return;
       } catch (error) {
         if (delay === null || !isTransient(error)) {
           throw error;
@@ -130,12 +135,14 @@ export function createBatchHandler(
     const candidates = values
       .map((value) => normalizeEvent(parse(value)))
       .filter((event): event is NormalizedEvent => event !== null);
+    // Before the interest filter: an app open is rarely from a profile the rules know. Idempotent, so a replay is safe.
+    await withTransientRetry(() => deps.conversions.record(candidates));
     const interesting = await deps.interest.hasMany(candidates);
     const kept = candidates.filter((_event, index) => interesting[index]);
     if (kept.length === 0) {
       return;
     }
-    await write(kept);
+    await withTransientRetry(() => deps.engine.handleEvents(kept));
     const profiles: ProfileKey[] = kept.map((event) => ({
       projectId: event.projectId,
       profileId: event.profileId,

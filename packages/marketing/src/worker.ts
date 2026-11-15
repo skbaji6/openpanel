@@ -7,6 +7,7 @@ import type { createEngine, Sql } from './engine/engine';
 import { purgeSendHistory } from './engine/ledger';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
+import { createConversionRecorder } from './tracking/conversions';
 import { purgeTracking } from './tracking/purge';
 import {
   createReportMatcher,
@@ -227,7 +228,15 @@ export async function startWorker(
     started.push(
       await startConsumer(
         cfg.kafka,
-        createBatchHandler({ engine, interest, secrets }),
+        createBatchHandler({
+          engine,
+          interest,
+          secrets,
+          conversions: createConversionRecorder({
+            sql,
+            now: () => new Date(),
+          }),
+        }),
         {
           secrets,
           onFatal: () => {
