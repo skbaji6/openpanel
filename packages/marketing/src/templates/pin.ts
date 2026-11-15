@@ -136,3 +136,20 @@ export async function pinDefinition(
   }
   return { ok: true, definition: { ...definition, steps }, pinned };
 }
+
+const PIN_FAILURE_STATUS = 409;
+
+export async function pinOrThrow(
+  registry: TemplateRegistry,
+  projectId: string,
+  definition: RuleDefinition
+): Promise<{ definition: RuleDefinition; pinned: PinnedRef[] }> {
+  const result = await pinDefinition(registry, projectId, definition);
+  if (!result.ok) {
+    throw new HttpError(PIN_FAILURE_STATUS, result.code, undefined, {
+      stepIndex: result.stepIndex,
+      variant: result.variant,
+    });
+  }
+  return { definition: result.definition, pinned: result.pinned };
+}

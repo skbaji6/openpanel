@@ -21,6 +21,7 @@ import { audienceRoutes } from './routes-audiences';
 import { campaignRoutes } from './routes-campaigns';
 import { channelSettingsRoutes } from './routes-channel-settings';
 import { dashboardRoutes } from './routes-dashboard';
+import { routesJourneys } from './routes-journeys';
 import { syncRoutes } from './routes-sync';
 import { templateRoutes } from './routes-templates';
 import { createUnsubscribeHandlers } from './unsubscribe';
@@ -120,7 +121,12 @@ export function createServer(deps: ServerDeps) {
       },
     },
     ...syncRoutes(sql),
-    ...dashboardRoutes({ cfg, sql, onRulesChanged }),
+    ...dashboardRoutes({ cfg, sql, onRulesChanged, registry: templates }),
+    ...routesJourneys({
+      sql,
+      registry: templates,
+      rulesChanged: onRulesChanged,
+    }),
     ...channelSettingsRoutes(sql),
     ...templateRoutes(templates),
     ...(deps.redis && sources

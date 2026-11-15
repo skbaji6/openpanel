@@ -24,6 +24,8 @@ import {
 } from '../rules/rule.schema';
 import { STARTER_RULES } from '../rules/starter-rules';
 import { renderTemplate } from '../template/render';
+import { pinOrThrow } from '../templates/pin';
+import type { createTemplateRegistry } from '../templates/registry';
 import { HttpError, json, parseJsonBody, type Route, validate } from './http';
 import { zIdentifier } from './routes-sync';
 
@@ -74,15 +76,20 @@ const zCreateRule = z.strictObject({
   definition: zBoundedRule,
   status: zStatus.default('draft'),
 });
+const zJourneyField = z.enum(['trigger', 'goal']);
 const zUpdateRule = z
   .strictObject({
     definition: zBoundedRule.optional(),
     status: zStatus.optional(),
+    confirmed: z.array(zJourneyField).optional(),
   })
   .refine(
-    (body) => body.definition !== undefined || body.status !== undefined,
+    (body) =>
+      body.definition !== undefined ||
+      body.status !== undefined ||
+      body.confirmed !== undefined,
     {
-      message: 'definition or status is required',
+      message: 'definition, status or confirmed is required',
     }
   );
 
@@ -130,10 +137,10 @@ const zPreview = z.strictObject({
   allowedEventProps: z.array(z.string()).max(MAX_PROPERTY_NAMES).optional(),
 });
 
-const RULE_COLUMNS =
+export const RULE_COLUMNS =
   'id::text, name, status, definition, version, created_at, updated_at, journey_key, unconfirmed';
 
-interface RuleRow {
+export interface RuleRow {
   id: string;
   name: string;
   status: string;
@@ -145,7 +152,7 @@ interface RuleRow {
   unconfirmed: string[];
 }
 
-function toRule(row: RuleRow) {
+export function toRule(row: RuleRow) {
   return {
     id: row.id,
     name: row.name,
@@ -209,7 +216,7 @@ interface ResultRow {
   failed: number;
 }
 
-function ruleIdParam(params: string[]): string {
+export function ruleIdParam(params: string[]): string {
   const id = params[0] ?? '';
   if (!UUID_PATTERN.test(id)) {
     throw new HttpError(404, 'not_found');
@@ -307,10 +314,32 @@ export interface DashboardDeps {
   cfg: MarketingConfig;
   sql: Sql;
   onRulesChanged: () => Promise<void>;
+  registry: ReturnType<typeof createTemplateRegistry>;
+}
+
+// Trigger and goal stay unconfirmed until an admin confirms them or edits them.
+function remainingUnconfirmed(
+  current: RuleRow,
+  body: z.infer<typeof zUpdateRule>
+): string[] {
+  const confirmed = new Set<string>(body.confirmed);
+  const stored = current.definition as {
+    trigger?: { event?: string };
+    goal?: unknown;
+  };
+  if (body.definition) {
+    if (body.definition.trigger.event !== stored.trigger?.event) {
+      confirmed.add('trigger');
+    }
+    if (JSON.stringify(body.definition.goal) !== JSON.stringify(stored.goal)) {
+      confirmed.add('goal');
+    }
+  }
+  return current.unconfirmed.filter((field) => !confirmed.has(field));
 }
 
 export function dashboardRoutes(deps: DashboardDeps): Route[] {
-  const { cfg, sql } = deps;
+  const { cfg, sql, registry } = deps;
 
   async function cancelChunk(
     tx: Queryable,
@@ -411,6 +440,11 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
       auth: 'dashboard',
       async handle(ctx) {
         const body = await parseJsonBody(ctx.req, zCreateRule);
+        const stored =
+          body.status === 'active'
+            ? (await pinOrThrow(registry, ctx.projectId, body.definition))
+                .definition
+            : body.definition;
         const [row] = await sql.$queryRawUnsafe<RuleRow[]>(
           `INSERT INTO marketing.rules (id, project_id, name, status, definition)
            VALUES ($1::uuid, $2, $3, $4, $5::jsonb) RETURNING ${RULE_COLUMNS}`,
@@ -418,7 +452,7 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
           ctx.projectId,
           body.definition.name,
           body.status,
-          JSON.stringify(body.definition)
+          JSON.stringify(stored)
         );
         await rulesChanged();
         return json(row ? toRule(row) : null, 201);
@@ -431,32 +465,57 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
       async handle(ctx) {
         const ruleId = ruleIdParam(ctx.params);
         const body = await parseJsonBody(ctx.req, zUpdateRule);
-        const definition = body.definition
-          ? JSON.stringify(body.definition)
-          : null;
-        // Editing bumps the version; running enrollments keep their rule_snapshot.
-        const update = (tx: Queryable) =>
-          tx
-            .$queryRawUnsafe<RuleRow[]>(
-              `UPDATE marketing.rules SET
-                 definition = COALESCE($3::jsonb, definition),
-                 name = COALESCE($4, name),
-                 version = version + CASE WHEN $3::jsonb IS NULL THEN 0 ELSE 1 END,
-                 status = COALESCE($5, status),
-                 updated_at = now()
-               WHERE id = $1::uuid AND project_id = $2
-               RETURNING ${RULE_COLUMNS}`,
-              ruleId,
-              ctx.projectId,
-              definition,
-              body.definition?.name ?? null,
-              body.status ?? null
-            )
-            .then(([row]) => row);
+        // The row lock serializes this with /start and other edits, so a stored active definition is always pinned.
+        const update = async (tx: Queryable) => {
+          const [current] = await tx.$queryRawUnsafe<RuleRow[]>(
+            `SELECT ${RULE_COLUMNS} FROM marketing.rules
+             WHERE id = $1::uuid AND project_id = $2 FOR UPDATE`,
+            ruleId,
+            ctx.projectId
+          );
+          if (!current) {
+            return undefined;
+          }
+          if (current.status === 'draft' && body.status === 'active') {
+            throw new HttpError(409, 'use_start');
+          }
+          const nextStatus = body.status ?? current.status;
+          let definition = body.definition ?? null;
+          if (
+            nextStatus === 'active' &&
+            (body.definition || current.status !== 'active')
+          ) {
+            definition = (
+              await pinOrThrow(
+                registry,
+                ctx.projectId,
+                body.definition ?? zRuleDefinition.parse(current.definition)
+              )
+            ).definition;
+          }
+          const [row] = await tx.$queryRawUnsafe<RuleRow[]>(
+            `UPDATE marketing.rules SET
+               definition = COALESCE($3::jsonb, definition),
+               name = COALESCE($4, name),
+               version = version + CASE WHEN $3::jsonb IS NULL THEN 0 ELSE 1 END,
+               status = COALESCE($5, status),
+               unconfirmed = $6::text[],
+               updated_at = now()
+             WHERE id = $1::uuid AND project_id = $2
+             RETURNING ${RULE_COLUMNS}`,
+            ruleId,
+            ctx.projectId,
+            definition ? JSON.stringify(definition) : null,
+            body.definition?.name ?? null,
+            body.status ?? null,
+            remainingUnconfirmed(current, body)
+          );
+          return row;
+        };
         const row =
           body.status === 'paused'
             ? await stopRule(ctx.projectId, ruleId, update)
-            : await update(sql);
+            : await sql.$transaction(update);
         if (!row) {
           throw new HttpError(404, 'not_found');
         }

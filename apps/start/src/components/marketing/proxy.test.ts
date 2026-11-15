@@ -347,6 +347,7 @@ describe('marketing proxy', () => {
   });
 
   const MEMBER_ROUTES: [string, string][] = [
+    ['GET', 'rules/r1/skips'],
     ['GET', 'audience/schema'],
     ['GET', 'audience/dimensions/plan/values'],
     ['POST', 'audience/resolve'],
@@ -367,6 +368,7 @@ describe('marketing proxy', () => {
     ['POST', 'campaigns/c1/count-preview'],
   ];
   const ADMIN_ROUTES: [string, string][] = [
+    ['POST', 'rules/r1/start'],
     ['DELETE', 'audiences/a1'],
     ['DELETE', 'campaigns/c1'],
     ...[
@@ -404,6 +406,22 @@ describe('marketing proxy', () => {
       expect((await proxy.handle(send(path, method))).status).toBe(200);
     }
     expect(marketingCalls()).toHaveLength(ADMIN_ROUTES.length);
+  });
+
+  test('start needs admin', async () => {
+    const member = setup({ role: 'member' });
+    const denied = await member.proxy.handle(send('rules/r1/start', 'POST'));
+    expect(denied.status).toBe(403);
+    const admin = setup({ role: 'admin' });
+    const allowed = await admin.proxy.handle(send('rules/r1/start', 'POST'));
+    expect(allowed.status).toBe(200);
+  });
+
+  test('skips allows a member', async () => {
+    const { proxy } = setup({ role: 'member' });
+    expect((await proxy.handle(send('rules/r1/skips', 'GET'))).status).toBe(
+      200
+    );
   });
 
   test('a no-access user is denied on every new route, as on the existing ones', async () => {

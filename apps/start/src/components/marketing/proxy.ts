@@ -21,6 +21,8 @@ const ALLOWED_ROUTES: {
 }[] = [
   { pattern: /^rules$/, methods: { GET: 'member', POST: 'admin' } },
   { pattern: /^rules\/[^/]+$/, methods: { PATCH: 'admin', DELETE: 'admin' } },
+  { pattern: /^rules\/[^/]+\/start$/, methods: { POST: 'admin' } },
+  { pattern: /^rules\/[^/]+\/skips$/, methods: { GET: 'member' } },
   { pattern: /^starter-rules$/, methods: { GET: 'member' } },
   {
     pattern: /^channels\/(email|webhook|push|sms|whatsapp)$/,
