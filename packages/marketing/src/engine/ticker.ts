@@ -25,6 +25,7 @@ import { chooseMessage } from '../journeys/variants';
 import { redactSecrets } from '../redact';
 import type { Step, StepTemplate } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
+import { applyTracking, planTracking } from '../tracking/links';
 import type { TrackingSettingsCache } from '../tracking/settings';
 import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
 import {
@@ -1124,7 +1125,7 @@ async function deliver(
     return await step.finish('skipped', 'invalid_channel_config');
   }
 
-  await deps.trackingSettings?.get(context.project_id);
+  const trackingSettings = await deps.trackingSettings?.get(context.project_id);
   const reserved = await step.reserve({
     projectId: context.project_id,
     profileId: context.profile_id,
@@ -1135,12 +1136,29 @@ async function deliver(
     return reserved;
   }
 
-  const message = render(choice.template, stepDef.channel, context, goal, {
+  const rendered = render(choice.template, stepDef.channel, context, goal, {
     projectId: context.project_id,
     enrollmentId: claim.enrollment_id,
     ruleId: context.rule_id,
     stepIndex: claim.step_index,
   });
+  // After the reservation, so both helpers swallow their errors: a failure leaves the link as written.
+  const tracking = await planTracking(deps.sql, {
+    settings: trackingSettings,
+    encryptionKey: deps.cfg.encryptionKey,
+    projectId: context.project_id,
+    channel: stepDef.channel,
+    template: () => choice.template,
+  });
+  const message = applyTracking(
+    tracking,
+    {
+      projectId: context.project_id,
+      sourceRef: ledgerRef.step(claim.enrollment_id, claim.step_index),
+      now: deps.now(),
+    },
+    rendered
+  );
   const leased = await step.extendLease(deps.now());
   if (leased !== true) {
     return leased;

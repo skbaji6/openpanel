@@ -35,7 +35,7 @@ import type { MarketingConfig } from '../config';
 import { filterLiveTokens, recordDeadTokens } from '../engine/dead-tokens';
 import type { Sql } from '../engine/engine';
 import { inQuietHours, nextAllowedTime } from '../engine/gates';
-import { type EffectiveCap, effectiveCap } from '../engine/ledger';
+import { type EffectiveCap, effectiveCap, ledgerRef } from '../engine/ledger';
 import {
   entryValues,
   loadChannelConfig,
@@ -51,6 +51,11 @@ import type {
   createTemplateRegistry,
   TemplateVersion,
 } from '../templates/registry';
+import {
+  applyTracking,
+  planTracking,
+  type TrackingPlan,
+} from '../tracking/links';
 import type { TrackingSettingsCache } from '../tracking/settings';
 import {
   zFrequencyCap,
@@ -201,6 +206,8 @@ export interface Prepared {
   version: TemplateVersion | null;
   cap: EffectiveCap | null;
   limit: number;
+  // Absent for test sends, which are never rewritten.
+  tracking?: TrackingPlan | null;
 }
 
 export interface Claim {
@@ -329,7 +336,7 @@ async function prepare(
 ): Promise<Prepared | null> {
   const { id, project_id: projectId, channel } = campaign;
   const { settings } = await getChannelSettings(deps.sql, projectId, channel);
-  await deps.trackingSettings?.get(projectId);
+  const trackingSettings = await deps.trackingSettings?.get(projectId);
   const backoffUntil = await deps.backoff.until(projectId, channel);
   if (backoffUntil !== null) {
     await deps.sql.$executeRawUnsafe(
@@ -398,12 +405,20 @@ async function prepare(
     await deps.campaigns.failCampaign(id, 'invalid_frequency_cap');
     return null;
   }
+  const tracking = await planTracking(deps.sql, {
+    settings: trackingSettings,
+    encryptionKey: deps.cfg.encryptionKey,
+    projectId,
+    channel,
+    template: () => trackableTemplate(campaign, version),
+  });
   return {
     ...loaded,
     settings,
     source,
     version,
     cap,
+    tracking,
     limit: Math.min(claimSize(settings.ratePerSecond), quota, MAX_LOOKUP_IDS),
   };
 }
@@ -490,6 +505,22 @@ function inlineContent(campaign: DueCampaign, version: TemplateVersion | null) {
   return campaign.channel === 'push'
     ? zPushTemplate.parse(campaign.template)
     : zInlineTemplate.parse(campaign.template);
+}
+
+// The links are read from the template before personalisation, so no profile value can reach tracked_links.
+function trackableTemplate(
+  campaign: DueCampaign,
+  version: TemplateVersion | null
+): { body: string; text?: string; link?: string } {
+  if (version && campaign.channel === 'email') {
+    const email = compileEmailContent(zEmailContent.parse(version.content));
+    return { body: email.body, text: email.text };
+  }
+  const template = inlineContent(campaign, version);
+  const link = 'link' in template ? template.link : undefined;
+  return typeof link === 'string'
+    ? { body: template.body, link }
+    : { body: template.body };
 }
 
 function render(
@@ -618,6 +649,18 @@ export async function sortEntries(
       sorted.failed.push({ profileId, reason: rendered.reason });
       continue;
     }
+    const message =
+      'kind' in rendered.message
+        ? rendered.message
+        : applyTracking(
+            prepared.tracking,
+            {
+              projectId,
+              sourceRef: ledgerRef.campaign(campaign.id, profileId),
+              now: deps.now(),
+            },
+            rendered.message
+          );
     sorted.items.push({
       profileId,
       to: {
@@ -627,7 +670,7 @@ export async function sortEntries(
         deviceTokens,
         attributes: traits,
       },
-      message: rendered.message,
+      message,
       idempotencyKey: `${campaign.id}:${profileId}`,
       unsubscribeUrl: deps.renderUnsubscribeUrl(projectId, profileId, channel),
     });

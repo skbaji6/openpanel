@@ -50,6 +50,9 @@ import {
   createTemplateRegistry,
   type TemplateInput,
 } from '../templates/registry';
+import { linkKey } from '../tracking/keys';
+import { DEFAULT_TRACKING_SETTINGS } from '../tracking/settings';
+import { openLinkToken } from '../tracking/token';
 import {
   type DispatchDeps,
   runDispatchCycle,
@@ -503,6 +506,64 @@ describe('runDispatchCycle', () => {
     expect(state.sent).toBe(1200);
     expect(state.queued).toBe(1200);
     expect(await statuses(id)).toEqual({ sent: 1200 });
+  });
+
+  it('a push campaign with campaignUrl set sends data.link as a redirect whose token opens to campaign:<id>:<profile>', async () => {
+    const members = pushMembers(2);
+    const sent = fakeChannel('push');
+    const id = await setup({
+      channel: 'push',
+      members,
+      template: { body: 'Hello', link: 'https://shop.test/offer?a=1' },
+    });
+    const trackingSettings = {
+      get: async () => ({
+        ...DEFAULT_TRACKING_SETTINGS,
+        campaignUrl: 'https://c.test',
+      }),
+    };
+
+    await runUntilIdle(
+      depsFor(createFakeSource({ members }), { trackingSettings })
+    );
+
+    expect(sent).toHaveLength(2);
+    for (const delivery of sent) {
+      const link = delivery.message.data?.link ?? '';
+      expect(link.startsWith('https://c.test/marketing/r/')).toBe(true);
+      const opened = openLinkToken(
+        (projectId) => linkKey(ENCRYPTION_KEY, projectId),
+        link.slice('https://c.test/marketing/r/'.length),
+        now
+      );
+      expect(opened.ok && opened.projectId).toBe(project);
+      expect(opened.ok && opened.target.sourceRef).toBe(
+        `campaign:${id}:${delivery.to.profileId}`
+      );
+    }
+    const [row] = await sql.$queryRawUnsafe<{ url: string }[]>(
+      'SELECT url FROM marketing.tracked_links WHERE project_id = $1',
+      project
+    );
+    expect(row?.url).toBe('https://shop.test/offer?a=1');
+  });
+
+  it('without campaignUrl the link is unchanged', async () => {
+    const members = pushMembers(1);
+    const sent = fakeChannel('push');
+    await setup({
+      channel: 'push',
+      members,
+      template: { body: 'Hello', link: 'https://shop.test/offer' },
+    });
+
+    await runUntilIdle(
+      depsFor(createFakeSource({ members }), {
+        trackingSettings: { get: async () => DEFAULT_TRACKING_SETTINGS },
+      })
+    );
+
+    expect(sent[0]?.message.data?.link).toBe('https://shop.test/offer');
   });
 
   it('a push campaign sends the pinned template version after a later edit', async () => {

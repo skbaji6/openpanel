@@ -27,6 +27,9 @@ import { sql } from '../db/client';
 import { migrate } from '../db/migrate';
 import { resetMarketingTables } from '../db/test-helpers';
 import type { RuleDefinition } from '../rules/rule.schema';
+import { linkKey } from '../tracking/keys';
+import { DEFAULT_TRACKING_SETTINGS } from '../tracking/settings';
+import { openLinkToken } from '../tracking/token';
 import { createEngine, lockProfiles } from './engine';
 import {
   capLockKey,
@@ -469,6 +472,51 @@ describe('runTick', () => {
     expect(await tick()).toEqual(ZERO);
     expect((await steps(enrollmentId))[0]?.status).toBe('pending');
     expect(calls).toHaveLength(0);
+  });
+
+  it("an email journey step's button link is rewritten and the plain-text url too", async () => {
+    const url = 'https://shop.test/offer?a=1&b=2';
+    const definition = rule({
+      steps: [
+        {
+          delaySeconds: HOUR,
+          channel: 'email',
+          template: {
+            body: '<a href="https://shop.test/offer?a=1&amp;b=2">Go</a>',
+            text: 'Go: https://shop.test/offer?a=1&b=2',
+          },
+        },
+      ],
+    });
+    const { enrollmentId } = await enrollOne(definition);
+    const trackingSettings = {
+      get: async () => ({
+        ...DEFAULT_TRACKING_SETTINGS,
+        campaignUrl: 'https://c.test',
+      }),
+    };
+
+    expect(await tick(CFG, { trackingSettings })).toEqual({ ...ZERO, sent: 1 });
+
+    const [call] = calls;
+    const prefix = 'https://c.test/marketing/r/';
+    const bodyLink = call?.msg.body.match(/href="([^"]+)"/)?.[1] ?? '';
+    const textLink = call?.msg.text?.replace('Go: ', '') ?? '';
+    expect(bodyLink.startsWith(prefix)).toBe(true);
+    expect(textLink.startsWith(prefix)).toBe(true);
+    const opened = openLinkToken(
+      (projectId) => linkKey(ENCRYPTION_KEY, projectId),
+      bodyLink.slice(prefix.length),
+      clock
+    );
+    expect(opened.ok && opened.target.sourceRef).toBe(
+      ledgerRef.step(enrollmentId, 0)
+    );
+    const [row] = await sql.$queryRawUnsafe<{ url: string }[]>(
+      'SELECT url FROM marketing.tracked_links WHERE project_id = $1',
+      PROJECT
+    );
+    expect(row?.url).toBe(url);
   });
 
   it('step due inside the grace window is not claimed; after it is', async () => {
