@@ -518,7 +518,7 @@ No phone, email, device token or trait value is stored in tracking tables. Phone
 ### Upgrade notes
 
 - No new environment variable.
-- Migration `0019` runs at startup and backfills up to 400 days of sends; on a large install it may take minutes.
+- Migration `0019` only creates the tracking tables and triggers. Sends of the last 400 days made before it are backfilled in the background after the worker starts, in small chunks; reports for old sends fill in as it runs, and it resumes on the next start if interrupted.
 - New public paths on the public origin: `/marketing/r/*` and `/marketing/webhooks/msg91/*`.
 - Changing `ENCRYPTION_KEY` invalidates every tracked link and the webhook URL.
 - No `openpanel doctor` check is added (fork discipline forbids editing `self-hosting/cli`). This is a known gap.

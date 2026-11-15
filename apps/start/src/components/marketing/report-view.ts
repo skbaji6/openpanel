@@ -53,6 +53,17 @@ export function funnelSteps(funnel: Funnel, notReported: string[]) {
   });
 }
 
+// A journey mixes channels: a milestone is blank only if no step reports it, partial if some steps omit it.
+export function journeyNotReported(steps: { notReported: string[] }[]) {
+  const omitted = (key: string) =>
+    steps.filter((step) => step.notReported.includes(key)).length;
+  const keys = FUNNEL_KEYS.filter((key) => omitted(key) > 0);
+  return {
+    all: keys.filter((key) => omitted(key) === steps.length),
+    some: keys.filter((key) => omitted(key) < steps.length),
+  };
+}
+
 function nextDay(day: string): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + MS_PER_DAY)
     .toISOString()

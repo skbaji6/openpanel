@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { backfillTracking } from '../tracking/backfill';
 import { sql } from './client';
 import { migrate, splitStatements } from './migrate';
 import { resetMarketingTables } from './test-helpers';
@@ -150,7 +151,6 @@ describe('marketing migrations under concurrency', () => {
 });
 
 describe('migration 0019 message tracking', () => {
-  const FILE = '0019_message_tracking.sql';
   const CAMPAIGN_ID = '00000000-0000-0000-0000-0000000000c1';
   const ENROLLMENT_ID = '00000000-0000-0000-0000-0000000000e1';
   const OLD_CAMPAIGN_ID = '00000000-0000-0000-0000-0000000000c2';
@@ -163,15 +163,7 @@ describe('migration 0019 message tracking', () => {
     return rows.map((row) => row.source_ref);
   }
 
-  async function reapply(): Promise<string[]> {
-    await sql.$executeRawUnsafe(
-      'DELETE FROM marketing.schema_migrations WHERE name = $1',
-      FILE
-    );
-    return await migrate();
-  }
-
-  it('0019 backfills a sent recipient and a sent step and is idempotent on a second run', async () => {
+  it('backfillTracking maps old sends, is idempotent and keeps rows the triggers wrote', async () => {
     await migrate();
     await resetMarketingTables();
     for (const [id, daysAgo] of [
@@ -204,7 +196,9 @@ describe('migration 0019 message tracking', () => {
     // The triggers already wrote rows; the backfill is for sends made before they existed.
     await sql.$executeRawUnsafe('DELETE FROM marketing.message_tracking');
 
-    expect(await reapply()).toEqual([FILE]);
+    expect(await backfillTracking(sql, { chunkRows: 1, pauseMs: 0 })).toBe(
+      true
+    );
 
     const expected = [`campaign:${CAMPAIGN_ID}:a`, `step:${ENROLLMENT_ID}:0`];
     expect(await trackingRefs()).toEqual(expected);
@@ -217,8 +211,19 @@ describe('migration 0019 message tracking', () => {
     expect(step).toMatchObject({ channel: 'email', rule_id: RULE_ID });
     expect(step?.accepted_at).not.toBeNull();
 
-    expect(await reapply()).toEqual([FILE]);
+    await sql.$executeRawUnsafe(
+      "UPDATE marketing.message_tracking SET status = 'clicked' WHERE source_ref = $1",
+      `step:${ENROLLMENT_ID}:0`
+    );
+    expect(await backfillTracking(sql, { chunkRows: 1, pauseMs: 0 })).toBe(
+      true
+    );
     expect(await trackingRefs()).toEqual(expected);
+    const [kept] = await sql.$queryRawUnsafe<{ status: string }[]>(
+      'SELECT status FROM marketing.message_tracking WHERE source_ref = $1',
+      `step:${ENROLLMENT_ID}:0`
+    );
+    expect(kept?.status).toBe('clicked');
     expect(await migrate()).toEqual([]);
   });
 

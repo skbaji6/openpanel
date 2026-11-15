@@ -3,6 +3,7 @@ import type { DailyRow, JourneyReport } from './contract';
 import {
   dailySeries,
   funnelSteps,
+  journeyNotReported,
   reportCopy,
   statusLabel,
   variantRows,
@@ -82,5 +83,13 @@ describe('report view', () => {
       'Conversions are off; set the conversion event in Channels.'
     );
     expect(statusLabel('uncertain')).toBe('Uncertain');
+  });
+
+  test('journey milestone is not reported only when every step omits it', () => {
+    const step = (notReported: string[]) => ({ notReported });
+    expect(
+      journeyNotReported([step(['delivered', 'read']), step(['delivered'])])
+    ).toEqual({ all: ['delivered'], some: ['read'] });
+    expect(journeyNotReported([])).toEqual({ all: [], some: [] });
   });
 });

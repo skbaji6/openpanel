@@ -7,6 +7,7 @@ import type { createEngine, Sql } from './engine/engine';
 import { purgeSendHistory } from './engine/ledger';
 import type { TickDeps } from './engine/ticker';
 import { redactSecrets } from './redact';
+import { backfillTracking } from './tracking/backfill';
 import { createConversionRecorder } from './tracking/conversions';
 import { purgeTracking } from './tracking/purge';
 import {
@@ -180,6 +181,18 @@ export async function startWorker(
   try {
     started.push({ stop: () => sql.$disconnect() });
     await migrate();
+    // Not awaited: sends from before the tracking triggers existed fill in while the worker already serves.
+    let backfillStopped = false;
+    const backfill = backfillTracking(sql, {
+      stopping: () => backfillStopped,
+      log: (message) => console.warn(LOG_PREFIX, message),
+    });
+    started.push({
+      stop: async () => {
+        backfillStopped = true;
+        await backfill;
+      },
+    });
     registerDefaultAdapters({ webhookAllowHosts: cfg.webhookAllowHosts });
     // Pooled SMTP connections close only after every sending job above them has stopped.
     started.push({ stop: async () => closeBatchAdapters() });

@@ -242,12 +242,6 @@ export function createServer(deps: ServerDeps) {
       auth: 'public',
       handle: (ctx) => redirect(ctx.params[0] ?? '', ctx.ip),
     },
-    {
-      method: 'GET',
-      pattern: /^\/marketing\/r\/([A-Za-z0-9_.-]{1,512})$/,
-      auth: 'public',
-      handle: (ctx) => redirect(ctx.params[0] ?? '', ctx.ip),
-    },
     ...(msg91Webhook
       ? [
           {

@@ -143,30 +143,4 @@ AFTER INSERT OR UPDATE OF status ON marketing.steps
 FOR EACH ROW WHEN (NEW.status IN ('sent', 'failed', 'skipped'))
 EXECUTE FUNCTION marketing.track_journey_step();
 
--- Sends of the last 400 days (the retention window) made before the triggers existed, mapped as the triggers map them.
-INSERT INTO marketing.message_tracking (
-  source_ref, project_id, profile_id, channel, campaign_id, status, reason, provider_ref, sent_at, accepted_at, failed_at
-)
-SELECT 'campaign:' || r.campaign_id::text || ':' || r.profile_id, r.project_id, r.profile_id, c.channel, r.campaign_id,
-  r.status, r.reason, r.provider_ref, COALESCE(r.sent_at, r.updated_at),
-  CASE WHEN r.status = 'sent' THEN COALESCE(r.sent_at, r.updated_at) END,
-  CASE WHEN r.status = 'failed' THEN COALESCE(r.sent_at, r.updated_at) END
-FROM marketing.campaign_recipients r
-JOIN marketing.campaigns c ON c.id = r.campaign_id
-WHERE r.status IN ('sent', 'uncertain', 'failed', 'skipped')
-  AND COALESCE(r.sent_at, r.updated_at) > now() - interval '400 days'
-ON CONFLICT DO NOTHING;
-
-INSERT INTO marketing.message_tracking (
-  source_ref, project_id, profile_id, channel, rule_id, step_index, status, reason, sent_at, accepted_at, failed_at
-)
-SELECT 'step:' || s.enrollment_id::text || ':' || s.step_index, e.project_id, e.profile_id,
-  e.rule_snapshot->'steps'->s.step_index->>'channel', e.rule_id, s.step_index,
-  s.status, s.outcome->>'reason', COALESCE(s.sent_at, s.due_at),
-  CASE WHEN s.status = 'sent' THEN COALESCE(s.sent_at, s.due_at) END,
-  CASE WHEN s.status = 'failed' THEN COALESCE(s.sent_at, s.due_at) END
-FROM marketing.steps s
-JOIN marketing.enrollments e ON e.id = s.enrollment_id
-WHERE s.status IN ('sent', 'failed', 'skipped')
-  AND COALESCE(s.sent_at, s.due_at) > now() - interval '400 days'
-ON CONFLICT DO NOTHING;
+-- Sends made before these triggers existed are backfilled in the background after startup (src/tracking/backfill.ts).

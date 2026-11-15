@@ -275,7 +275,7 @@ describe('msg91 delivery webhook', () => {
     expect(await countByStatus(PROJECT_B, 'delivered')).toBe(0);
   });
 
-  it('the 31st failed auth from one ip is 429', async () => {
+  it('the 31st failed auth from one ip is 429, and a correct secret still succeeds from that ip', async () => {
     const ip = '10.9.9.9';
     for (let attempt = 0; attempt < FAILED_AUTH_LIMIT; attempt++) {
       expect(
@@ -285,7 +285,7 @@ describe('msg91 delivery webhook', () => {
     expect(
       (await post(hookPath(PROJECT_A, wrongSecret), '[]', ip)).status
     ).toBe(429);
-    expect((await post(hookPath(PROJECT_A), '[]', ip)).status).toBe(429);
+    expect((await post(hookPath(PROJECT_A), '[]', ip)).status).toBe(200);
     expect((await post(hookPath(PROJECT_A), '[]', '10.9.9.10')).status).toBe(
       200
     );

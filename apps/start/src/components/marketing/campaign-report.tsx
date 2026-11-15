@@ -39,7 +39,7 @@ export function CampaignReport({
             <DailyChart daily={report.daily} />
           </section>
           <section className="col gap-2">
-            <h3 className="font-medium">Messages by status</h3>
+            <h3 className="font-medium">Messages by furthest status</h3>
             <StatusTable statuses={report.statuses} />
           </section>
         </div>

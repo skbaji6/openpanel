@@ -43,10 +43,11 @@ export function createMsg91WebhookHandler(deps: {
     request: Request,
     ip: string
   ): Promise<Response> => {
-    if (limiter.limited(ip)) {
-      return json({ error: 'too_many_requests' }, TOO_MANY_REQUESTS);
-    }
+    // Only wrong secrets are charged and limited, so a correct sender behind a shared bucket is never locked out.
     if (!secretsMatch(secret, webhookSecret(deps.encryptionKey, projectId))) {
+      if (limiter.limited(ip)) {
+        return json({ error: 'too_many_requests' }, TOO_MANY_REQUESTS);
+      }
       limiter.take(ip);
       return json({ error: 'unauthorized' }, UNAUTHORIZED);
     }

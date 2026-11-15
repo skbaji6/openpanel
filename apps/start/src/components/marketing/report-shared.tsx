@@ -70,7 +70,7 @@ export function ReportShell<T>({
 export function StatusTable({ statuses }: { statuses: StatusCounts }) {
   return (
     <table className="w-full text-left text-sm">
-      <caption className="sr-only">Messages by status</caption>
+      <caption className="sr-only">Messages by furthest status</caption>
       <thead>
         <tr>
           <th className="p-2" scope="col">

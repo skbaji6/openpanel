@@ -136,7 +136,15 @@ export function createBatchHandler(
       .map((value) => normalizeEvent(parse(value)))
       .filter((event): event is NormalizedEvent => event !== null);
     // Before the interest filter: an app open is rarely from a profile the rules know. Idempotent, so a replay is safe.
-    await withTransientRetry(() => deps.conversions.record(candidates));
+    // Optional: a failure here must not block rules. A missed conversion is credited by a later event, if any.
+    try {
+      await withTransientRetry(() => deps.conversions.record(candidates));
+    } catch (error) {
+      log.error(
+        'conversion record failed',
+        error instanceof Error ? error.name : typeof error
+      );
+    }
     const interesting = await deps.interest.hasMany(candidates);
     const kept = candidates.filter((_event, index) => interesting[index]);
     if (kept.length === 0) {

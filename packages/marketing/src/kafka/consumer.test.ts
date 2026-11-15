@@ -297,19 +297,19 @@ describe('batch handler', () => {
     expect(record).toHaveBeenCalledTimes(2);
   });
 
-  it('a non-transient conversion error rejects so the batch replays', async () => {
+  it('a failing conversion recorder is logged and does not stop rule processing', async () => {
     const record = mock(() => Promise.reject(new Error('boom')));
+    const engine = fakeEngine();
     const handle = createBatchHandler({
       conversions: { record },
-      engine: fakeEngine(),
+      engine,
       interest: fakeInterest,
       retryDelaysMs: FAST_RETRIES,
       logger,
     });
-    await expect(handle([payload('app_open', 'stranger')])).rejects.toThrow(
-      'boom'
-    );
+    await handle([payload(RULE_EVENT, 'a')]);
     expect(record).toHaveBeenCalledTimes(1);
+    expect(engine.handleEvents).toHaveBeenCalledTimes(1);
   });
 
   it('a deadlock is retried and the batch then succeeds', async () => {
