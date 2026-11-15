@@ -7,6 +7,7 @@ import type { MarketingConfig } from '../config';
 import type { Sql } from '../engine/engine';
 import { redactSecrets } from '../redact';
 import { createTemplateRegistry } from '../templates/registry';
+import { createRedirectHandler } from '../tracking/redirect';
 import {
   createTrackingSettingsCache,
   type TrackingSettingsCache,
@@ -94,6 +95,26 @@ export function createServer(deps: ServerDeps) {
     }),
   });
 
+  const redirect = createRedirectHandler({
+    sql,
+    encryptionKey: cfg.encryptionKey,
+    invalidTokenLimiter: createRateLimiter({
+      limit: RATE_LIMIT,
+      windowMs: RATE_WINDOW_MS,
+      now: deps.now,
+    }),
+    now: () => new Date((deps.now ?? Date.now)()),
+    // Database errors can quote bound values (source refs hold profile ids), so only the error type is logged.
+    log: {
+      error: (message, error) =>
+        console.error(
+          LOG_PREFIX,
+          message,
+          error instanceof Error ? error.name : 'unknown'
+        ),
+    },
+  });
+
   // The rule is already saved; a failed refresh is caught up by the worker's periodic refresh.
   async function onRulesChanged() {
     try {
@@ -177,6 +198,18 @@ export function createServer(deps: ServerDeps) {
           ),
         ]
       : []),
+    {
+      method: 'GET',
+      pattern: /^\/marketing\/r\/([A-Za-z0-9_.-]{1,512})$/,
+      auth: 'public',
+      handle: (ctx) => redirect(ctx.params[0] ?? '', ctx.ip),
+    },
+    {
+      method: 'GET',
+      pattern: /^\/marketing\/r\/([A-Za-z0-9_.-]{1,512})$/,
+      auth: 'public',
+      handle: (ctx) => redirect(ctx.params[0] ?? '', ctx.ip),
+    },
     {
       method: 'GET',
       pattern: /^\/marketing\/unsubscribe$/,
