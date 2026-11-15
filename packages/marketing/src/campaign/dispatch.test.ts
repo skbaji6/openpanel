@@ -542,6 +542,44 @@ describe('runDispatchCycle', () => {
     });
   });
 
+  it('an email campaign with a template ref sends the pinned version through fake SMTP with html and text', async () => {
+    const registry = createTemplateRegistry({ sql, now: () => now });
+    const created = await registry.create(
+      { projectId: project, userId: USER },
+      {
+        channel: 'email',
+        displayName: 'Welcome',
+        category: 'service',
+        content: {
+          subject: 'Hi {{profile.name}}',
+          blocks: [
+            { type: 'paragraph', text: 'Hello <b>{{profile.name}}</b>' },
+            { type: 'button', label: 'Open', url: 'https://x.test/a' },
+          ],
+        },
+      }
+    );
+    const members = pushMembers(1).map((member) => ({
+      ...member,
+      contact: { email: 'person@mail.test' },
+    }));
+    const sent = fakeChannel('email');
+    await setup({
+      channel: 'email',
+      members,
+      template: { templateId: created.templateId },
+      templateVersion: 1,
+    });
+
+    await runUntilIdle(depsFor(createFakeSource({ members })));
+
+    expect(sent).toHaveLength(1);
+    const message = sent[0]?.message as RenderedMessage;
+    expect(message.subject).toBe('Hi Name0');
+    expect(message.body).toContain('Hello &lt;b&gt;Name0&lt;/b&gt;');
+    expect(message.text).toBe('Hello <b>Name0</b>\n\nOpen: https://x.test/a');
+  });
+
   it('a push campaign delivers its image and link to the adapter', async () => {
     const members = pushMembers(1);
     const sent = fakeChannel('push');

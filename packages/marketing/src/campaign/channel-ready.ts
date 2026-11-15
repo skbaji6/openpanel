@@ -53,8 +53,7 @@ export function createChannelReady(deps: {
     if (readiness.channel !== known) {
       return 'template_channel_mismatch';
     }
-    // The email compiler is not wired yet, so an email ref cannot be sent.
-    return known === 'email' ? 'template_mapping_missing' : null;
+    return null;
   };
 }
 

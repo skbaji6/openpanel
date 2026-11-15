@@ -159,6 +159,7 @@ function buildMail(
     to: email,
     subject: stripLineBreaks(msg.subject ?? ''),
     html: msg.body,
+    ...(msg.text === undefined ? {} : { text: msg.text }),
     headers: {
       'List-Unsubscribe': `<${unsubscribeUrl}>`,
       'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',

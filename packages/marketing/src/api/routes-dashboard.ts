@@ -24,6 +24,7 @@ import {
 } from '../rules/rule.schema';
 import { STARTER_RULES } from '../rules/starter-rules';
 import { renderTemplate } from '../template/render';
+import { compileEmailContent, zEmailContent } from '../templates/email-blocks';
 import { pinOrThrow } from '../templates/pin';
 import type { createTemplateRegistry } from '../templates/registry';
 import { HttpError, json, parseJsonBody, type Route, validate } from './http';
@@ -124,9 +125,7 @@ const zSettings = z.strictObject({
 });
 
 const zRecord = z.record(z.string(), z.unknown());
-const zPreview = z.strictObject({
-  channel: zStep.shape.channel,
-  template: zInlineTemplate,
+const previewOptions = {
   sample: z
     .strictObject({
       profile: zRecord.optional(),
@@ -135,7 +134,19 @@ const zPreview = z.strictObject({
     })
     .optional(),
   allowedEventProps: z.array(z.string()).max(MAX_PROPERTY_NAMES).optional(),
-});
+};
+const zPreview = z.union([
+  z.strictObject({
+    channel: z.literal('email'),
+    content: zEmailContent,
+    ...previewOptions,
+  }),
+  z.strictObject({
+    channel: zStep.shape.channel,
+    template: zInlineTemplate,
+    ...previewOptions,
+  }),
+]);
 
 export const RULE_COLUMNS =
   'id::text, name, status, definition, version, created_at, updated_at, journey_key, unconfirmed';
@@ -737,6 +748,14 @@ export function dashboardRoutes(deps: DashboardDeps): Route[] {
           missing: body.sample?.missing ?? [],
           allowedEventProps: body.allowedEventProps ?? [],
         };
+        if ('content' in body) {
+          const email = compileEmailContent(body.content);
+          return json({
+            subject: renderTemplate(email.subject, vars, { mode: 'text' }),
+            body: renderTemplate(email.body, vars, { mode: 'html' }),
+            text: renderTemplate(email.text, vars, { mode: 'text' }),
+          });
+        }
         const { subject } = body.template;
         return json({
           subject:

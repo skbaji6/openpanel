@@ -38,7 +38,7 @@ const EMAIL_TEMPLATE = {
   channel: 'email' as const,
   displayName: 'Mail',
   category: 'service' as const,
-  content: { subject: 'Hi', blocks: [{ type: 'text' }] },
+  content: { subject: 'Hi', blocks: [{ type: 'paragraph', text: 'Hello' }] },
 };
 
 async function configure(
@@ -111,7 +111,7 @@ describe('channel readiness', () => {
     expect(await channelReady(PROJECT, 'push', {})).toBeNull();
   });
 
-  it('a push ref is checked and pinned like a provider template; an email ref waits for the compiler', async () => {
+  it('a push ref is checked and pinned like a provider template; an email ref is ready once its channel is configured', async () => {
     await configure('push', null);
     const push = await registry.create(CTX, {
       channel: 'push',
@@ -143,7 +143,7 @@ describe('channel readiness', () => {
     );
     expect(
       await channelReady(PROJECT, 'email', { templateId: email.templateId })
-    ).toBe('template_mapping_missing');
+    ).toBeNull();
     await registry.setEnabled(CTX, push.templateId, false);
     expect(await channelReady(PROJECT, 'push', ref)).toBe('template_disabled');
     expect(await pinTemplate(sql, PROJECT, 'push', ref)).toBeNull();

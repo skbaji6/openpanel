@@ -17,10 +17,11 @@ export const PROVIDER_TEMPLATE_CHANNELS = ['sms', 'whatsapp'] as const;
 export type ProviderTemplateChannel =
   (typeof PROVIDER_TEMPLATE_CHANNELS)[number];
 
-// The channels the Templates tab edits. Email templates arrive with the email editor.
+// The channels the Templates tab edits.
 export const REGISTRY_TEMPLATE_CHANNELS = [
   ...PROVIDER_TEMPLATE_CHANNELS,
   'push',
+  'email',
 ] as const;
 export type RegistryTemplateChannel =
   (typeof REGISTRY_TEMPLATE_CHANNELS)[number];

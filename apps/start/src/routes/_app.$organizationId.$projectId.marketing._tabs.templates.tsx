@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { TemplatesPage } from '@/components/marketing/templates-page';
 
 interface TemplatesSearch {
-  channel?: 'sms' | 'whatsapp' | 'push';
+  channel?: 'sms' | 'whatsapp' | 'push' | 'email';
   id?: string;
   new?: true;
 }
@@ -15,7 +15,8 @@ export const Route = createFileRoute(
     channel:
       search.channel === 'sms' ||
       search.channel === 'whatsapp' ||
-      search.channel === 'push'
+      search.channel === 'push' ||
+      search.channel === 'email'
         ? search.channel
         : undefined,
     id: typeof search.id === 'string' ? search.id : undefined,

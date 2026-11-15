@@ -159,6 +159,36 @@ describe('pinDefinition', () => {
     });
   });
 
+  it('an email ref pins the compiled subject, body and text', async () => {
+    const t = await registry.create(CTX, {
+      channel: 'email',
+      displayName: 'Mail',
+      category: 'service',
+      content: {
+        subject: 'Hi',
+        blocks: [{ type: 'paragraph', text: 'Hello {{profile.name}}' }],
+      },
+    });
+    const result = await pinDefinition(
+      registry,
+      'p1',
+      definition([
+        {
+          delaySeconds: 0,
+          channel: 'email',
+          template: { templateId: t.templateId },
+        },
+      ])
+    );
+    expect(result).toMatchObject({ ok: true });
+    const step = result.ok ? result.definition.steps[0] : undefined;
+    expect(step?.template).toMatchObject({
+      subject: 'Hi',
+      text: 'Hello {{profile.name}}',
+    });
+    expect(step?.template?.body).toContain('Hello {{profile.name}}');
+  });
+
   it('inline messages are returned unchanged', async () => {
     const def = definition([
       { delaySeconds: 0, channel: 'push', template: { body: 'x' } },

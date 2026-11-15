@@ -14,6 +14,8 @@ import {
   type RegistryTemplateChannel,
   type TemplateRow,
 } from './campaign-contract';
+import { EmailTemplateEditor, emailFormFromRow } from './email-block-editor';
+import { emptyEmailContent } from './email-blocks';
 import { PushTemplateEditor, pushFormFromRow } from './push-template-editor';
 import { inlineContent } from './step-variants';
 import { formFromRow, TemplateEditor } from './template-editor';
@@ -32,6 +34,7 @@ const CHANNEL_LABELS: Record<RegistryTemplateChannel, string> = {
   sms: 'SMS',
   whatsapp: 'WhatsApp',
   push: 'Push',
+  email: 'Email',
 };
 
 const isRegistryChannel = (
@@ -55,6 +58,9 @@ function pushMessage(row: TemplateRow): string {
 function providerReference(row: TemplateRow): string {
   if (row.channel === 'push') {
     return pushMessage(row);
+  }
+  if (row.channel === 'email') {
+    return (row.content as { subject?: string } | null)?.subject ?? '';
   }
   const ref = row.providerRef;
   if (typeof ref !== 'object' || ref === null) {
@@ -119,6 +125,20 @@ export function TemplatesPage() {
   const close = () => navigate({ search: { channel } });
 
   if (search.new && isAdmin) {
+    if (channel === 'email') {
+      return (
+        <EmailTemplateEditor
+          initial={{
+            channel: 'email',
+            displayName: '',
+            category: 'promotional',
+            content: emptyEmailContent(),
+          }}
+          isAdmin={isAdmin}
+          onClose={close}
+        />
+      );
+    }
     return channel === 'push' ? (
       <PushTemplateEditor
         initial={emptyTemplate('push')}
@@ -145,6 +165,17 @@ export function TemplatesPage() {
       >
         <Button onClick={close}>Back to templates</Button>
       </FullPageEmptyState>
+    );
+  }
+  if (search.id && linked.data?.channel === 'email') {
+    return (
+      <EmailTemplateEditor
+        initial={emailFormFromRow(linked.data)}
+        isAdmin={isAdmin}
+        key={linked.data.templateId}
+        onClose={close}
+        row={linked.data}
+      />
     );
   }
   if (search.id && linked.data?.channel === 'push') {
@@ -226,7 +257,9 @@ export function TemplatesPage() {
           description={
             channel === 'push'
               ? 'Write a push title and body here, then pick it in a journey step or a campaign.'
-              : `Record a provider-approved ${CHANNEL_LABELS[channel]} template here, then pick it in a campaign.`
+              : channel === 'email'
+                ? 'Build an email from blocks here, then pick it in a journey step or a campaign.'
+                : `Record a provider-approved ${CHANNEL_LABELS[channel]} template here, then pick it in a campaign.`
           }
           icon={MessageSquareTextIcon}
           title="No templates yet"
@@ -239,7 +272,9 @@ export function TemplatesPage() {
               <th className="p-2">Name</th>
               <th className="p-2">Category</th>
               <th className="p-2">
-                {channel === 'push' ? 'Message' : 'Provider reference'}
+                {channel === 'push' || channel === 'email'
+                  ? 'Message'
+                  : 'Provider reference'}
               </th>
               <th className="p-2">Version</th>
               <th className="p-2">Status</th>

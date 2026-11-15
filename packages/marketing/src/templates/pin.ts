@@ -5,6 +5,7 @@ import {
   type StepTemplate,
   zInlineTemplate,
 } from '../rules/rule.schema';
+import { compileEmailContent, zEmailContent } from './email-blocks';
 import type { createTemplateRegistry } from './registry';
 
 type TemplateRegistry = ReturnType<typeof createTemplateRegistry>;
@@ -51,8 +52,9 @@ async function pinMessage(
     if (!template.enabled) {
       return { ok: false, code: 'template_disabled' };
     }
-    // Email templates cannot be copied into a step until the email compiler exists.
-    if (template.channel !== 'push' || channel !== 'push') {
+    const isPushPair = template.channel === 'push' && channel === 'push';
+    const isEmailPair = template.channel === 'email' && channel === 'email';
+    if (!(isPushPair || isEmailPair)) {
       return { ok: false, code: 'template_channel_mismatch' };
     }
     const version = await registry.getVersion(
@@ -60,6 +62,16 @@ async function pinMessage(
       templateId,
       message.version ?? template.currentVersion
     );
+    if (isEmailPair) {
+      const compiled = compileEmailContent(
+        zEmailContent.parse(version.content)
+      );
+      return {
+        ok: true,
+        version: version.version,
+        message: { templateId, version: version.version, ...compiled },
+      };
+    }
     const content = zInlineTemplate.parse(version.content);
     return {
       ok: true,

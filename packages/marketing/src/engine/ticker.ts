@@ -979,9 +979,19 @@ export function render(
   const body = renderTemplate(template.body, vars, {
     mode: channel === 'email' ? 'html' : 'text',
   });
-  return channel === 'push'
-    ? { title: heading, body, meta }
-    : { subject: heading, body, meta };
+  if (channel === 'push') {
+    return { title: heading, body, meta };
+  }
+  const text =
+    channel === 'email' && template.text !== undefined
+      ? renderTemplate(template.text, vars, { mode: 'text' })
+      : undefined;
+  return {
+    subject: heading,
+    body,
+    ...(text === undefined ? {} : { text }),
+    meta,
+  };
 }
 
 export function lookupSkipReason(entry: LookupEntry): string | null {

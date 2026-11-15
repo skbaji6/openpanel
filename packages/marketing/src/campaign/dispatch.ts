@@ -45,6 +45,7 @@ import {
 import { redactSecrets } from '../redact';
 import { zInlineTemplate } from '../rules/rule.schema';
 import { renderTemplate } from '../template/render';
+import { compileEmailContent, zEmailContent } from '../templates/email-blocks';
 import { renderProviderVariables } from '../templates/provider-render';
 import type {
   createTemplateRegistry,
@@ -506,13 +507,26 @@ function render(
           }
         : { ok: false, reason: variables.reason };
     }
-    const template = inlineContent(campaign, version);
     const vars = {
       profile: traits,
       event: {},
       missing: [],
       allowedEventProps: [],
     };
+    const meta = { projectId: campaign.project_id, campaignId: campaign.id };
+    if (version && campaign.channel === 'email') {
+      const email = compileEmailContent(zEmailContent.parse(version.content));
+      return {
+        ok: true,
+        message: {
+          subject: renderTemplate(email.subject, vars, { mode: 'text' }),
+          body: renderTemplate(email.body, vars, { mode: 'html' }),
+          text: renderTemplate(email.text, vars, { mode: 'text' }),
+          meta,
+        },
+      };
+    }
+    const template = inlineContent(campaign, version);
     const heading =
       template.subject === undefined
         ? undefined
@@ -520,7 +534,6 @@ function render(
     const body = renderTemplate(template.body, vars, {
       mode: campaign.channel === 'email' ? 'html' : 'text',
     });
-    const meta = { projectId: campaign.project_id, campaignId: campaign.id };
     return {
       ok: true,
       message:

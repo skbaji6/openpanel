@@ -76,6 +76,24 @@ describe('email adapter', () => {
     expect(session?.data).toContain('Subject: Your cart misses you');
   });
 
+  it('with text set the fake SMTP server receives multipart/alternative with both parts', async () => {
+    const adapter = createEmailAdapter();
+    expect(
+      await adapter.send(
+        { ...message, body: '<p>HTML part</p>', text: 'Plain part' },
+        recipient,
+        realConfig,
+        opts
+      )
+    ).toEqual({ ok: true });
+    const [session] = smtp.sessions;
+    expect(session?.data).toContain('multipart/alternative');
+    expect(session?.data).toContain('text/plain');
+    expect(session?.data).toContain('Plain part');
+    expect(session?.data).toContain('text/html');
+    expect(session?.data).toContain('HTML part');
+  });
+
   it('strips CR/LF from the subject so it cannot inject headers', async () => {
     const adapter = createEmailAdapter();
     const hostile = {

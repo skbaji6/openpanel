@@ -26,6 +26,7 @@ export interface RenderedMessage {
   subject?: string;
   title?: string;
   body: string;
+  text?: string;
   imageUrl?: string;
   data?: Record<string, string>;
   meta: JourneyMeta | CampaignMeta;
