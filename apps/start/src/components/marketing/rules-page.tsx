@@ -262,6 +262,9 @@ export function RulesPage() {
         title="No rules yet"
       >
         {actions}
+        {importing && (
+          <JourneyImportDialog onClose={() => setImporting(false)} />
+        )}
       </FullPageEmptyState>
     );
   }
