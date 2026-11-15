@@ -505,6 +505,43 @@ describe('runDispatchCycle', () => {
     expect(await statuses(id)).toEqual({ sent: 1200 });
   });
 
+  it('a push campaign sends the pinned template version after a later edit', async () => {
+    const registry = createTemplateRegistry({ sql, now: () => now });
+    const ctx = { projectId: project, userId: USER };
+    const input = (subject: string, body: string) => ({
+      channel: 'push' as const,
+      displayName: 'Hello',
+      category: 'service' as const,
+      content: { subject, body },
+    });
+    const created = await registry.create(
+      ctx,
+      input('V1 {{profile.name}}', 'First body')
+    );
+    await registry.update(
+      ctx,
+      created.templateId,
+      input('V2', 'Second body'),
+      1
+    );
+    const members = pushMembers(1);
+    const sent = fakeChannel('push');
+    await setup({
+      channel: 'push',
+      members,
+      template: { templateId: created.templateId },
+      templateVersion: 1,
+    });
+
+    await runUntilIdle(depsFor(createFakeSource({ members })));
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.message).toMatchObject({
+      title: 'V1 Name0',
+      body: 'First body',
+    });
+  });
+
   it('a push campaign delivers its image and link to the adapter', async () => {
     const members = pushMembers(1);
     const sent = fakeChannel('push');

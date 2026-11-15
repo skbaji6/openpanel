@@ -210,11 +210,16 @@ export const zCampaignDraft = z
     z.strictObject({
       ...commonFields,
       channel: z.literal('push'),
-      template: zPushTemplate,
+      template: z.union([zPushTemplate, zRegistryTemplateRef]),
     }),
     z.strictObject({
       ...commonFields,
-      channel: z.enum(['email', 'webhook']),
+      channel: z.literal('email'),
+      template: z.union([zMessage, zRegistryTemplateRef]),
+    }),
+    z.strictObject({
+      ...commonFields,
+      channel: z.literal('webhook'),
       template: zMessage,
     }),
     z.strictObject({

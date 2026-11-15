@@ -10,7 +10,7 @@ import {
 import { withCampaignLane } from '../audience/lane';
 import type { DeliveryOutcome } from '../channels/batch';
 import { phoneSecrets } from '../channels/msg91-http';
-import { getChannelSettings, PROVIDER_CHANNELS } from '../channels/settings';
+import { getChannelSettings, usesRegistryVersion } from '../channels/settings';
 import { recordDeadTokens } from '../engine/dead-tokens';
 import { entryValues } from '../engine/ticker';
 import { redactSecrets } from '../redact';
@@ -92,7 +92,7 @@ async function chooseTemplate(
   deps: DispatchDeps,
   row: ClaimedTestSend
 ): Promise<TemplateChoice> {
-  if (!PROVIDER_CHANNELS.has(row.channel)) {
+  if (!usesRegistryVersion(row.channel, row.template)) {
     return { ok: true, version: null };
   }
   const ref = zRegistryTemplate.safeParse(row.template);

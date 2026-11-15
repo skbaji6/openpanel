@@ -3,7 +3,7 @@ import {
   CAMPAIGN_CHANNELS,
   checkChannelSettings,
   getChannelSettings,
-  PROVIDER_CHANNELS,
+  usesRegistryVersion,
 } from '../channels/settings';
 import type { Queryable, Sql } from '../engine/engine';
 import type { createTemplateRegistry } from '../templates/registry';
@@ -36,7 +36,7 @@ export function createChannelReady(deps: {
     if (issue) {
       return issue;
     }
-    if (!PROVIDER_CHANNELS.has(known)) {
+    if (!usesRegistryVersion(known, template)) {
       return null;
     }
     const ref = zTemplateRef.safeParse(template);
@@ -50,7 +50,11 @@ export function createChannelReady(deps: {
     if (!readiness.ok) {
       return readiness.code;
     }
-    return readiness.channel === known ? null : 'template_channel_mismatch';
+    if (readiness.channel !== known) {
+      return 'template_channel_mismatch';
+    }
+    // The email compiler is not wired yet, so an email ref cannot be sent.
+    return known === 'email' ? 'template_mapping_missing' : null;
   };
 }
 
@@ -61,7 +65,7 @@ export async function pinTemplate(
   channel: string,
   template: unknown
 ): Promise<number | null> {
-  if (!PROVIDER_CHANNELS.has(channel)) {
+  if (!usesRegistryVersion(channel, template)) {
     return UNVERSIONED;
   }
   const ref = zPinnableRef.safeParse(template);

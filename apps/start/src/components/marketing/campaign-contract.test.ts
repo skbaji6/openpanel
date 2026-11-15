@@ -162,6 +162,21 @@ describe('zCampaignDraft', () => {
     ).toBe(false);
   });
 
+  test('push and email accept a templateId, webhook does not', () => {
+    for (const channel of ['push', 'email']) {
+      expect(
+        zCampaignDraft.safeParse(
+          draft({ channel, template: { templateId: 't1' } })
+        ).success
+      ).toBe(true);
+    }
+    expect(
+      zCampaignDraft.safeParse(
+        draft({ channel: 'webhook', template: { templateId: 't1' } })
+      ).success
+    ).toBe(false);
+  });
+
   test('sms needs a templateId', () => {
     expect(
       zCampaignDraft.safeParse(

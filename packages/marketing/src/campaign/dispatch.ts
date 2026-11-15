@@ -27,6 +27,7 @@ import {
   effectiveQuietHours,
   getChannelSettings,
   PROVIDER_CHANNELS,
+  usesRegistryVersion,
 } from '../channels/settings';
 import { LEASE_MARGIN_MS, SEND_TIMEOUT_MS } from '../channels/timeouts';
 import type { RenderedMessage } from '../channels/types';
@@ -278,7 +279,7 @@ async function pinnedVersion(
   deps: DispatchDeps,
   campaign: DueCampaign
 ): Promise<TemplateVersion | null | 'missing'> {
-  if (!PROVIDER_CHANNELS.has(campaign.channel)) {
+  if (!usesRegistryVersion(campaign.channel, campaign.template)) {
     return null;
   }
   const template = zRegistryTemplate.safeParse(campaign.template);
@@ -476,13 +477,23 @@ function pushExtras(template: {
   };
 }
 
+// A pinned push version carries inline subject and body; the campaign's own template is only read when nothing is pinned.
+function inlineContent(campaign: DueCampaign, version: TemplateVersion | null) {
+  if (version) {
+    return zInlineTemplate.parse(version.content);
+  }
+  return campaign.channel === 'push'
+    ? zPushTemplate.parse(campaign.template)
+    : zInlineTemplate.parse(campaign.template);
+}
+
 function render(
   campaign: DueCampaign,
   version: TemplateVersion | null,
   traits: Record<string, string | number | boolean>
 ): Rendered {
   try {
-    if (version) {
+    if (version && PROVIDER_CHANNELS.has(campaign.channel)) {
       const variables = renderProviderVariables(version, traits);
       return variables.ok
         ? {
@@ -495,10 +506,7 @@ function render(
           }
         : { ok: false, reason: variables.reason };
     }
-    const template =
-      campaign.channel === 'push'
-        ? zPushTemplate.parse(campaign.template)
-        : zInlineTemplate.parse(campaign.template);
+    const template = inlineContent(campaign, version);
     const vars = {
       profile: traits,
       event: {},

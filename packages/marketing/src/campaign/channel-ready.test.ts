@@ -34,6 +34,13 @@ const WHATSAPP_TEMPLATE = {
   variables: [{ slot: 'body_1', value: '{{profile.firstName}}' }],
 };
 
+const EMAIL_TEMPLATE = {
+  channel: 'email' as const,
+  displayName: 'Mail',
+  category: 'service' as const,
+  content: { subject: 'Hi', blocks: [{ type: 'text' }] },
+};
+
 async function configure(
   channel: 'sms' | 'push',
   ratePerSecond: number | null
@@ -102,6 +109,44 @@ describe('channel readiness', () => {
     );
     await configure('push', null);
     expect(await channelReady(PROJECT, 'push', {})).toBeNull();
+  });
+
+  it('a push ref is checked and pinned like a provider template; an email ref waits for the compiler', async () => {
+    await configure('push', null);
+    const push = await registry.create(CTX, {
+      channel: 'push',
+      displayName: 'Hi',
+      category: 'service',
+      content: { body: 'Hello' },
+    });
+    const email = await registry.create(CTX, EMAIL_TEMPLATE);
+    const ref = { templateId: push.templateId };
+    expect(await channelReady(PROJECT, 'push', ref)).toBeNull();
+    expect(await pinTemplate(sql, PROJECT, 'push', ref)).toBe(1);
+    expect(
+      await channelReady(PROJECT, 'push', { templateId: email.templateId })
+    ).toBe('template_channel_mismatch');
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted) VALUES ($1, 'email', 'x')`,
+      PROJECT
+    );
+    await putChannelSettings(
+      sql,
+      PROJECT,
+      'email',
+      {
+        ...DEFAULT_CHANNEL_SETTINGS.email,
+        ratePerSecond: RATE,
+        dailyQuota: 1000,
+      },
+      0
+    );
+    expect(
+      await channelReady(PROJECT, 'email', { templateId: email.templateId })
+    ).toBe('template_mapping_missing');
+    await registry.setEnabled(CTX, push.templateId, false);
+    expect(await channelReady(PROJECT, 'push', ref)).toBe('template_disabled');
+    expect(await pinTemplate(sql, PROJECT, 'push', ref)).toBeNull();
   });
 
   it('pinTemplate returns the current version of an enabled template of the channel', async () => {

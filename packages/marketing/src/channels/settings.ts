@@ -18,6 +18,23 @@ export const PROVIDER_CHANNELS: ReadonlySet<string> = new Set([
   'sms',
   'whatsapp',
 ]);
+const REF_OR_INLINE_CHANNELS: ReadonlySet<string> = new Set(['push', 'email']);
+
+// Push and email take a registry version only when the campaign's template is a { templateId } ref; inline ones have nothing to pin.
+export function usesRegistryVersion(
+  channel: string,
+  template: unknown
+): boolean {
+  if (PROVIDER_CHANNELS.has(channel)) {
+    return true;
+  }
+  return (
+    REF_OR_INLINE_CHANNELS.has(channel) &&
+    typeof template === 'object' &&
+    template !== null &&
+    'templateId' in template
+  );
+}
 
 const MAX_CONCURRENCY = 200;
 const MAX_RATE_PER_SECOND = 10_000;

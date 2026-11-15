@@ -362,6 +362,32 @@ describe('runTestSendTick', () => {
     });
   });
 
+  it('a test send of a push campaign with a ref uses the current version', async () => {
+    const sent = fakeBatch('push');
+    const registry = createTemplateRegistry({ sql, now: () => now });
+    const ctx = { projectId: project, userId: USER };
+    const input = (body: string) => ({
+      channel: 'push' as const,
+      displayName: 'Hello',
+      category: 'service' as const,
+      content: { subject: 'Hi', body },
+    });
+    const created = await registry.create(ctx, input('First'));
+    await registry.update(ctx, created.templateId, input('Second'), 1);
+    const campaignId = await setupCampaign({
+      channel: 'push',
+      template: { templateId: created.templateId },
+    });
+    const id = await requestTestSend(campaignId, 'p1');
+
+    await runTestSendTick(
+      depsFor(createFakeSource({ members: [member('p1')] }))
+    );
+
+    expect((await testSend(id)).status).toBe('sent');
+    expect(sent[0]?.message).toMatchObject({ title: 'Hi', body: 'Second' });
+  });
+
   it('an sms test send uses the current template version and carries no device tokens', async () => {
     const sent = fakeBatch('sms');
     const templateId = await smsTemplate();

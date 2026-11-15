@@ -14,7 +14,6 @@ const MAX_PERIOD_SECONDS = 31_536_000;
 const DEFAULT_CAMPAIGN_TIMEZONE = 'Asia/Kolkata';
 const LOCAL_MINUTE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
-const JOURNEY_TEMPLATE_CHANNELS = ['email', 'webhook'] as const;
 const REGISTRY_TEMPLATE_CHANNELS = ['sms', 'whatsapp'] as const;
 
 const zTimeZone = z.string().refine(isTimeZone, 'unknown timezone');
@@ -113,19 +112,24 @@ export const zPushTemplate = z.strictObject({
   link: zLink.optional(),
 });
 
-const pushShape = {
-  ...commonFields,
-  channel: z.literal('push'),
-  template: zPushTemplate,
-};
-const journeyShape = {
-  ...commonFields,
-  channel: z.enum(JOURNEY_TEMPLATE_CHANNELS),
-  template: zInlineTemplate,
-};
 export const zRegistryTemplate = z.strictObject({
   templateId: z.string().min(1).max(MAX_TEMPLATE_ID),
 });
+const pushShape = {
+  ...commonFields,
+  channel: z.literal('push'),
+  template: z.union([zPushTemplate, zRegistryTemplate]),
+};
+const emailShape = {
+  ...commonFields,
+  channel: z.literal('email'),
+  template: z.union([zInlineTemplate, zRegistryTemplate]),
+};
+const webhookShape = {
+  ...commonFields,
+  channel: z.literal('webhook'),
+  template: zInlineTemplate,
+};
 const registryShape = {
   ...commonFields,
   channel: z.enum(REGISTRY_TEMPLATE_CHANNELS),
@@ -145,7 +149,8 @@ const KEYED_SKIP_ISSUE = {
 // No cross-field rules here: the service checks the merged draft with zCampaignFields, which answers invalid_campaign.
 export const zCampaignDraft = z.discriminatedUnion('channel', [
   z.strictObject(pushShape),
-  z.strictObject(journeyShape),
+  z.strictObject(emailShape),
+  z.strictObject(webhookShape),
   z.strictObject(registryShape),
 ]);
 
@@ -153,7 +158,8 @@ export const zCampaignDraft = z.discriminatedUnion('channel', [
 export const zCampaignFields = z
   .discriminatedUnion('channel', [
     z.object(pushShape),
-    z.object(journeyShape),
+    z.object(emailShape),
+    z.object(webhookShape),
     z.object(registryShape),
   ])
   .refine(keyedSkip, KEYED_SKIP_ISSUE);
@@ -166,7 +172,8 @@ export const zCampaignPatch = z
     ifLateMinutes: zIfLateMinutes,
     channel: z.enum([
       'push',
-      ...JOURNEY_TEMPLATE_CHANNELS,
+      'email',
+      'webhook',
       ...REGISTRY_TEMPLATE_CHANNELS,
     ]),
     template: z.unknown(),

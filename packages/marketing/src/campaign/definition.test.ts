@@ -7,6 +7,20 @@ function draft(channel: string, template: Record<string, unknown>) {
   return zCampaignDraft.safeParse({ name: 'c', channel, template });
 }
 
+describe('registry template ref', () => {
+  it('a push campaign with templateId parses and an inline push campaign still parses', () => {
+    expect(draft('push', { templateId: 't1' }).success).toBe(true);
+    expect(draft('push', { body: 'Text' }).success).toBe(true);
+    expect(draft('email', { templateId: 't1' }).success).toBe(true);
+    expect(draft('email', { body: 'Text' }).success).toBe(true);
+  });
+
+  it('a ref cannot carry inline fields and a webhook cannot use one', () => {
+    expect(draft('push', { templateId: 't1', body: 'x' }).success).toBe(false);
+    expect(draft('webhook', { templateId: 't1' }).success).toBe(false);
+  });
+});
+
 describe('push campaign template', () => {
   it('accepts an image and an app deep link', () => {
     const result = draft('push', {
