@@ -12,6 +12,9 @@ export const Route = createFileRoute(
   component: CampaignsPage,
   validateSearch: (search: Record<string, unknown>): CampaignsSearch => ({
     id: typeof search.id === 'string' ? search.id : undefined,
-    new: search.new === true || search.new === 1 || search.new === '1' ? true : undefined,
+    new:
+      search.new === true || search.new === 1 || search.new === '1'
+        ? true
+        : undefined,
   }),
 });

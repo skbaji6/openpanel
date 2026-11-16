@@ -2,9 +2,24 @@
   {
     "requestId": "req_sms_fixture_1",
     "report": [
-      { "number": "919000000001", "status": 1, "desc": "Delivered to handset", "date": "2026-11-15T10:00:00Z" },
-      { "number": "919000000002", "status": 16, "desc": "Blocked by operator rule SECRET-DESC", "date": "2026-11-15T10:00:05Z" },
-      { "number": "919000000003", "status": 7, "desc": "Pending", "date": "2026-11-15T10:00:06Z" }
+      {
+        "number": "919000000001",
+        "status": 1,
+        "desc": "Delivered to handset",
+        "date": "2026-11-15T10:00:00Z"
+      },
+      {
+        "number": "919000000002",
+        "status": 16,
+        "desc": "Blocked by operator rule SECRET-DESC",
+        "date": "2026-11-15T10:00:05Z"
+      },
+      {
+        "number": "919000000003",
+        "status": 7,
+        "desc": "Pending",
+        "date": "2026-11-15T10:00:06Z"
+      }
     ]
   }
 ]

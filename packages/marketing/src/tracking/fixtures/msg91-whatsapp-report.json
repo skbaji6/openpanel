@@ -1,4 +1,14 @@
 [
-  { "requestId": "req_wa_fixture_1", "customerNumber": "919000000004", "status": "read", "timestamp": "2026-11-15T10:01:00Z" },
-  { "requestId": "req_wa_fixture_1", "customerNumber": "919000000005", "status": "sent", "timestamp": "2026-11-15T10:01:01Z" }
+  {
+    "requestId": "req_wa_fixture_1",
+    "customerNumber": "919000000004",
+    "status": "read",
+    "timestamp": "2026-11-15T10:01:00Z"
+  },
+  {
+    "requestId": "req_wa_fixture_1",
+    "customerNumber": "919000000005",
+    "status": "sent",
+    "timestamp": "2026-11-15T10:01:01Z"
+  }
 ]
