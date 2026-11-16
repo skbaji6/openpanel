@@ -14,10 +14,8 @@ describe('baseVersion', () => {
 });
 
 describe('nextForkVersion', () => {
-  test('the first build of an upstream version is .1', () => {
-    expect(nextForkVersion('3.30.0', ['v3.30.0', 'v3.29.0.9'])).toBe(
-      '3.30.0.1'
-    );
+  test('the very first build is .1', () => {
+    expect(nextForkVersion('3.30.0', ['v3.30.0', 'v3.29.0'])).toBe('3.30.0.1');
   });
 
   test('continues the build number of the same upstream version', () => {
@@ -26,9 +24,9 @@ describe('nextForkVersion', () => {
     ).toBe('3.30.0.12');
   });
 
-  test('restarts at .1 for a newer upstream version', () => {
+  test('the build number continues across upstream versions', () => {
     expect(nextForkVersion('3.31.0', ['v3.30.0.12', 'v3.31.0'])).toBe(
-      '3.31.0.1'
+      '3.31.0.13'
     );
   });
 });

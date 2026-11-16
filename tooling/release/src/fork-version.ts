@@ -3,7 +3,7 @@ import semver from 'semver';
 import { gitOrNull, lines } from './git';
 
 // This fork ships upstream's release plus its own build number: upstream v3.30.0
-// becomes 3.30.0.1, 3.30.0.2, ... and restarts at .1 when a newer upstream tag is merged.
+// becomes 3.30.0.1, 3.30.0.2, ... The build number never restarts: after 3.30.0.12 a merged upstream 3.31.0 builds as 3.31.0.13.
 const UPSTREAM_TAG = /^v(\d+\.\d+\.\d+)$/;
 const FORK_TAG = /^v(\d+\.\d+\.\d+)\.(\d+)$/;
 
@@ -16,8 +16,7 @@ export const baseVersion = (mergedTags: string[]): string | null =>
 export const nextForkVersion = (base: string, allTags: string[]): string => {
   const builds = allTags
     .map((tag) => FORK_TAG.exec(tag))
-    .filter((match): match is RegExpExecArray => match?.[1] === base)
-    .map((match) => Number(match[2]));
+    .map((match) => Number(match?.[2] ?? 0));
   return `${base}.${Math.max(0, ...builds) + 1}`;
 };
 
