@@ -1,0 +1,109 @@
+export const ERROR_LABELS: Record<string, string> = {
+  forbidden: 'You do not have permission to do this',
+  not_found: 'Not found',
+  secrets_required: 'Re-enter the secrets for this channel',
+  rule_reactivated: 'The rule was reactivated while deleting; try again',
+  payload_too_large: 'The request is too large',
+  version_conflict: 'Someone else changed this. Reload and try again.',
+  invalid_transition: 'The campaign cannot do that in its current state.',
+  missing_audience: 'Choose an audience for this campaign first.',
+  audience_snapshot_stale:
+    'The audience changed after it was frozen. Freeze it again first.',
+  invalid_filter: 'The audience filter is not valid any more. Edit it first.',
+  channel_not_configured:
+    'Set up this channel on the Channels tab before sending.',
+  rate_required:
+    'Set a messages-per-second limit for this channel on the Channels tab.',
+  quota_required: 'Set a daily quota for this channel on the Channels tab.',
+  consent_not_supported:
+    'Consent filtering is not available for this channel. Turn it off in the channel settings.',
+  quota_not_supported:
+    'A daily quota is only available for email. Clear it in the channel settings.',
+  template_not_found: 'The message template no longer exists.',
+  template_disabled: 'The message template is disabled. Enable it first.',
+  definition_too_large:
+    'The journey is too large once its templates are included. Shorten the messages or remove steps.',
+  template_mapping_missing:
+    'The message template has no variable mapping. Edit the template.',
+  template_channel_mismatch: 'The message template belongs to another channel.',
+  count_preview_required:
+    'Count the audience first. The count is valid for 15 minutes.',
+  confirmation_required: 'Confirm the audience size and channel to continue.',
+  confirmation_mismatch:
+    'The audience size changed since you counted it. Count again and confirm.',
+  quota_spread_required:
+    'The daily quota is too small for this audience today. Spread the send over several days or lower the audience size.',
+  another_campaign_active:
+    'Another campaign is already running or paused in this project.',
+  template_unavailable:
+    'The message template is no longer available for sending.',
+  invalid_send_time: 'The send time is not valid.',
+  schedule_in_past: 'The send time is in the past.',
+  audience_in_use:
+    'This audience is used by a campaign and cannot be changed or deleted.',
+  ids_limit: 'The list is too long. A list holds at most 20,000 students.',
+  not_snapshot: 'Only snapshot audiences can be frozen.',
+  snapshot_too_large: 'The audience is too large to freeze.',
+  freeze_in_progress: 'This audience is being frozen. Try again in a moment.',
+  source_not_configured:
+    'The audience API is not connected. Connect it on the Channels tab.',
+  source_not_http:
+    'The audience source is not an HTTP API. Connect the audience API on the Channels tab.',
+  source_unavailable: 'The audience API did not answer. Try again in a moment.',
+  source_auth_failed:
+    'The audience API refused our credentials. Check them on the Channels tab.',
+  source_error: 'The audience API returned an error.',
+  invalid_audience: 'The audience is not valid.',
+  invalid_campaign: 'The campaign is not valid.',
+  not_draft: 'Only a draft campaign can be edited. Reload to see its state.',
+  mapping_mismatch:
+    'The variables do not match the numbered placeholders in the approved text.',
+  channel_immutable: 'A template cannot change its channel.',
+  invalid_settings: 'These settings are not allowed for this channel.',
+  channel_unavailable: 'This channel is not available.',
+  test_send_limit: 'Test send limit reached. Try again in an hour.',
+  too_many_inputs: 'Too many different entries at once. Paste at most 200.',
+  source_is_http:
+    'The audience source is already an HTTP API, so this sync action does not apply.',
+  source_protocol_error: 'The audience API answered in an unexpected format.',
+  too_many_requests: 'Too many requests. Wait a moment and try again.',
+  invalid_body: 'The request was not valid. Check the fields and try again.',
+  invalid_query: 'The request filters were not valid.',
+  invalid_json: 'The request could not be read.',
+  not_configured: 'This is not set up yet.',
+  freeze_lock_lost:
+    'Freezing was interrupted by another change. Try freezing again.',
+  secret_required: 'Enter the secret again to save these changes.',
+  invalid_profile_id: 'That student id is not valid.',
+  marketing_unavailable:
+    'The marketing service is not running or cannot be reached. Try again in a moment.',
+  marketing_timeout:
+    'The marketing service took too long. The action may still have happened; reload to check.',
+  core_timeout:
+    'The server took too long. The action may still have happened; reload to check.',
+  internal: 'The server hit an unexpected error. Try again in a moment.',
+  invalid_project: 'This project could not be found.',
+  method_not_allowed: 'This action is not supported.',
+  network_error: 'Could not reach the server',
+  use_start:
+    'A draft journey is turned on with Start, which checks its templates first.',
+  journey_unconfirmed:
+    'Confirm the guessed trigger and goal events of this journey first.',
+  unknown_variant: 'That state has no message in this journey step.',
+  not_xlsx: 'The file is not a valid Excel workbook.',
+  file_too_large: 'The file is too large. The limit is 512 KiB.',
+  too_many_rows: 'The file has too many rows.',
+  missing_column: 'The file is missing a required column.',
+  malformed_csv: 'The CSV file could not be read.',
+};
+
+const HTTP_CODE = /^http_(\d+)$/;
+
+export function labelErrorCode(code: string): string {
+  const known = ERROR_LABELS[code];
+  if (known) {
+    return known;
+  }
+  const status = HTTP_CODE.exec(code)?.[1];
+  return status ? `The server answered with an error (${status}).` : code;
+}

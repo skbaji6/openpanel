@@ -83,6 +83,12 @@ export default function SidebarProjectMenu({
         icon={WorkflowIcon}
         label="Integrations"
       />
+      <SidebarLink
+        exact={false}
+        href={'/marketing'}
+        icon={WorkflowIcon}
+        label="Marketing"
+      />
       <SidebarLink href={'..'} icon={UndoDotIcon} label="Back to workspace" />
     </>
   );

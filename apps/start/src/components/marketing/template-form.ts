@@ -1,0 +1,339 @@
+import type {
+  ProviderTemplateChannel,
+  PushTemplateInput,
+  TemplateInput,
+} from './campaign-contract';
+import { MAX_BODY_LENGTH, MAX_SUBJECT_LENGTH } from './contract';
+
+const FLOW_ID = /^[A-Za-z0-9]{1,64}$/;
+const SENDER_ID = /^[A-Z]{6}$/;
+const TEMPLATE_NAME = /^[a-z0-9_]{1,512}$/;
+const NAMESPACE = /^[A-Za-z0-9_-]{1,128}$/;
+const LANGUAGE = /^[a-z]{2,3}(_[A-Z]{2})?$/;
+const INTEGRATED_NUMBER = /^[0-9]{8,15}$/;
+const SMS_SLOT = /^[A-Za-z][A-Za-z0-9_]{0,29}$/;
+const WHATSAPP_SLOT = /^(header|body|button)_[1-9][0-9]?$/;
+const BODY_SLOT = /^body_([1-9][0-9]?)$/;
+const NUMBERED_PLACEHOLDER = /\{\{(\d+)\}\}/g;
+const CANONICAL_NUMBER = /^[1-9][0-9]?$/;
+const ANY_PLACEHOLDER = /\{\{([^{}]*)\}\}/g;
+const PROFILE_PLACEHOLDER = /^profile\.([A-Za-z0-9_]+)$/;
+const MAX_VARIABLES = 20;
+const MAX_VALUE_LENGTH = 500;
+const MAX_APPROVED_TEXT_LENGTH = 4096;
+const MAX_DISPLAY_NAME_LENGTH = 200;
+const MAPPING_MESSAGE =
+  'Every {{1}}, {{2}}... in the approved text needs a body_1, body_2... variable and the other way round';
+
+export interface FormVariable {
+  id?: string;
+  slot: string;
+  value: string;
+}
+export type TemplateForm = Omit<TemplateInput, 'variables'> & {
+  variables: FormVariable[];
+};
+
+let rowCounter = 0;
+const newRowId = () => {
+  rowCounter += 1;
+  return `row-${rowCounter}`;
+};
+
+// Stable React keys: the slot is editable, so it cannot be the key.
+export function withRowIds(variables: FormVariable[]): FormVariable[] {
+  return variables.map((v) => ({ ...v, id: v.id ?? newRowId() }));
+}
+
+function firstFreeSlot(prefix: string, variables: FormVariable[]): string {
+  const taken = new Set(variables.map((v) => v.slot));
+  let n = 1;
+  while (taken.has(`${prefix}${n}`)) {
+    n += 1;
+  }
+  return `${prefix}${n}`;
+}
+
+export const nextSlot = (
+  kind: 'header' | 'button',
+  variables: FormVariable[]
+) => firstFreeSlot(`${kind}_`, variables);
+
+export const nextSmsSlot = (variables: FormVariable[]) =>
+  firstFreeSlot('var', variables);
+
+export interface TemplateProblem {
+  path: string;
+  message: string;
+}
+
+export interface PushTemplateForm {
+  channel: 'push';
+  displayName: string;
+  category: PushTemplateInput['category'];
+  content: { subject: string; body: string };
+}
+
+export function emptyTemplate(channel: 'push'): PushTemplateForm;
+export function emptyTemplate(channel: ProviderTemplateChannel): TemplateForm;
+export function emptyTemplate(
+  channel: ProviderTemplateChannel | 'push'
+): TemplateForm | PushTemplateForm {
+  if (channel === 'push') {
+    return {
+      channel,
+      displayName: '',
+      category: 'promotional',
+      content: { subject: '', body: '' },
+    };
+  }
+  const providerRef =
+    channel === 'sms'
+      ? { flowId: '' }
+      : { templateName: '', namespace: '', language: 'en' };
+  return {
+    channel,
+    displayName: '',
+    category: 'promotional',
+    providerRef,
+    approvedText: '',
+    variables: [],
+  };
+}
+
+export function whatsappSlotsFor(approvedText: string): string[] {
+  const numbers = new Set(
+    [...approvedText.matchAll(NUMBERED_PLACEHOLDER)].map((m) => Number(m[1]))
+  );
+  return [...numbers].sort((a, b) => a - b).map((n) => `body_${n}`);
+}
+
+// Keeps the values already typed for body slots that still exist; header and button rows stay as they are.
+export function syncWhatsappVariables(
+  approvedText: string,
+  current: FormVariable[]
+): FormVariable[] {
+  const existing = new Map(current.map((v) => [v.slot, v]));
+  const generated = whatsappSlotsFor(approvedText).map((slot) => ({
+    id: existing.get(slot)?.id ?? newRowId(),
+    slot,
+    value: existing.get(slot)?.value ?? '',
+  }));
+  return [...generated, ...current.filter((v) => !BODY_SLOT.test(v.slot))];
+}
+
+export function traitsOf(variables: FormVariable[]): string[] {
+  const traits = new Set<string>();
+  for (const variable of variables) {
+    for (const match of variable.value.matchAll(ANY_PLACEHOLDER)) {
+      const trait = PROFILE_PLACEHOLDER.exec((match[1] ?? '').trim())?.[1];
+      if (trait) {
+        traits.add(trait);
+      }
+    }
+  }
+  return [...traits];
+}
+
+function refOf(input: TemplateForm): Record<string, string | undefined> {
+  return input.providerRef as Record<string, string | undefined>;
+}
+
+function providerProblems(input: TemplateForm): TemplateProblem[] {
+  const ref = refOf(input);
+  const problems: TemplateProblem[] = [];
+  const check = (
+    key: string,
+    pattern: RegExp,
+    message: string,
+    optional = false
+  ) => {
+    const value = ref[key] ?? '';
+    if (optional && value === '') {
+      return;
+    }
+    if (!pattern.test(value)) {
+      problems.push({ path: `providerRef.${key}`, message });
+    }
+  };
+  if (input.channel === 'sms') {
+    check('flowId', FLOW_ID, 'Flow ID is letters and digits only');
+    check('senderId', SENDER_ID, 'Sender ID is six capital letters', true);
+    return problems;
+  }
+  check(
+    'templateName',
+    TEMPLATE_NAME,
+    'Template name is lower-case letters, digits and underscores'
+  );
+  check('namespace', NAMESPACE, 'Namespace is letters, digits, - and _');
+  check('language', LANGUAGE, 'Language is a code such as en or en_US');
+  check(
+    'integratedNumber',
+    INTEGRATED_NUMBER,
+    'Integrated number is 8 to 15 digits',
+    true
+  );
+  return problems;
+}
+
+function mappingMatches(input: TemplateForm): boolean {
+  const numbers = [...input.approvedText.matchAll(NUMBERED_PLACEHOLDER)].map(
+    (m) => m[1] ?? ''
+  );
+  if (!numbers.every((n) => CANONICAL_NUMBER.test(n))) {
+    return false;
+  }
+  const placeholders = new Set(numbers.map(Number));
+  const slots = new Set(
+    input.variables.flatMap((v) => {
+      const n = BODY_SLOT.exec(v.slot)?.[1];
+      return n ? [Number(n)] : [];
+    })
+  );
+  return (
+    placeholders.size === slots.size &&
+    [...placeholders].every((n) => slots.has(n))
+  );
+}
+
+function variableProblems(input: TemplateForm): TemplateProblem[] {
+  const problems: TemplateProblem[] = [];
+  const slotPattern = input.channel === 'sms' ? SMS_SLOT : WHATSAPP_SLOT;
+  const seen = new Set<string>();
+  for (const [index, variable] of input.variables.entries()) {
+    const slotPath = `variables.${index}.slot`;
+    const valuePath = `variables.${index}.value`;
+    if (!slotPattern.test(variable.slot)) {
+      problems.push({
+        path: slotPath,
+        message: `"${variable.slot}" is not a valid variable name`,
+      });
+    } else if (seen.has(variable.slot)) {
+      problems.push({
+        path: slotPath,
+        message: `"${variable.slot}" is used twice`,
+      });
+    }
+    seen.add(variable.slot);
+    const onlyProfile = [...variable.value.matchAll(ANY_PLACEHOLDER)].every(
+      (m) => PROFILE_PLACEHOLDER.test((m[1] ?? '').trim())
+    );
+    if (!onlyProfile) {
+      problems.push({
+        path: valuePath,
+        message: 'Use only {{profile.<trait>}} placeholders and plain text',
+      });
+    }
+    if (variable.value.length > MAX_VALUE_LENGTH) {
+      problems.push({
+        path: valuePath,
+        message: `At most ${MAX_VALUE_LENGTH} characters`,
+      });
+    }
+  }
+  return problems;
+}
+
+function nameProblems(displayName: string): TemplateProblem[] {
+  const nameLength = displayName.trim().length;
+  if (nameLength > 0 && nameLength <= MAX_DISPLAY_NAME_LENGTH) {
+    return [];
+  }
+  return [
+    {
+      path: 'displayName',
+      message: `Name is required, at most ${MAX_DISPLAY_NAME_LENGTH} characters`,
+    },
+  ];
+}
+
+function pushProblems(input: PushTemplateForm): TemplateProblem[] {
+  const problems = nameProblems(input.displayName);
+  const bodyLength = input.content.body.trim().length;
+  if (bodyLength === 0 || input.content.body.length > MAX_BODY_LENGTH) {
+    problems.push({
+      path: 'content.body',
+      message: `Body is required, at most ${MAX_BODY_LENGTH} characters`,
+    });
+  }
+  if (input.content.subject.length > MAX_SUBJECT_LENGTH) {
+    problems.push({
+      path: 'content.subject',
+      message: `Title is at most ${MAX_SUBJECT_LENGTH} characters`,
+    });
+  }
+  return problems;
+}
+
+// Same {{profile.<trait>}} placeholders the journey preview renders.
+export function pushTraitsOf(content: {
+  subject?: string;
+  body: string;
+}): string[] {
+  const traits = new Set<string>();
+  for (const text of [content.subject ?? '', content.body]) {
+    for (const match of text.matchAll(ANY_PLACEHOLDER)) {
+      const trait = PROFILE_PLACEHOLDER.exec((match[1] ?? '').trim())?.[1];
+      if (trait) {
+        traits.add(trait);
+      }
+    }
+  }
+  return [...traits];
+}
+
+export function templateProblems(
+  input: TemplateForm | PushTemplateForm
+): TemplateProblem[] {
+  if (input.channel === 'push') {
+    return pushProblems(input);
+  }
+  const problems = nameProblems(input.displayName);
+  const textLength = input.approvedText.length;
+  if (textLength === 0 || textLength > MAX_APPROVED_TEXT_LENGTH) {
+    problems.push({
+      path: 'approvedText',
+      message: `Approved text is required, at most ${MAX_APPROVED_TEXT_LENGTH} characters`,
+    });
+  }
+  problems.push(...providerProblems(input));
+  if (input.variables.length > MAX_VARIABLES) {
+    problems.push({
+      path: 'variables',
+      message: `At most ${MAX_VARIABLES} variables`,
+    });
+  }
+  problems.push(...variableProblems(input));
+  if (input.channel === 'whatsapp' && !mappingMatches(input)) {
+    problems.push({ path: 'approvedText', message: MAPPING_MESSAGE });
+  }
+  return problems;
+}
+
+export function toTemplateBody(form: PushTemplateForm): PushTemplateInput;
+export function toTemplateBody(form: TemplateForm): TemplateInput;
+export function toTemplateBody(
+  form: TemplateForm | PushTemplateForm
+): TemplateInput | PushTemplateInput {
+  if (form.channel === 'push') {
+    const subject = form.content.subject.trim();
+    return {
+      channel: 'push',
+      displayName: form.displayName.trim(),
+      category: form.category,
+      content: { ...(subject ? { subject } : {}), body: form.content.body },
+    };
+  }
+  const kept = Object.fromEntries(
+    Object.entries(refOf(form)).filter(
+      ([, value]) => value !== undefined && value !== ''
+    )
+  );
+  return {
+    ...form,
+    displayName: form.displayName.trim(),
+    variables: form.variables.map(({ slot, value }) => ({ slot, value })),
+    providerRef: kept as TemplateInput['providerRef'],
+  };
+}

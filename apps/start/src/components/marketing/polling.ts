@@ -1,0 +1,2 @@
+export const CAMPAIGN_POLL_MS = 3000;
+export const JOURNEY_TEST_SEND_POLL_MS = 3000;

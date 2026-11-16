@@ -1,0 +1,686 @@
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  spyOn,
+} from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { encryptCredential } from '@openpanel/shared/server';
+import { z } from 'zod';
+import {
+  type LookupChannel,
+  type LookupEntry,
+  MAX_LOOKUP_IDS,
+} from '../audience/contract';
+import {
+  SourceAuthError,
+  SourceProtocolError,
+  SourceUnavailableError,
+} from '../audience/errors';
+import type { AudienceSource } from '../audience/source';
+import { registerAdapter } from '../channels/registry';
+import type {
+  ChannelAdapter,
+  ChannelId,
+  Recipient,
+  RenderedMessage,
+} from '../channels/types';
+import type { MarketingConfig } from '../config';
+import { sql } from '../db/client';
+import { migrate } from '../db/migrate';
+import { resetMarketingTables } from '../db/test-helpers';
+import type { RuleDefinition } from '../rules/rule.schema';
+import { filterLiveTokens, recordDeadTokens } from './dead-tokens';
+import { createEngine } from './engine';
+import { runTick } from './ticker';
+
+const NOW = new Date('2026-10-22T12:00:00.000Z');
+const HOUR = 3600;
+const DUE = new Date(NOW.getTime() - 10 * 60_000);
+const HTTP_PROJECT = 'project-http';
+const STORED_PROJECT = 'project-stored';
+const ENCRYPTION_KEY = 'a'.repeat(64);
+const LOOKED_UP_EMAIL = 'looked-up@example.test';
+const SOURCE_BACKOFF_MS = 30_000;
+
+const CFG: MarketingConfig = {
+  databaseUrl: '',
+  redisUrl: '',
+  encryptionKey: ENCRYPTION_KEY,
+  proxySecret: '',
+  publicUrl: 'https://marketing.test',
+  port: 4100,
+  trustProxy: false,
+  graceSeconds: 300,
+  maxLag: 1000,
+  tickMs: 5000,
+  leaseSeconds: 120,
+  retentionDays: 30,
+  claimBatch: 200,
+  sendConcurrency: 10,
+  campaignConcurrency: 2,
+  dbPool: 10,
+  sourceConcurrency: 4,
+  lookupWindowMs: 0,
+  maxLatenessSeconds: 86_400,
+  confirmThreshold: 5000,
+  webhookAllowHosts: [],
+  kafka: { brokers: [], clientId: '', topic: '', groupId: '', ssl: false },
+};
+
+let clock = NOW;
+let onLookup: () => void = () => undefined;
+const engine = createEngine({ sql, now: () => clock });
+let sends: { msg: RenderedMessage; to: Recipient; projectId: string }[] = [];
+let lookups: { ids: string[]; channel: LookupChannel }[] = [];
+let answer: (id: string) => LookupEntry = (id) => ({
+  id,
+  status: 'ok',
+  email: LOOKED_UP_EMAIL,
+  traits: { firstName: 'Ada' },
+});
+let lookupError: Error | null = null;
+// Null fails every channel's lookup; otherwise only this one's.
+let failingChannel: LookupChannel | null = null;
+let invalidTokens: string[] | undefined;
+let errorLog: Mock<typeof console.error>;
+
+function unused(): never {
+  throw new Error('not used by the ticker');
+}
+
+const fakeSource: AudienceSource = {
+  schema: unused,
+  dimensionValues: unused,
+  count: unused,
+  members: unused,
+  explain: unused,
+  resolve: unused,
+  lookup(ids, channel) {
+    lookups.push({ ids, channel });
+    onLookup();
+    if (
+      lookupError &&
+      (failingChannel === null || channel === failingChannel)
+    ) {
+      return Promise.reject(lookupError);
+    }
+    return Promise.resolve(ids.map((id) => answer(id)));
+  },
+};
+
+const sources = {
+  forProject: (projectId: string) =>
+    Promise.resolve(projectId === HTTP_PROJECT ? fakeSource : null),
+};
+
+function capturingAdapter(id: ChannelId): ChannelAdapter<{ secret: string }> {
+  return {
+    id,
+    configSchema: z.object({ secret: z.string() }),
+    send(msg, to) {
+      sends.push({ msg, to, projectId: msg.meta.projectId });
+      return Promise.resolve({ ok: true, invalidTokens });
+    },
+  };
+}
+
+function tick(cfg: MarketingConfig = CFG) {
+  return runTick({
+    sql,
+    engine,
+    now: () => clock,
+    cfg,
+    renderUnsubscribeUrl: () => 'https://marketing.test/u',
+    logger: { warn: () => undefined },
+    sources,
+  });
+}
+
+function rule(channel: ChannelId = 'email'): RuleDefinition {
+  return {
+    name: 'test rule',
+    trigger: { event: 'purchase' },
+    goal: { kind: 'event', event: 'opened' },
+    steps: [
+      {
+        delaySeconds: HOUR,
+        channel,
+        template: { subject: 'Hi {{profile.firstName}}', body: 'one' },
+      },
+    ],
+    reentry: { enabled: false, cooldownSeconds: 0 },
+    allowedEventProps: [],
+  };
+}
+
+async function enroll(
+  opts: {
+    projectId?: string;
+    profileId?: string;
+    channel?: ChannelId;
+    dueAt?: Date;
+  } = {}
+): Promise<string> {
+  const projectId = opts.projectId ?? HTTP_PROJECT;
+  const definition = rule(opts.channel);
+  const ruleId = randomUUID();
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
+     VALUES ($1::uuid, $2, $3, 'active', $4::jsonb)`,
+    ruleId,
+    projectId,
+    definition.name,
+    JSON.stringify(definition)
+  );
+  const id = randomUUID();
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+     VALUES ($1::uuid, $2, $3::uuid, $4::jsonb, $5, 'active', $6::timestamptz)`,
+    id,
+    projectId,
+    ruleId,
+    JSON.stringify(definition),
+    opts.profileId ?? 'u1',
+    new Date(DUE.getTime() - HOUR * 1000).toISOString()
+  );
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status, attempt)
+     VALUES ($1::uuid, 0, $2::timestamptz, 'pending', 0)`,
+    id,
+    (opts.dueAt ?? DUE).toISOString()
+  );
+  return id;
+}
+
+async function enrollMany(definition: RuleDefinition, total: number) {
+  const ruleId = randomUUID();
+  await sql.$executeRawUnsafe(
+    `INSERT INTO marketing.rules (id, project_id, name, status, definition)
+     VALUES ($1::uuid, $2, $3, 'active', $4::jsonb)`,
+    ruleId,
+    HTTP_PROJECT,
+    definition.name,
+    JSON.stringify(definition)
+  );
+  await sql.$executeRawUnsafe(
+    `WITH e AS (
+       INSERT INTO marketing.enrollments (id, project_id, rule_id, rule_snapshot, profile_id, status, trigger_time)
+       SELECT gen_random_uuid(), $1, $2::uuid, $3::jsonb, 'p' || g, 'active', $4::timestamptz - interval '1 hour'
+       FROM generate_series(1, $5::int) g
+       RETURNING id)
+     INSERT INTO marketing.steps (enrollment_id, step_index, due_at, status)
+     SELECT id, 0, $4::timestamptz, 'pending' FROM e`,
+    HTTP_PROJECT,
+    ruleId,
+    JSON.stringify(definition),
+    DUE.toISOString(),
+    total
+  );
+}
+
+async function resetSteps() {
+  await sql.$executeRawUnsafe(
+    'TRUNCATE marketing.steps, marketing.enrollments, marketing.rules, marketing.send_ledger CASCADE'
+  );
+}
+
+interface StepRow {
+  status: string;
+  attempt: number;
+  due_at: Date;
+  outcome: { reason?: string } | null;
+}
+
+async function stepOf(enrollmentId: string): Promise<StepRow | undefined> {
+  const [row] = await sql.$queryRawUnsafe<StepRow[]>(
+    'SELECT status, attempt, due_at, outcome FROM marketing.steps WHERE enrollment_id = $1::uuid',
+    enrollmentId
+  );
+  return row;
+}
+
+async function sourceStatus(): Promise<string | undefined> {
+  const [row] = await sql.$queryRawUnsafe<{ status: string }[]>(
+    'SELECT status FROM marketing.audience_sources WHERE project_id = $1',
+    HTTP_PROJECT
+  );
+  return row?.status;
+}
+
+async function count(table: string): Promise<number> {
+  const [row] = await sql.$queryRawUnsafe<{ n: number }[]>(
+    `SELECT count(*)::int AS n FROM marketing.${table}`
+  );
+  return row?.n ?? 0;
+}
+
+describe('runTick with an http audience source', () => {
+  beforeAll(async () => {
+    await migrate();
+  });
+  beforeEach(async () => {
+    sends = [];
+    lookups = [];
+    lookupError = null;
+    failingChannel = null;
+    invalidTokens = undefined;
+    clock = NOW;
+    onLookup = () => undefined;
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      email: LOOKED_UP_EMAIL,
+      traits: { firstName: 'Ada' },
+    });
+    errorLog?.mockRestore();
+    errorLog = spyOn(console, 'error').mockImplementation(() => undefined);
+    await resetMarketingTables();
+    await sql.$executeRawUnsafe(
+      'INSERT INTO marketing.consumer_state (id, lag, updated_at) VALUES (1, 0, $1::timestamptz)',
+      NOW.toISOString()
+    );
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.audience_sources (project_id, kind, base_url, key_id, secret_encrypted)
+       VALUES ($1, 'http', 'https://owner.test', 'k1', 'unused')`,
+      HTTP_PROJECT
+    );
+    for (const channel of ['email', 'webhook', 'push'] as const) {
+      registerAdapter(capturingAdapter(channel));
+      for (const projectId of [HTTP_PROJECT, STORED_PROJECT]) {
+        await sql.$executeRawUnsafe(
+          'INSERT INTO marketing.channel_configs (project_id, channel, config_encrypted) VALUES ($1, $2, $3)',
+          projectId,
+          channel,
+          encryptCredential(ENCRYPTION_KEY, JSON.stringify({ secret: 's' }))
+        );
+      }
+    }
+  });
+  afterAll(async () => {
+    errorLog?.mockRestore();
+    await resetMarketingTables();
+    await sql.$disconnect();
+  });
+
+  it('delivers through lookup without reading marketing contacts', async () => {
+    const enrollmentId = await enroll();
+    expect(await tick()).toMatchObject({ sent: 1 });
+    expect(await count('contacts')).toBe(0);
+    expect(await count('devices')).toBe(0);
+    expect(lookups).toEqual([{ ids: ['u1'], channel: 'email' }]);
+    expect(sends[0]?.to.email).toBe(LOOKED_UP_EMAIL);
+    expect(sends[0]?.msg.subject).toBe('Hi Ada');
+    expect((await stepOf(enrollmentId))?.status).toBe('sent');
+    expect(await sourceStatus()).toBe('ok');
+  });
+
+  it("an http project's invalid token is hashed, not stored, and not deleted from devices", async () => {
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      devices: [
+        { token: 'dead-token', platform: 'android' },
+        { token: 'live-token', platform: 'android' },
+      ],
+    });
+    invalidTokens = ['dead-token'];
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.devices (project_id, profile_id, token, platform)
+       VALUES ($1, 'u1', 'dead-token', 'android')`,
+      HTTP_PROJECT
+    );
+    await enroll({ channel: 'push' });
+    expect(await tick()).toMatchObject({ sent: 1 });
+    expect(await count('devices')).toBe(1);
+    const rows = await sql.$queryRawUnsafe<{ token_hash: Uint8Array }[]>(
+      'SELECT token_hash FROM marketing.dead_tokens'
+    );
+    expect(rows).toHaveLength(1);
+    expect(
+      Buffer.from(rows[0]?.token_hash ?? []).equals(Buffer.from('dead-token'))
+    ).toBe(false);
+    expect(
+      await filterLiveTokens(
+        sql,
+        HTTP_PROJECT,
+        ['dead-token', 'live-token'],
+        ENCRYPTION_KEY
+      )
+    ).toEqual(['live-token']);
+  });
+
+  it('known dead tokens are not sent, and a step with only dead tokens is skipped', async () => {
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      devices: [
+        { token: 'dead-a', platform: 'android' },
+        { token: 'live-b', platform: 'android' },
+      ],
+    });
+    await recordDeadTokens(sql, HTTP_PROJECT, ['dead-a'], ENCRYPTION_KEY);
+    await enroll({ channel: 'push' });
+    await tick();
+    expect(sends[0]?.to.deviceTokens).toEqual(['live-b']);
+
+    await recordDeadTokens(sql, HTTP_PROJECT, ['live-b'], ENCRYPTION_KEY);
+    sends = [];
+    const skipped = await enroll({ channel: 'push', profileId: 'u2' });
+    await tick();
+    expect(sends).toHaveLength(0);
+    expect((await stepOf(skipped))?.outcome).toEqual({
+      reason: 'unreachable:no_live_token',
+    });
+  });
+
+  it('a step later than the max lateness is skipped as expired and is not looked up', async () => {
+    const late = new Date(NOW.getTime() - (CFG.maxLatenessSeconds + 1) * 1000);
+    const stored = await enroll({ projectId: STORED_PROJECT, dueAt: late });
+    const http = await enroll({ dueAt: late });
+    expect(await tick()).toMatchObject({ skipped: 2, sent: 0 });
+    expect(lookups).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    for (const id of [stored, http]) {
+      const step = await stepOf(id);
+      expect(step?.status).toBe('skipped');
+      expect(step?.outcome).toEqual({ reason: 'expired' });
+    }
+  });
+
+  it('a step 1 second inside the limit is sent', async () => {
+    const inside = new Date(
+      NOW.getTime() - (CFG.maxLatenessSeconds - 1) * 1000
+    );
+    const exact = new Date(NOW.getTime() - CFG.maxLatenessSeconds * 1000);
+    const a = await enroll({ dueAt: inside });
+    const b = await enroll({ dueAt: exact, profileId: 'u2' });
+    expect(await tick()).toMatchObject({ sent: 2 });
+    expect((await stepOf(a))?.status).toBe('sent');
+    expect((await stepOf(b))?.status).toBe('sent');
+  });
+
+  it('skips not_found with reason not_found', async () => {
+    answer = (id) => ({ id, status: 'not_found' });
+    const enrollmentId = await enroll();
+    expect(await tick()).toMatchObject({ skipped: 1 });
+    expect(sends).toHaveLength(0);
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('skipped');
+    expect(step?.outcome).toEqual({ reason: 'not_found' });
+  });
+
+  it('skips suppressed', async () => {
+    answer = (id) => ({ id, status: 'suppressed' });
+    const enrollmentId = await enroll();
+    await tick();
+    expect(sends).toHaveLength(0);
+    expect((await stepOf(enrollmentId))?.outcome).toEqual({
+      reason: 'suppressed',
+    });
+  });
+
+  it('skips unreachable with its reason', async () => {
+    answer = (id) => ({ id, status: 'unreachable', reason: 'opted_out' });
+    const enrollmentId = await enroll();
+    await tick();
+    expect(sends).toHaveLength(0);
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('skipped');
+    expect(step?.outcome).toEqual({ reason: 'unreachable:opted_out' });
+  });
+
+  it('a webhook step uses channel none', async () => {
+    const enrollmentId = await enroll({ channel: 'webhook' });
+    await tick();
+    expect(lookups).toEqual([{ ids: ['u1'], channel: 'none' }]);
+    expect(sends[0]?.to.attributes).toEqual({ firstName: 'Ada' });
+    expect((await stepOf(enrollmentId))?.status).toBe('sent');
+  });
+
+  it('a stored project in the same tick still uses its contact rows', async () => {
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.contacts (project_id, profile_id, email, attributes)
+       VALUES ($1, 'u1', 'stored@example.test', '{"firstName":"Grace"}'::jsonb)`,
+      STORED_PROJECT
+    );
+    const httpStep = await enroll();
+    const storedStep = await enroll({ projectId: STORED_PROJECT });
+    expect(await tick()).toMatchObject({ sent: 2 });
+    expect(lookups).toHaveLength(1);
+    const stored = sends.find((send) => send.projectId === STORED_PROJECT);
+    const http = sends.find((send) => send.projectId === HTTP_PROJECT);
+    expect(stored?.to.email).toBe('stored@example.test');
+    expect(stored?.msg.subject).toBe('Hi Grace');
+    expect(http?.to.email).toBe(LOOKED_UP_EMAIL);
+    expect((await stepOf(httpStep))?.status).toBe('sent');
+    expect((await stepOf(storedStep))?.status).toBe('sent');
+  });
+
+  it('when lookup throws SourceUnavailableError the claimed steps return to pending, none is marked failed and the attempt count is not increased', async () => {
+    lookupError = new SourceUnavailableError('breaker_open');
+    const first = await enroll();
+    const second = await enroll({ profileId: 'u2' });
+    expect(await tick()).toEqual({
+      sent: 0,
+      skipped: 0,
+      postponed: 2,
+      failed: 0,
+    });
+    expect(sends).toHaveLength(0);
+    for (const id of [first, second]) {
+      const step = await stepOf(id);
+      expect(step?.status).toBe('pending');
+      expect(step?.attempt).toBe(0);
+      expect(step?.due_at.getTime()).toBe(NOW.getTime() + SOURCE_BACKOFF_MS);
+    }
+    expect(await sourceStatus()).toBe('unknown');
+  });
+
+  it("SourceAuthError sets the project's source status to source_auth_failed and leaves steps pending", async () => {
+    lookupError = new SourceAuthError('lookup: 401');
+    const enrollmentId = await enroll();
+    await tick();
+    expect(await sourceStatus()).toBe('source_auth_failed');
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('pending');
+    expect(step?.attempt).toBe(0);
+    expect(sends).toHaveLength(0);
+  });
+
+  it('one lookup call serves many steps of one project', async () => {
+    for (const profileId of ['u1', 'u2', 'u3']) {
+      await enroll({ profileId });
+    }
+    expect(await tick()).toMatchObject({ sent: 3 });
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0]?.ids.sort()).toEqual(['u1', 'u2', 'u3']);
+  });
+
+  it('1,200 due steps across two states use the same number of lookup calls as without variants', async () => {
+    const DUE_STEPS = 1200;
+    const plain = rule('webhook');
+    const withVariants: RuleDefinition = {
+      ...plain,
+      steps: [
+        {
+          delaySeconds: HOUR,
+          channel: 'webhook',
+          variants: { TS: { body: 'ts' }, AP: { body: 'ap' } },
+        },
+      ],
+    };
+    answer = (id) => ({
+      id,
+      status: 'ok',
+      traits: { state: Number(id.slice(1)) % 2 === 0 ? 'TS' : 'AP' },
+    });
+    const lookupsPerRun: number[] = [];
+    for (const definition of [plain, withVariants]) {
+      await resetSteps();
+      lookups = [];
+      await enrollMany(definition, DUE_STEPS);
+      expect(
+        await tick({ ...CFG, claimBatch: DUE_STEPS, sendConcurrency: 20 })
+      ).toMatchObject({ sent: DUE_STEPS, skipped: 0 });
+      lookupsPerRun.push(lookups.length);
+    }
+    const expected = Math.ceil(DUE_STEPS / MAX_LOOKUP_IDS);
+    expect(lookupsPerRun).toEqual([expected, expected]);
+  }, 300_000);
+
+  it('a lookup that outlasts the lease requeues its steps unsent with the attempt restored', async () => {
+    onLookup = () => {
+      clock = new Date(NOW.getTime() + CFG.leaseSeconds * 1000);
+    };
+    const enrollmentId = await enroll();
+    expect(await tick()).toMatchObject({ sent: 0, postponed: 1, failed: 0 });
+    expect(sends).toHaveLength(0);
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('pending');
+    expect(step?.attempt).toBe(0);
+  });
+
+  it('refills during the window never claim more than claimBatch steps in one tick', async () => {
+    const ids: string[] = [];
+    for (const profileId of ['u1', 'u2', 'u3', 'u4', 'u5']) {
+      ids.push(await enroll({ profileId }));
+    }
+    await tick({ ...CFG, claimBatch: 2, lookupWindowMs: 600 });
+    expect(lookups.flatMap((call) => call.ids)).toHaveLength(2);
+    expect(sends).toHaveLength(2);
+    const pending: number[] = [];
+    for (const id of ids) {
+      const step = await stepOf(id);
+      if (step?.status === 'pending') {
+        pending.push(step.attempt);
+      }
+    }
+    expect(pending).toEqual([0, 0, 0]);
+  });
+
+  it('an unreachable reason that is not a short code is recorded as unknown', async () => {
+    for (const reason of ['student@example.test', 'x'.repeat(65)]) {
+      answer = (id) => ({ id, status: 'unreachable', reason });
+      const enrollmentId = await enroll({ profileId: reason.slice(0, 10) });
+      await tick();
+      expect((await stepOf(enrollmentId))?.outcome).toEqual({
+        reason: 'unreachable:unknown',
+      });
+    }
+    expect(sends).toHaveLength(0);
+  });
+
+  async function tickAt(at: Date) {
+    clock = at;
+    await sql.$executeRawUnsafe(
+      'UPDATE marketing.consumer_state SET updated_at = $1::timestamptz',
+      at.toISOString()
+    );
+    return await tick();
+  }
+
+  it('a step the source deferred past the max lateness is skipped as expired when the source recovers', async () => {
+    lookupError = new SourceProtocolError('lookup: invalid JSON');
+    const enrollmentId = await enroll();
+    const sixHours = 6 * HOUR * 1000;
+    for (let i = 0; i < 4; i++) {
+      await tickAt(new Date(NOW.getTime() + i * sixHours));
+    }
+    lookupError = null;
+    lookups = [];
+    expect(await tickAt(new Date(NOW.getTime() + 4 * sixHours))).toMatchObject({
+      skipped: 1,
+      sent: 0,
+    });
+    expect(sends).toHaveLength(0);
+    expect(lookups).toHaveLength(0);
+    expect((await stepOf(enrollmentId))?.outcome).toEqual({
+      reason: 'expired',
+    });
+  });
+
+  it('a step the source deferred for less than the max lateness is still sent', async () => {
+    lookupError = new SourceUnavailableError('breaker_open');
+    const enrollmentId = await enroll();
+    for (let i = 0; i < 3; i++) {
+      await tickAt(new Date(NOW.getTime() + i * HOUR * 1000));
+    }
+    lookupError = null;
+    expect(
+      await tickAt(new Date(NOW.getTime() + 3 * HOUR * 1000))
+    ).toMatchObject({ sent: 1 });
+    expect((await stepOf(enrollmentId))?.status).toBe('sent');
+  });
+
+  it('one failing channel keeps the project at source_error although another channel looks up fine', async () => {
+    lookupError = new SourceProtocolError('lookup: invalid JSON');
+    for (const failing of ['push', 'email'] as const) {
+      failingChannel = failing;
+      await enroll({ channel: 'email', profileId: `e-${failing}` });
+      await enroll({ channel: 'push', profileId: `p-${failing}` });
+      await tick();
+      expect(await sourceStatus()).toBe('source_error');
+    }
+  });
+
+  it('a tick whose lookups all succeed sets the status back to ok', async () => {
+    await sql.$executeRawUnsafe(
+      "UPDATE marketing.audience_sources SET status = 'source_error'"
+    );
+    await enroll({ channel: 'email' });
+    await enroll({ channel: 'push', profileId: 'u2' });
+    await tick();
+    expect(await sourceStatus()).toBe('ok');
+  });
+
+  it('a throw before the send never stores recipient values in the step outcome', async () => {
+    const storedEmail = 'stored-person@example.test';
+    await sql.$executeRawUnsafe(
+      `INSERT INTO marketing.contacts (project_id, profile_id, email) VALUES ($1, 'u1', $2)`,
+      STORED_PROJECT,
+      storedEmail
+    );
+    const http = await enroll();
+    const stored = await enroll({ projectId: STORED_PROJECT });
+    const throwing = {
+      ...engine,
+      evaluateEnrollment: () =>
+        Promise.reject(
+          new Error(`goal check failed for ${LOOKED_UP_EMAIL} ${storedEmail}`)
+        ),
+    };
+    await runTick({
+      sql,
+      engine: throwing,
+      now: () => clock,
+      cfg: CFG,
+      renderUnsubscribeUrl: () => 'https://marketing.test/u',
+      logger: { warn: () => undefined },
+      sources,
+    });
+    expect(sends).toHaveLength(0);
+    for (const [id, own] of [
+      [http, LOOKED_UP_EMAIL],
+      [stored, storedEmail],
+    ] as const) {
+      const reason = (await stepOf(id))?.outcome?.reason ?? '';
+      expect(reason).toContain('[redacted]');
+      expect(reason).not.toContain(own);
+    }
+  });
+
+  it('a protocol error sets the source status to source_error and leaves steps pending', async () => {
+    lookupError = new SourceProtocolError('lookup: invalid JSON');
+    const enrollmentId = await enroll();
+    await tick();
+    expect(await sourceStatus()).toBe('source_error');
+    const step = await stepOf(enrollmentId);
+    expect(step?.status).toBe('pending');
+    expect(step?.attempt).toBe(0);
+  });
+});

@@ -1,0 +1,680 @@
+{
+  "order": "Member ids ascend compared as text. Dataset ids all have four digits, so numeric order is the same.",
+  "suppression": "Suppressed students are never audience members (count, members, explain); lookup reports them as suppressed.",
+  "counts": [
+    {
+      "name": "all",
+      "filter": {
+        "dimension": "id",
+        "op": "not_in",
+        "values": ["9999"]
+      },
+      "count": 113
+    },
+    {
+      "name": "university_eq",
+      "filter": {
+        "dimension": "university",
+        "op": "eq",
+        "values": [2]
+      },
+      "count": 38
+    },
+    {
+      "name": "course_in_multi",
+      "filter": {
+        "dimension": "course",
+        "op": "in",
+        "values": [11, 12]
+      },
+      "count": 55
+    },
+    {
+      "name": "course_not_in_with_nulls",
+      "filter": {
+        "dimension": "course",
+        "op": "not_in",
+        "values": [11]
+      },
+      "count": 84
+    },
+    {
+      "name": "course_exists",
+      "filter": {
+        "dimension": "course",
+        "op": "exists",
+        "values": []
+      },
+      "count": 108
+    },
+    {
+      "name": "semester_not_in_with_nulls",
+      "filter": {
+        "dimension": "semester",
+        "op": "not_in",
+        "values": [1]
+      },
+      "count": 58
+    },
+    {
+      "name": "semester_gt",
+      "filter": {
+        "dimension": "semester",
+        "op": "gt",
+        "values": [1]
+      },
+      "count": 54
+    },
+    {
+      "name": "signup_between",
+      "filter": {
+        "dimension": "signup_date",
+        "op": "between",
+        "values": ["2025-03-01", "2025-06-30"]
+      },
+      "count": 38
+    },
+    {
+      "name": "signup_lt",
+      "filter": {
+        "dimension": "signup_date",
+        "op": "lt",
+        "values": ["2025-02-15"]
+      },
+      "count": 14
+    },
+    {
+      "name": "purchased",
+      "filter": {
+        "dimension": "purchase_status",
+        "op": "eq",
+        "values": ["PURCHASED"]
+      },
+      "count": 28
+    },
+    {
+      "name": "not_purchased",
+      "filter": {
+        "dimension": "purchase_status",
+        "op": "eq",
+        "values": ["NOT_PURCHASED"]
+      },
+      "count": 85
+    },
+    {
+      "name": "id_in",
+      "filter": {
+        "dimension": "id",
+        "op": "in",
+        "values": ["1001", "1004", "1050", "1120", "9999"]
+      },
+      "count": 3
+    },
+    {
+      "name": "and_or_nested",
+      "filter": {
+        "op": "and",
+        "children": [
+          {
+            "dimension": "university",
+            "op": "in",
+            "values": [1, 3]
+          },
+          {
+            "op": "or",
+            "children": [
+              {
+                "dimension": "course",
+                "op": "eq",
+                "values": [13]
+              },
+              {
+                "dimension": "purchase_status",
+                "op": "eq",
+                "values": ["PURCHASED"]
+              }
+            ]
+          }
+        ]
+      },
+      "count": 38
+    },
+    {
+      "name": "or_and_nested",
+      "filter": {
+        "op": "or",
+        "children": [
+          {
+            "op": "and",
+            "children": [
+              {
+                "dimension": "semester",
+                "op": "eq",
+                "values": [2]
+              },
+              {
+                "dimension": "course",
+                "op": "not_in",
+                "values": [12, 14]
+              }
+            ]
+          },
+          {
+            "dimension": "id",
+            "op": "in",
+            "values": ["1002", "1003"]
+          }
+        ]
+      },
+      "count": 22
+    }
+  ],
+  "pages": [
+    {
+      "name": "all",
+      "filter": {
+        "dimension": "id",
+        "op": "not_in",
+        "values": ["9999"]
+      },
+      "limit": 7,
+      "pages": [
+        ["1001", "1002", "1003", "1005", "1006", "1007", "1008"],
+        ["1009", "1010", "1011", "1012", "1013", "1014", "1015"],
+        ["1016", "1017", "1018", "1019", "1020", "1022", "1023"],
+        ["1024", "1025", "1026", "1027", "1028", "1029", "1030"],
+        ["1031", "1032", "1033", "1034", "1035", "1036", "1037"],
+        ["1039", "1040", "1041", "1042", "1043", "1044", "1045"],
+        ["1046", "1047", "1048", "1049", "1050", "1051", "1052"],
+        ["1053", "1054", "1056", "1057", "1058", "1059", "1060"],
+        ["1061", "1062", "1063", "1064", "1065", "1066", "1067"],
+        ["1068", "1069", "1070", "1071", "1073", "1074", "1075"],
+        ["1076", "1077", "1078", "1079", "1080", "1081", "1082"],
+        ["1083", "1084", "1085", "1086", "1087", "1088", "1090"],
+        ["1091", "1092", "1093", "1094", "1095", "1096", "1097"],
+        ["1098", "1099", "1100", "1101", "1102", "1103", "1104"],
+        ["1105", "1107", "1108", "1109", "1110", "1111", "1112"],
+        ["1113", "1114", "1115", "1116", "1117", "1118", "1119"],
+        ["1120"]
+      ]
+    },
+    {
+      "name": "course_in_multi",
+      "filter": {
+        "dimension": "course",
+        "op": "in",
+        "values": [11, 12]
+      },
+      "limit": 7,
+      "pages": [
+        ["1001", "1002", "1005", "1009", "1010", "1013", "1014"],
+        ["1016", "1017", "1018", "1022", "1025", "1026", "1030"],
+        ["1033", "1034", "1037", "1041", "1042", "1045", "1046"],
+        ["1049", "1050", "1053", "1054", "1057", "1058", "1061"],
+        ["1062", "1065", "1066", "1069", "1070", "1073", "1074"],
+        ["1076", "1077", "1078", "1081", "1082", "1085", "1086"],
+        ["1090", "1093", "1094", "1097", "1101", "1102", "1105"],
+        ["1109", "1110", "1113", "1114", "1117", "1118"]
+      ]
+    },
+    {
+      "name": "and_or_nested",
+      "filter": {
+        "op": "and",
+        "children": [
+          {
+            "dimension": "university",
+            "op": "in",
+            "values": [1, 3]
+          },
+          {
+            "op": "or",
+            "children": [
+              {
+                "dimension": "course",
+                "op": "eq",
+                "values": [13]
+              },
+              {
+                "dimension": "purchase_status",
+                "op": "eq",
+                "values": ["PURCHASED"]
+              }
+            ]
+          }
+        ]
+      },
+      "limit": 7,
+      "pages": [
+        ["1001", "1003", "1007", "1012", "1013", "1015", "1019"],
+        ["1025", "1027", "1028", "1031", "1036", "1037", "1039"],
+        ["1043", "1046", "1049", "1051", "1052", "1060", "1061"],
+        ["1063", "1067", "1073", "1076", "1079", "1084", "1085"],
+        ["1087", "1091", "1097", "1099", "1100", "1103", "1108"],
+        ["1109", "1111", "1115"]
+      ]
+    }
+  ],
+  "explanations": [
+    {
+      "name": "and_or_nested",
+      "filter": {
+        "op": "and",
+        "children": [
+          {
+            "dimension": "university",
+            "op": "in",
+            "values": [1, 3]
+          },
+          {
+            "op": "or",
+            "children": [
+              {
+                "dimension": "course",
+                "op": "eq",
+                "values": [13]
+              },
+              {
+                "dimension": "purchase_status",
+                "op": "eq",
+                "values": ["PURCHASED"]
+              }
+            ]
+          }
+        ]
+      },
+      "id": "1001",
+      "matches": true,
+      "conditions": [
+        {
+          "dimension": "university",
+          "op": "in",
+          "matched": true
+        },
+        {
+          "dimension": "course",
+          "op": "eq",
+          "matched": false
+        },
+        {
+          "dimension": "purchase_status",
+          "op": "eq",
+          "matched": true
+        }
+      ]
+    },
+    {
+      "name": "and_or_nested",
+      "filter": {
+        "op": "and",
+        "children": [
+          {
+            "dimension": "university",
+            "op": "in",
+            "values": [1, 3]
+          },
+          {
+            "op": "or",
+            "children": [
+              {
+                "dimension": "course",
+                "op": "eq",
+                "values": [13]
+              },
+              {
+                "dimension": "purchase_status",
+                "op": "eq",
+                "values": ["PURCHASED"]
+              }
+            ]
+          }
+        ]
+      },
+      "id": "1002",
+      "matches": false,
+      "conditions": [
+        {
+          "dimension": "university",
+          "op": "in",
+          "matched": false
+        },
+        {
+          "dimension": "course",
+          "op": "eq",
+          "matched": false
+        },
+        {
+          "dimension": "purchase_status",
+          "op": "eq",
+          "matched": false
+        }
+      ]
+    },
+    {
+      "name": "and_or_nested",
+      "filter": {
+        "op": "and",
+        "children": [
+          {
+            "dimension": "university",
+            "op": "in",
+            "values": [1, 3]
+          },
+          {
+            "op": "or",
+            "children": [
+              {
+                "dimension": "course",
+                "op": "eq",
+                "values": [13]
+              },
+              {
+                "dimension": "purchase_status",
+                "op": "eq",
+                "values": ["PURCHASED"]
+              }
+            ]
+          }
+        ]
+      },
+      "id": "1003",
+      "matches": true,
+      "conditions": [
+        {
+          "dimension": "university",
+          "op": "in",
+          "matched": true
+        },
+        {
+          "dimension": "course",
+          "op": "eq",
+          "matched": true
+        },
+        {
+          "dimension": "purchase_status",
+          "op": "eq",
+          "matched": false
+        }
+      ]
+    },
+    {
+      "name": "or_and_nested",
+      "filter": {
+        "op": "or",
+        "children": [
+          {
+            "op": "and",
+            "children": [
+              {
+                "dimension": "semester",
+                "op": "eq",
+                "values": [2]
+              },
+              {
+                "dimension": "course",
+                "op": "not_in",
+                "values": [12, 14]
+              }
+            ]
+          },
+          {
+            "dimension": "id",
+            "op": "in",
+            "values": ["1002", "1003"]
+          }
+        ]
+      },
+      "id": "1002",
+      "matches": true,
+      "conditions": [
+        {
+          "dimension": "semester",
+          "op": "eq",
+          "matched": false
+        },
+        {
+          "dimension": "course",
+          "op": "not_in",
+          "matched": false
+        },
+        {
+          "dimension": "id",
+          "op": "in",
+          "matched": true
+        }
+      ]
+    },
+    {
+      "name": "course_in_multi",
+      "filter": {
+        "dimension": "course",
+        "op": "in",
+        "values": [11, 12]
+      },
+      "id": "1016",
+      "matches": true,
+      "conditions": [
+        {
+          "dimension": "course",
+          "op": "in",
+          "matched": true
+        }
+      ]
+    }
+  ],
+  "multiCourse": {
+    "id": "1001",
+    "filter": {
+      "dimension": "course",
+      "op": "in",
+      "values": [11, 12]
+    },
+    "count": 55
+  },
+  "lookups": [
+    {
+      "channel": "email",
+      "ids": ["1001", "1002", "1003", "1005", "1004", "9999"],
+      "entries": [
+        {
+          "id": "1001",
+          "status": "ok"
+        },
+        {
+          "id": "1002",
+          "status": "ok"
+        },
+        {
+          "id": "1003",
+          "status": "unreachable",
+          "reason": "unverified_email"
+        },
+        {
+          "id": "1005",
+          "status": "unreachable",
+          "reason": "no_email"
+        },
+        {
+          "id": "1004",
+          "status": "suppressed"
+        },
+        {
+          "id": "9999",
+          "status": "not_found"
+        }
+      ]
+    },
+    {
+      "channel": "sms",
+      "ids": ["1001", "1003", "1002", "1011", "1004", "9999"],
+      "entries": [
+        {
+          "id": "1001",
+          "status": "ok"
+        },
+        {
+          "id": "1003",
+          "status": "ok"
+        },
+        {
+          "id": "1002",
+          "status": "unreachable",
+          "reason": "no_valid_phone"
+        },
+        {
+          "id": "1011",
+          "status": "unreachable",
+          "reason": "no_valid_phone"
+        },
+        {
+          "id": "1004",
+          "status": "suppressed"
+        },
+        {
+          "id": "9999",
+          "status": "not_found"
+        }
+      ]
+    },
+    {
+      "channel": "whatsapp",
+      "ids": ["1001", "1003", "1002", "1011", "1004", "9999"],
+      "entries": [
+        {
+          "id": "1001",
+          "status": "ok"
+        },
+        {
+          "id": "1003",
+          "status": "ok"
+        },
+        {
+          "id": "1002",
+          "status": "unreachable",
+          "reason": "no_valid_phone"
+        },
+        {
+          "id": "1011",
+          "status": "unreachable",
+          "reason": "no_valid_phone"
+        },
+        {
+          "id": "1004",
+          "status": "suppressed"
+        },
+        {
+          "id": "9999",
+          "status": "not_found"
+        }
+      ]
+    },
+    {
+      "channel": "push",
+      "ids": ["1002", "1003", "1001", "1006", "1004", "9999"],
+      "entries": [
+        {
+          "id": "1002",
+          "status": "ok"
+        },
+        {
+          "id": "1003",
+          "status": "ok"
+        },
+        {
+          "id": "1001",
+          "status": "unreachable",
+          "reason": "no_active_device"
+        },
+        {
+          "id": "1006",
+          "status": "unreachable",
+          "reason": "no_active_device"
+        },
+        {
+          "id": "1004",
+          "status": "suppressed"
+        },
+        {
+          "id": "9999",
+          "status": "not_found"
+        }
+      ]
+    },
+    {
+      "channel": "none",
+      "ids": ["1001", "1002", "1004", "9999"],
+      "entries": [
+        {
+          "id": "1001",
+          "status": "ok"
+        },
+        {
+          "id": "1002",
+          "status": "ok"
+        },
+        {
+          "id": "1004",
+          "status": "suppressed"
+        },
+        {
+          "id": "9999",
+          "status": "not_found"
+        }
+      ]
+    }
+  ],
+  "resolve": {
+    "inputs": [
+      "STUDENT1001@EXAMPLE.TEST",
+      "+91 9000001003",
+      "nobody@example.test"
+    ],
+    "matches": [
+      {
+        "input": "STUDENT1001@EXAMPLE.TEST",
+        "id": "1001"
+      },
+      {
+        "input": "+91 9000001003",
+        "id": "1003"
+      }
+    ],
+    "unmatched": ["nobody@example.test"]
+  },
+  "values": [
+    {
+      "dimension": "university",
+      "q": "BETA",
+      "limit": 5,
+      "values": [
+        {
+          "value": "2",
+          "label": "Beta University"
+        }
+      ]
+    },
+    {
+      "dimension": "course",
+      "q": "",
+      "limit": 10,
+      "values": [
+        {
+          "value": "14",
+          "label": "Dentistry"
+        },
+        {
+          "value": "11",
+          "label": "Medicine"
+        },
+        {
+          "value": "12",
+          "label": "Nursing"
+        },
+        {
+          "value": "13",
+          "label": "Pharmacy"
+        }
+      ]
+    }
+  ]
+}

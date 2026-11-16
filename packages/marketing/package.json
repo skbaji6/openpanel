@@ -1,0 +1,30 @@
+{
+  "name": "@openpanel/marketing",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "start": "bun src/worker.ts",
+    "migrate": "bun src/db/migrate.ts",
+    "test": "bun test --isolate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@openpanel/db": "workspace:*",
+    "@openpanel/redis": "workspace:*",
+    "@openpanel/shared": "workspace:*",
+    "firebase-admin": "14.5.0",
+    "kafkajs": "2.2.4",
+    "nodemailer": "8.0.5",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@openpanel/tsconfig": "workspace:*",
+    "@types/node": "catalog:",
+    "@types/nodemailer": "8.0.0",
+    "bun-types": "1.4.0",
+    "parse5": "7.3.0",
+    "typescript": "catalog:"
+  }
+}

@@ -1,0 +1,111 @@
+name: Marketing plugin
+
+on:
+  pull_request:
+    paths:
+      - "packages/marketing/**"
+      - "apps/start/src/components/marketing/**"
+      - "apps/start/src/routes/**marketing**"
+      - "apps/start/src/components/sidebar-project-menu.tsx"
+      - "docker-compose.marketing.yml"
+      - ".github/workflows/marketing.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketing-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  marketing-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:14-alpine
+        ports:
+          - 23432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: marketing_test
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 23379:6379
+        options: >-
+          --health-cmd "redis-cli ping || exit 1"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:23432/marketing_test
+      REDIS_URL: redis://127.0.0.1:23379
+      KAFKA_BROKERS: 127.0.0.1:23092
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # A service container cannot take a command, and Redpanda must advertise the host port for kafkajs to reconnect to.
+      - name: Start Redpanda
+        run: |
+          docker run -d --name redpanda -p 23092:19092 redpandadata/redpanda:v25.1.4 \
+            redpanda start \
+            --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092 \
+            --advertise-kafka-addr=internal://localhost:9092,external://127.0.0.1:23092 \
+            --smp=1 --memory=1G --mode=dev-container
+          for attempt in $(seq 1 60); do
+            if docker exec redpanda rpk cluster health | grep -q 'Healthy:.*true'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs redpanda
+          exit 1
+
+      - uses: ./.github/actions/setup
+
+      - name: Typecheck
+        run: bun run --filter @openpanel/marketing typecheck
+
+      - name: Test
+        run: bun run --filter @openpanel/marketing test
+
+  dashboard-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      - name: Test the marketing dashboard module
+        working-directory: apps/start
+        run: bunx vitest run src/components/marketing
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the marketing image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packages/marketing/Dockerfile
+          push: false
+          tags: openpanel-marketing:ci

@@ -1,0 +1,89 @@
+# Marketing worker: an OVERRIDE file, never used on its own.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.marketing.yml up -d
+#
+# It targets the self-hosted stack (the docker-compose.yml that `openpanel init` renders from
+# self-hosting/docker-compose.template.yml: op-db, op-kv, op-rp with healthchecks, and op-dashboard).
+# `openpanel init` does not know about it: copy this file next to that docker-compose.yml and add the
+# `-f docker-compose.marketing.yml` by hand on every compose command, including upgrades.
+# The repository's own development docker-compose.yml has no healthchecks and no dashboard service, so
+# in development run the worker with `bun run --filter @openpanel/marketing start` instead.
+#
+# Values are interpolated from the shell and from the .env next to docker-compose.yml, which an
+# `openpanel init` install already has (DATABASE_URL, REDIS_URL, ENCRYPTION_KEY, KAFKA_BROKERS).
+# `${VAR:?...}` marks a required variable: compose refuses to start without it.
+# See packages/marketing/README.md ("Deploy") for every variable.
+
+services:
+  op-marketing:
+    image: ${MARKETING_IMAGE:-openpanel-marketing:local}
+    # Build context is a checkout of this repository. From an install directory set MARKETING_BUILD_CONTEXT to
+    # that checkout, or build/push the image elsewhere and set MARKETING_IMAGE.
+    build:
+      context: ${MARKETING_BUILD_CONTEXT:-.}
+      dockerfile: packages/marketing/Dockerfile
+    # Never pull: this image only exists where it was built.
+    pull_policy: build
+    restart: always
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      # Shared with op-dashboard below; generate with `openssl rand -hex 32`.
+      MARKETING_PROXY_SECRET: ${MARKETING_PROXY_SECRET:?MARKETING_PROXY_SECRET is required}
+      # The public dashboard origin (DASHBOARD_URL): links go to <origin>/marketing/unsubscribe, which the
+      # dashboard forwards to op-marketing.
+      MARKETING_PUBLIC_URL: ${MARKETING_PUBLIC_URL:?MARKETING_PUBLIC_URL is required}
+      MARKETING_PORT: 4100
+      # true: the client IP is the rightmost X-Forwarded-For entry, which the edge proxy (op-proxy) sets and the
+      # dashboard passes on verbatim. Correct only while op-marketing stays unpublished and the dashboard is reached
+      # through that proxy; with false every unsubscribe caller shares the dashboard's address for rate limits.
+      MARKETING_TRUST_PROXY: ${MARKETING_TRUST_PROXY:-true}
+      MARKETING_GRACE_SECONDS: ${MARKETING_GRACE_SECONDS:-300}
+      MARKETING_MAX_LAG: ${MARKETING_MAX_LAG:-1000}
+      MARKETING_TICK_MS: ${MARKETING_TICK_MS:-5000}
+      MARKETING_LEASE_SECONDS: ${MARKETING_LEASE_SECONDS:-120}
+      MARKETING_EVENT_RETENTION_DAYS: ${MARKETING_EVENT_RETENTION_DAYS:-30}
+      MARKETING_CLAIM_BATCH: ${MARKETING_CLAIM_BATCH:-200}
+      MARKETING_SEND_CONCURRENCY: ${MARKETING_SEND_CONCURRENCY:-10}
+      MARKETING_CAMPAIGN_CONCURRENCY: ${MARKETING_CAMPAIGN_CONCURRENCY:-2}
+      # Connections per replica, at least SEND + CAMPAIGN concurrency + 3; the database is shared with op-api and op-worker.
+      MARKETING_DB_POOL: ${MARKETING_DB_POOL:-15}
+      MARKETING_WEBHOOK_ALLOW_HOSTS: ${MARKETING_WEBHOOK_ALLOW_HOSTS:-}
+      MARKETING_KAFKA_GROUP: ${MARKETING_KAFKA_GROUP:-marketing}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-op-rp:9092}
+      KAFKA_EVENTS_TOPIC: ${KAFKA_EVENTS_TOPIC:-events}
+      KAFKA_CLIENT_ID: ${KAFKA_CLIENT_ID:-openpanel-marketing}
+      KAFKA_SSL: ${KAFKA_SSL:-}
+      KAFKA_SSL_CA_PATH: ${KAFKA_SSL_CA_PATH:-}
+      KAFKA_SSL_REJECT_UNAUTHORIZED: ${KAFKA_SSL_REJECT_UNAUTHORIZED:-}
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:-}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-}
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-}
+    # Not published to the host: op-dashboard reaches it over the compose network.
+    expose:
+      - "4100"
+    depends_on:
+      op-db:
+        condition: service_healthy
+      op-kv:
+        condition: service_healthy
+      op-rp:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # Merged into the existing dashboard service. The stock lindesvard/openpanel-dashboard image has no marketing
+  # pages, proxy (/marketing-api/*) or unsubscribe route (/marketing/unsubscribe), so the dashboard is built from this fork.
+  op-dashboard:
+    image: ${MARKETING_DASHBOARD_IMAGE:-openpanel-dashboard-marketing:local}
+    build:
+      context: ${MARKETING_BUILD_CONTEXT:-.}
+      dockerfile: apps/start/Dockerfile
+    pull_policy: build
+    environment:
+      MARKETING_URL: http://op-marketing:4100
+      MARKETING_PROXY_SECRET: ${MARKETING_PROXY_SECRET:?MARKETING_PROXY_SECRET is required}
