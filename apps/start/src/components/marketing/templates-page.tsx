@@ -21,7 +21,7 @@ import { inlineContent } from './step-variants';
 import { formFromRow, TemplateEditor } from './template-editor';
 import { emptyTemplate } from './template-form';
 import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -158,7 +158,8 @@ export function TemplatesPage() {
   }
   if (search.id && linked.error && !linked.data) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description={describeMarketingError(linked.error)}
         icon={MessageSquareTextIcon}
         title={templateLoadErrorTitle(linked.error)}
@@ -203,7 +204,8 @@ export function TemplatesPage() {
 
   if (search.id && linked.data) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description="This template is not edited on this tab yet."
         icon={MessageSquareTextIcon}
         title="Template cannot be edited here"
@@ -242,7 +244,8 @@ export function TemplatesPage() {
       </div>
       {templates.isPending && <FullPageLoadingState />}
       {templates.error && (
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description={describeMarketingError(templates.error)}
           icon={MessageSquareTextIcon}
           title={
@@ -253,7 +256,8 @@ export function TemplatesPage() {
         />
       )}
       {templates.data && rows.length === 0 && (
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description={
             channel === 'push'
               ? 'Write a push title and body here, then pick it in a journey step or a campaign.'

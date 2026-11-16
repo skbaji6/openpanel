@@ -10,7 +10,7 @@ import type { CampaignRow } from './campaign-contract';
 import { CampaignReport } from './campaign-report';
 import type { RuleResult } from './contract';
 import { JourneyReport } from './journey-report';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import {
   Table,
@@ -136,7 +136,8 @@ function JourneyResults({ onOpen }: { onOpen: (result: RuleResult) => void }) {
   }
   if (results.error) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description={describeMarketingError(results.error)}
         icon={BarChart3Icon}
         title="Results are not available"
@@ -145,7 +146,8 @@ function JourneyResults({ onOpen }: { onOpen: (result: RuleResult) => void }) {
   }
   if (results.data.results.length === 0) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description="Create a rule to see how many profiles it messages and how many reach the goal."
         icon={BarChart3Icon}
         title="No results yet"

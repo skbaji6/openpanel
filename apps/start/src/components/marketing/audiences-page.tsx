@@ -12,7 +12,7 @@ import { AudienceEditor } from './audience-editor';
 import { formatCount } from './audience-filter';
 import type { AudienceRow, AudienceSchema } from './campaign-contract';
 import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -231,14 +231,16 @@ export function AudiencesPage() {
       )}
       {audiences.isPending && <FullPageLoadingState />}
       {audiences.error && (
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description={describeMarketingError(audiences.error)}
           icon={UsersIcon}
           title="Audiences are not available"
         />
       )}
       {audiences.data && rows.length === 0 && (
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description={
             notConnected
               ? 'Connect the audience API on the Channels tab first.'

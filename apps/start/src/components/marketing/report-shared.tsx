@@ -9,7 +9,7 @@ import {
 } from './api';
 import { MESSAGE_STATUSES, type StatusCounts } from './contract';
 import { browserTimeZone, statusLabel } from './report-view';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
 
@@ -44,7 +44,8 @@ export function ReportShell<T>({
     const missing =
       query.error instanceof MarketingApiError && query.error.status === 404;
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description={
           missing
             ? `This ${noun} no longer exists, so there is no report for it.`

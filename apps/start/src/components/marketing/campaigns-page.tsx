@@ -5,7 +5,7 @@ import { CampaignDetail } from './campaign-detail';
 import { CampaignEditor } from './campaign-editor';
 import { CampaignList } from './campaign-list';
 import { campaignLoadErrorTitle, useCampaign } from './use-campaign';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
 
@@ -28,7 +28,8 @@ function OpenCampaign({
   }
   if (campaign.error && !campaign.data) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description={describeMarketingError(campaign.error)}
         icon={MegaphoneIcon}
         title={campaignLoadErrorTitle(campaign.error)}

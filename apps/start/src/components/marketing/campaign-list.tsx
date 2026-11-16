@@ -14,7 +14,7 @@ import {
   sendTimeText,
 } from './campaign-form';
 import { useAudiences } from './use-campaign';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,14 +51,16 @@ export function CampaignList({
       </div>
       {campaigns.isPending && <FullPageLoadingState />}
       {campaigns.error && (
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description={describeMarketingError(campaigns.error)}
           icon={MegaphoneIcon}
           title="Campaigns are not available"
         />
       )}
       {campaigns.data && rows.length === 0 && (
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description="Create a campaign to draft a message for an audience."
           icon={MegaphoneIcon}
           title="No campaigns yet"

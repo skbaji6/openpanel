@@ -24,7 +24,7 @@ import type {
 import { FilterBuilder } from './filter-builder';
 import { isVersionConflict, useAudienceRow } from './use-audience-row';
 import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
 import { showConfirm } from '@/modals';
@@ -389,7 +389,8 @@ export function AudienceEditor({
   if (audience.error) {
     return (
       <div className="col gap-2">
-        <FullPageEmptyState
+        <EmptyState
+          variant="section"
           description={describeMarketingError(audience.error)}
           icon={UsersIcon}
           title="This audience could not be loaded"

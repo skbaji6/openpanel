@@ -20,7 +20,7 @@ import { JourneyStartDialog } from './journey-start-dialog';
 import { labelRecipientReason } from './reason-labels';
 import { emptyRuleDefinition, RuleEditor } from './rule-editor';
 import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import {
   IntegrationCardFooter,
@@ -247,7 +247,8 @@ export function RulesPage() {
   }
   if (rules.error) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description={describeMarketingError(rules.error)}
         icon={WorkflowIcon}
         title="Journeys are not available"
@@ -256,7 +257,8 @@ export function RulesPage() {
   }
   if (rules.data.rules.length === 0) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description="A rule watches for an event, waits, and messages the profile until it reaches the goal. New here? Pick a template to start, or open the How it works tab."
         icon={WorkflowIcon}
         title="No rules yet"

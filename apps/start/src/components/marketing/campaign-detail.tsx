@@ -38,7 +38,7 @@ import {
   useRefreshCampaign,
 } from './use-campaign';
 import { NOT_ADMIN_NOTE, useMarketingRole } from './use-marketing-role';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -363,7 +363,8 @@ export function CampaignDetail({
   }
   if (campaign.error && !campaign.data) {
     return (
-      <FullPageEmptyState
+      <EmptyState
+        variant="section"
         description={describeMarketingError(campaign.error)}
         icon={MegaphoneIcon}
         title={campaignLoadErrorTitle(campaign.error)}
