@@ -401,7 +401,7 @@ jobs:
 
       - name: Decide the version
         id: next
-        run: bun tooling/release/src/next-version.ts "$GITHUB_SHA"
+        run: bun tooling/release/src/fork-version.ts "$GITHUB_SHA"
 
       - name: Download digests
         if: steps.next.outputs.skip != 'true'
