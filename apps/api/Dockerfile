@@ -1,7 +1,7 @@
 # API image — one image, two roles (ROLE=api, worker or all).
 #
 # Bun is pinned exactly; keep this ARG in sync with `.bun-version`.
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.4
 
 # BASE — oven/bun:${BUN_VERSION}-slim. Not distroless (no shell, and the compose files start this image with
 # `sh -c "…"`) and not alpine (musl against a `debian-openssl-3.0.x` Prisma engine).
@@ -83,11 +83,29 @@ RUN find . -maxdepth 4 -type d -name node_modules -prune -exec rm -rf {} + && \
 #      arch this image is built for; the glob is arch-independent (an arm64 build resolves `-linux-arm64`).
 #   2/3. apps/api/scripts (two mock fixtures, 15.5 MB, only used by the non-production `test:manage` script) and
 #      apps/api/e2e. Removed here rather than by splitting the COPY below, which keeps that COPY drift-proof.
-#   4. `*.test.ts` under packages/, and packages/sdks: nothing in the api's closure imports an SDK.
+#   4. `*.test.ts` under packages/. packages/sdks stays: core imports `@openpanel/ai` (which runs from source and
+#      pulls `@openpanel/sdk`), and the whole tree is under half a megabyte, so a per-package list is not worth
+#      the drift it invites.
 RUN find /app/node_modules/.bun -maxdepth 1 -name '*musl*' -prune -exec rm -rf {} + && \
     rm -rf /app/apps/api/scripts /app/apps/api/e2e && \
-    find /app/packages -type f -name '*.test.ts' -delete && \
-    rm -rf /app/packages/sdks
+    find /app/packages -type f -name '*.test.ts' -delete
+
+# PRISMA-CLI — the Prisma CLI the start command runs (`prisma migrate deploy`), with its engines, installed on its own
+# so it does not pull devDependencies into the app's node_modules. Shipping it means a container start needs no
+# registry and downloads nothing. The version must match packages/db's `prisma` devDependency, which generated the
+# client; the build fails if they drift. `prisma --version` proves the CLI runs and its engines are present.
+FROM base AS prisma-cli
+
+ARG PRISMA_VERSION=6.14.0
+
+WORKDIR /opt/prisma
+
+COPY packages/db/package.json /tmp/db-package.json
+
+RUN grep -q "\"prisma\": \"${PRISMA_VERSION}\"" /tmp/db-package.json && \
+    echo '{"name":"prisma-cli","private":true}' > package.json && \
+    bun add --exact "prisma@${PRISMA_VERSION}" && \
+    ./node_modules/.bin/prisma --version
 
 # RUNTIME — oven/bun:${BUN_VERSION}-slim, nothing but the app: the isolated node_modules and the source (with
 # `build`'s generated output), both from `prod-deps` so the store and the per-package symlinks come from one install.
@@ -96,10 +114,11 @@ FROM base AS runtime
 ENV NODE_ENV=production
 
 # The image runs as `bun` (uid 1000, created by the base image), so HOME must
-# point somewhere that user owns. Docker does not move HOME with USER, and the
-# start command in all three compose files runs `bunx prisma@6.14.0 migrate
-# deploy`, which writes to bun's install cache under HOME.
+# point somewhere that user owns. Docker does not move HOME with USER, and
+# compose files from before the CLI shipped in the image run `bunx
+# prisma@6.14.0 migrate deploy`, which writes to bun's install cache under HOME.
 ENV HOME=/home/bun
+ENV PATH="/opt/prisma/node_modules/.bin:${PATH}"
 
 WORKDIR /app
 
@@ -112,11 +131,15 @@ COPY --from=prod-deps --chown=bun:bun /app/apps/api ./apps/api
 COPY --from=prod-deps --chown=bun:bun /app/packages ./packages
 COPY --from=prod-deps --chown=bun:bun /app/tooling/typescript ./tooling/typescript
 
-# The shipped start command is `cd /app/packages/db && bunx prisma@6.14.0 migrate deploy`, so the schema and the
+COPY --from=prisma-cli --chown=bun:bun /opt/prisma /opt/prisma
+
+# The shipped start command is `cd /app/packages/db && prisma migrate deploy`, so the CLI, the schema and the
 # migrations directory are load-bearing image content. Assert them at build time rather than let a self-hoster find
-# out at container start. The code migrations' entrypoint is asserted too: `packages/core/scripts/migrate-code.ts`,
-# which the shipped compose files name, forwards to `packages/db/scripts/migrate-code.ts`, so both are load-bearing.
-RUN test -f /app/packages/db/prisma/schema.prisma && \
+# out at container start. The code migrations' entrypoints are asserted too: the api runs
+# `packages/db/src/code-migrations` itself, and `packages/core/scripts/migrate-code.ts`, which older compose files
+# still name, forwards to `packages/db/scripts/migrate-code.ts`.
+RUN prisma --version >/dev/null && \
+    test -f /app/packages/db/prisma/schema.prisma && \
     test -d /app/packages/db/prisma/migrations && \
     test -f /app/packages/db/scripts/migrate-code.ts && \
     test -d /app/packages/db/src/code-migrations && \

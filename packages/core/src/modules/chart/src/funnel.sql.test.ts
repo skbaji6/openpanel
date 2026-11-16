@@ -43,7 +43,9 @@ let buildFunnelBase: typeof import('../funnel.service').buildFunnelBase;
 let funnelChartQuery: typeof import('./funnel.sql').funnelChartQuery;
 let funnelProfilesQuery: typeof import('./funnel.sql').funnelProfilesQuery;
 let funnelStepConditions: typeof import('./funnel.sql').funnelStepConditions;
+let funnelTimeToConvertQuery: typeof import('./funnel.sql').funnelTimeToConvertQuery;
 let onlyReportEvents: typeof import('../../report/src/series').onlyReportEvents;
+let rangePeriod: typeof import('./first-time').rangePeriod;
 let deps: import('../../../services').ServiceDeps;
 
 const PROJECT_ID = 'test-sql-validation';
@@ -159,9 +161,14 @@ const chartText = async (breakdowns: IChartBreakdown[]) =>
 beforeAll(async () => {
   ({ ch } = await import('@openpanel/db/src/clickhouse/client'));
   ({ buildFunnelBase } = await import('../funnel.service'));
-  ({ funnelChartQuery, funnelProfilesQuery, funnelStepConditions } =
-    await import('./funnel.sql'));
+  ({
+    funnelChartQuery,
+    funnelProfilesQuery,
+    funnelStepConditions,
+    funnelTimeToConvertQuery,
+  } = await import('./funnel.sql'));
   ({ onlyReportEvents } = await import('../../report/src/series'));
+  ({ rangePeriod } = await import('./first-time'));
   const { testServiceDeps } = await import('../../../../test/service-deps');
   deps = await testServiceDeps();
 });
@@ -388,6 +395,26 @@ describe('funnel.sql / funnel CTE — windowFunnel ordering', () => {
   });
 });
 
+describe('funnel.sql / buildFunnelBase — group funnel', () => {
+  it('keys windowFunnel on the group array join alias', async () => {
+    const statement = await profilesStatement({ funnelGroup: 'group' });
+    const { sql } = render(statement);
+    expect(sql).toContain('ARRAY JOIN groups AS _group_id');
+    expect(sql).toContain('LEFT ANY JOIN _g ON _g.id = _group_id');
+    expect(sql).toMatch(/SELECT _group_id, windowFunnel\(/);
+    expect(sql).toMatch(/GROUP BY _group_id\)/);
+    expect(sql).toContain('argMax(profile_id, created_at) AS profile_id');
+    await explain(statement);
+  });
+
+  it('keeps the profile key when the option is not group', async () => {
+    const statement = await profilesStatement({ funnelGroup: 'profile_id' });
+    const { sql } = render(statement);
+    expect(sql).toMatch(/SELECT profile_id, windowFunnel\(/);
+    expect(sql).not.toContain('ARRAY JOIN groups');
+  });
+});
+
 describe('funnel.sql / buildFunnelBase — group breakdowns', () => {
   it('adds the group array join for a group breakdown', async () => {
     const statement = await profilesStatement({
@@ -478,5 +505,80 @@ describe('funnel.sql — custom event steps', () => {
   it('parses and resolves', async () => {
     await explain(await chartStatement({ series }));
     await explain(await profilesStatement({ series }));
+  });
+});
+
+describe('funnel.sql / first time steps', () => {
+  const series = [
+    event({ id: 'A', firstTime: true }),
+    event({ id: 'B', name: 'sign_up' }),
+  ];
+  const stepConditions = () =>
+    funnelStepConditions(
+      onlyReportEvents(series),
+      PROJECT_ID,
+      [],
+      rangePeriod(START, END)
+    ).map(render);
+
+  it("matches the first-time step only at the user's first occurrence", () => {
+    const [firstStep, secondStep] = stepConditions().map(({ text }) => text);
+    expect(firstStep).toContain(
+      `(events.profile_id, events.created_at) GLOBAL IN (SELECT profile_id, min(created_at) AS first_seen FROM events WHERE project_id = '${PROJECT_ID}' AND name = 'screen_view' AND created_at <= toDateTime('${END}') GROUP BY profile_id HAVING first_seen >= toDateTime('${START}'))`
+    );
+    expect(secondStep).not.toContain('first_seen');
+  });
+
+  it('carries the condition into windowFunnel and the pre-filter', async () => {
+    const { sql } = render(await chartStatement({ series }));
+    const conditions = stepConditions().map((condition) => condition.sql);
+    expect(sql).toContain(
+      `(toUInt64(toUnixTimestamp64Milli(created_at)), ${conditions.join(', ')}) AS level`
+    );
+    expect(sql).toContain(` AND ((${conditions.join(') OR (')})) GROUP BY `);
+  });
+
+  it('parses and resolves, with and without a breakdown', async () => {
+    await explain(await chartStatement({ series }));
+    await explain(
+      await chartStatement({
+        series,
+        breakdowns: [breakdown('properties.experiment')],
+      })
+    );
+    await explain(await profilesStatement({ series }));
+  });
+});
+
+describe('funnel.sql / funnelTimeToConvertQuery', () => {
+  it('resolves without breakdowns', async () => {
+    const base = await buildFunnelBase(deps, {
+      ...baseInput(),
+      withStepTimes: true,
+    });
+    const statement = funnelTimeToConvertQuery(base, 'median');
+    expect(render(statement).sql).toContain(
+      'quantileExact(0.5)(step_times[step]'
+    );
+    await explain(statement);
+  });
+
+  it('shares step_events with a step breakdown and a profile breakdown', async () => {
+    const base = await buildFunnelBase(deps, {
+      ...baseInput({
+        breakdowns: [
+          { ...breakdown('properties.plan'), step: 2 },
+          breakdown('profile.properties.plan'),
+        ],
+      }),
+      withStepTimes: true,
+    });
+    const statement = funnelTimeToConvertQuery(base, 'avg');
+    expect(render(statement).sql.match(/AS step_events/g)).toHaveLength(1);
+    await explain(statement);
+  });
+
+  it('leaves step_times out of the chart unless asked', async () => {
+    expect(await chartSql([])).not.toContain('step_times');
   });
 });

@@ -837,3 +837,289 @@ describe('custom event series', () => {
     );
   });
 });
+
+describe('distribution (per-user) chart', () => {
+  const distribution = { ...base, chartType: 'distribution' as const };
+
+  it('buckets users by their event count by default', async () => {
+    const rendered = await getChartSql({
+      event: event(),
+      breakdowns: [],
+      ...distribution,
+    });
+    expect(rendered.text).toContain('count(*) as user_value');
+    expect(rendered.text).toContain('GROUP BY profile_id');
+    expect(Object.values(rendered.params)).toContainEqual([
+      '1',
+      '2',
+      '3',
+      '4-5',
+      '6-10',
+      '11+',
+    ]);
+    expect(rendered.text).not.toContain('WITH FILL');
+    await explain(rendered);
+  });
+
+  it('ignores the segment', async () => {
+    const rendered = await getChartSql({
+      event: event({ segment: 'group' }),
+      breakdowns: [],
+      ...distribution,
+    });
+    expect(rendered.text).not.toContain('ARRAY JOIN groups');
+    await explain(rendered);
+  });
+
+  it('aggregates a numeric column per user into equal-width bins', async () => {
+    const rendered = await getChartSql({
+      event: event({
+        name: 'session_end',
+        perUser: { aggregation: 'median', property: 'duration' },
+      }),
+      breakdowns: [],
+      ...distribution,
+    });
+    expect(rendered.text).toContain('quantile(0.5)(duration) as user_value');
+    expect(rendered.text).toContain('min(user_value) OVER ()');
+    await explain(rendered);
+  });
+
+  it('casts a properties-map value and keeps distinct counts discrete', async () => {
+    const sum = await getChartSql({
+      event: event({
+        perUser: { aggregation: 'sum', property: 'properties.value' },
+      }),
+      breakdowns: [],
+      ...distribution,
+    });
+    const distinct = await getChartSql({
+      event: event({
+        perUser: { aggregation: 'distinct_count', property: 'properties.sku' },
+      }),
+      breakdowns: [],
+      ...distribution,
+    });
+    expect(sum.text).toContain(
+      "sum(toFloat64OrNull(e.properties['value'])) as user_value"
+    );
+    expect(sum.text).toContain("notEmpty(e.properties['value'])");
+    expect(distinct.text).toContain(
+      "uniqExact(e.properties['sku']) as user_value"
+    );
+    expect(distinct.text).not.toContain('OVER ()');
+    await Promise.all([explain(sum), explain(distinct)]);
+  });
+
+  it('takes shared bins instead of working out its own range', async () => {
+    const rendered = await getChartSql({
+      event: event({
+        perUser: { aggregation: 'sum', property: 'properties.value' },
+      }),
+      breakdowns: [],
+      ...distribution,
+      binRange: { lo: 1, hi: 5 },
+    });
+    expect(rendered.text).not.toContain('OVER ()');
+    await explain(rendered);
+  });
+
+  it('matches nothing while no property is picked', async () => {
+    const rendered = await getChartSql({
+      event: event({ perUser: { aggregation: 'p90' } }),
+      breakdowns: [],
+      ...distribution,
+    });
+    expect(rendered.text).toContain('0 = 1');
+    await explain(rendered);
+  });
+
+  it('groups per user and breakdown with profile, group and cohort joins', async () => {
+    cohortFindMany.mockClear();
+    const rendered = await getChartSql({
+      event: event({
+        perUser: {
+          aggregation: 'max',
+          property: 'profile.properties.age',
+        },
+        filters: [
+          {
+            name: 'profile.properties.plan',
+            operator: 'is',
+            value: ['pro'],
+          },
+          { name: 'group.plan', operator: 'is', value: ['pro'] },
+        ],
+      }),
+      breakdowns: [
+        breakdown('country'),
+        breakdown('properties.__query.utm_source'),
+        breakdown('cohort'),
+      ],
+      ...distribution,
+    });
+    expect(rendered.text).toContain('GROUP BY label_1, label_2, profile_id');
+    expect(rendered.text).toContain('LEFT ANY JOIN profile');
+    expect(rendered.text).toContain('ARRAY JOIN groups');
+    await explain(rendered);
+  });
+});
+
+describe('first time for user', () => {
+  const firstOccurrences = (alias: string) =>
+    `(${alias}.profile_id, ${alias}.created_at) GLOBAL IN (SELECT profile_id, min(created_at) AS first_seen FROM events WHERE project_id = '${PROJECT_ID}' AND name = 'screen_view' AND created_at <= toDateTime('${END}') GROUP BY profile_id HAVING first_seen >= toDateTime('${START}'))`;
+
+  it("keeps only each user's first occurrence, taken over all history", async () => {
+    const rendered = await getChartSql({
+      event: event({ segment: 'user', firstTime: true }),
+      breakdowns: [],
+      ...base,
+    });
+    // The history scan has no lower bound: a user who did the event before
+    // the range must not count again inside it.
+    expect(rendered.text).toContain(firstOccurrences('e'));
+    await explain(rendered);
+  });
+
+  it('leaves the series filters to the outer scan', async () => {
+    const rendered = await getChartSql({
+      event: event({
+        firstTime: true,
+        filters: [{ name: 'path', operator: 'is', value: ['/pricing'] }],
+      }),
+      breakdowns: [breakdown('country')],
+      ...base,
+    });
+    expect(rendered.text).toContain(firstOccurrences('e'));
+    expect(rendered.text).toContain("path = '/pricing'");
+    await explain(rendered);
+  });
+
+  it('composes with a profile filter and a profile breakdown', async () => {
+    await explain(
+      await getChartSql({
+        event: event({
+          firstTime: true,
+          filters: [
+            {
+              id: 'f1',
+              name: 'profile.properties.plan',
+              operator: 'is' as const,
+              value: ['pro'],
+            },
+          ],
+        }),
+        breakdowns: [breakdown('profile.properties.plan')],
+        ...base,
+      })
+    );
+  });
+
+  it('composes with one_event_per_user', async () => {
+    const rendered = await getChartSql({
+      event: event({ segment: 'one_event_per_user', firstTime: true }),
+      breakdowns: [breakdown('properties.experiment')],
+      ...base,
+    });
+    expect(rendered.text).toContain(firstOccurrences('e'));
+    await explain(rendered);
+  });
+
+  it('applies to the aggregate chart', async () => {
+    const rendered = await getAggregateChartSql({
+      event: event({ firstTime: true }),
+      breakdowns: [breakdown('country')],
+      ...base,
+    });
+    expect(rendered.text).toContain(firstOccurrences('e'));
+    await explain(rendered);
+  });
+
+  it("takes a custom event's first occurrence across its items", async () => {
+    const rendered = await getChartSql({
+      event: event({
+        name: 'Used navigation',
+        firstTime: true,
+        anyOf: [
+          { name: 'menu_open', filters: [] },
+          {
+            name: 'screen_view',
+            filters: [{ name: 'path', operator: 'is', value: ['/nav'] }],
+          },
+        ],
+      }),
+      breakdowns: [],
+      ...base,
+    });
+    expect(rendered.text).toContain(
+      `FROM events WHERE project_id = '${PROJECT_ID}' AND (name IN ('menu_open') OR (name = 'screen_view' AND path = '/nav')) AND created_at <= toDateTime('${END}') GROUP BY profile_id`
+    );
+    await explain(rendered);
+  });
+
+  it('is ignored without the qualifier and for the any-event series', async () => {
+    const plain = await getChartSql({
+      event: event(),
+      breakdowns: [],
+      ...base,
+    });
+    const anyEvent = await getChartSql({
+      event: event({ name: '*', firstTime: true }),
+      breakdowns: [],
+      ...base,
+    });
+    expect(plain.sql).not.toContain('first_seen');
+    expect(anyEvent.sql).not.toContain('first_seen');
+  });
+
+  it('lists the users whose first occurrence is in the drill-down bucket', async () => {
+    const { chartBucketProfilesQuery } = await import('./sql');
+    const rendered = render(
+      chartBucketProfilesQuery({
+        projectId: PROJECT_ID,
+        bucketDate: START,
+        interval: 'day',
+        event: { name: 'screen_view', filters: [], firstTime: true },
+        breakdowns: {},
+        limit: 10,
+      })
+    );
+    expect(rendered.text).toContain(
+      `(e.profile_id, e.created_at) GLOBAL IN (SELECT profile_id, min(created_at) AS first_seen FROM events WHERE project_id = '${PROJECT_ID}' AND name = 'screen_view' GROUP BY profile_id HAVING toStartOfDay(first_seen) = toDate('${START}'))`
+    );
+    await explain(rendered);
+  });
+
+  it('gates a conversion step on the qualified events table', async () => {
+    const { conversionQuery } = await import('./conversion.sql');
+    const { firstTimeCondition, rangePeriod } = await import('./first-time');
+    const firstStepWhere = firstTimeCondition({
+      event: { name: 'screen_view', firstTime: true },
+      projectId: PROJECT_ID,
+      eventsAlias: 'events',
+      period: rangePeriod(START, END),
+    });
+    const rendered = render(
+      conversionQuery({
+        projectId: PROJECT_ID,
+        startDate: START,
+        endDate: END,
+        interval: 'day',
+        group: 'session_id',
+        funnelWindowSeconds: 3600,
+        firstEventMatch: sql`events.name = ${sql.string('screen_view')}`,
+        secondEventMatch: sql`events.name = ${sql.string('sign_up')}`,
+        eventNames: ['screen_view', 'sign_up'],
+        firstEventWhere: firstStepWhere,
+        secondEventWhere: null,
+        breakdownSelects: [],
+        breakdownExpressions: [],
+        profileJoinFields: [],
+        needsGroupArrayJoin: false,
+        cohortJoins: [],
+      })
+    );
+    expect(rendered.text).toContain(firstOccurrences('events'));
+    await explain(rendered);
+  });
+});

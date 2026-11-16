@@ -48,6 +48,8 @@ const RENAMED_ENV_VARS = [
   ['BULLBOARD_PASSWORD', 'ADMIN_PASSWORD'],
 ] as const;
 const BUNDLED_KAFKA_HOST = 'op-rp:';
+const BUNDLED_API_URL_SSR = 'http://op-api:3000';
+const FAVICON_FLAG_VALUES = new Set(['true', '1', 'false', '0']);
 
 const templateCompose = parseDocument(templates.compose);
 
@@ -87,10 +89,13 @@ const hasWorkerRole = (install: Install) =>
 
 const dependsOnPath = (service: string) => ['services', service, 'depends_on'];
 
-// depends_on comes as a map (with conditions), a plain list, or a YAML alias
-// shared between services; all three are valid compose.
-const dependencyNames = (compose: Document, service: string): string[] => {
-  const node = compose.getIn(dependsOnPath(service), true);
+// depends_on and networks come as a map, a plain list, or a YAML alias shared
+// between services; all three are valid compose.
+const collectionNames = (
+  compose: Document,
+  path: readonly string[]
+): string[] => {
+  const node = compose.getIn(path, true);
   const resolved = isAlias(node) ? node.resolve(compose) : node;
   if (isMap(resolved)) {
     return resolved.items.map((pair) =>
@@ -103,6 +108,25 @@ const dependencyNames = (compose: Document, service: string): string[] => {
     );
   }
   return [];
+};
+
+const dependencyNames = (compose: Document, service: string): string[] =>
+  collectionNames(compose, dependsOnPath(service));
+
+const serviceNetworks = (install: Install, service: string): string[] => {
+  const names = collectionNames(install.compose, [
+    'services',
+    service,
+    'networks',
+  ]);
+  return names.length > 0 ? names : ['default'];
+};
+
+const dashboardReachesApi = (install: Install): boolean => {
+  const apiNetworks = serviceNetworks(install, 'op-api');
+  return serviceNetworks(install, 'op-dashboard').some((network) =>
+    apiNetworks.includes(network)
+  );
 };
 
 const addDependency = (
@@ -375,25 +399,47 @@ export const workerHealthcheck: Check = (install) => {
   };
 };
 
+const replaceApiCommand = (target: Install) => {
+  const next = templateCompose.getIn(['services', 'op-api', 'command']);
+  target.compose.setIn(['services', 'op-api', 'command'], next);
+};
+
 export const apiMigrations: Check = (install) => {
   const command = install.compose.getIn(['services', 'op-api', 'command']);
-  if (
-    typeof command !== 'string' ||
-    command.includes('scripts/migrate-code.ts')
-  ) {
+  if (typeof command !== 'string') {
     return null;
   }
-  return {
-    id: 'compose/api-migrations',
-    severity: 'error',
-    title: 'op-api start command runs the old migration steps',
-    detail:
-      'v3 migrates with prisma + scripts/migrate-code.ts under bun; pnpm is gone from the image.',
-    fix: (target) => {
-      const next = templateCompose.getIn(['services', 'op-api', 'command']);
-      target.compose.setIn(['services', 'op-api', 'command'], next);
-    },
-  };
+  if (command.includes('pnpm')) {
+    return {
+      id: 'compose/api-migrations',
+      severity: 'error',
+      title: 'op-api start command runs the old migration steps',
+      detail:
+        'v3 runs the Prisma CLI the image ships and the api applies code migrations; pnpm is gone from the image.',
+      fix: replaceApiCommand,
+    };
+  }
+  if (command.includes('bunx prisma')) {
+    return {
+      id: 'compose/api-migrations',
+      severity: 'warn',
+      title: 'op-api downloads the Prisma CLI at every start',
+      detail:
+        'The image ships the Prisma CLI, so the api can start without reaching the npm registry.',
+      fix: replaceApiCommand,
+    };
+  }
+  if (command.includes('scripts/migrate-code.ts')) {
+    return {
+      id: 'compose/api-migrations',
+      severity: 'warn',
+      title: 'op-api runs the code migrations before it starts',
+      detail:
+        'The api now starts at once and applies code migrations itself, so a long migration no longer keeps it down.',
+      fix: replaceApiCommand,
+    };
+  }
+  return null;
 };
 
 export const kafkaBrokers: Check = (install) => {
@@ -438,7 +484,7 @@ export const encryptionKey: Check = (install) => {
       severity: 'error',
       title: 'ENCRYPTION_KEY is not 64 hex characters',
       detail:
-        'It guards stored credentials (2FA, Search Console, exports), so doctor will not replace an existing value.',
+        'It guards stored credentials (Search Console, exports), so doctor will not replace an existing value.',
       manual:
         'Generate a replacement with `openssl rand -hex 32` only if you have nothing encrypted yet.',
     };
@@ -448,7 +494,7 @@ export const encryptionKey: Check = (install) => {
     severity: 'error',
     title: 'ENCRYPTION_KEY is not set',
     detail:
-      'Needed for 2FA, Google Search Console and export credentials; must match on api and worker.',
+      'Needed for Google Search Console and export credentials; must match on api and worker.',
     fix: (target) => target.env.set('ENCRYPTION_KEY', randomHex(32)),
   };
 };
@@ -461,8 +507,25 @@ export const cookieSecret: Check = (install) => {
     id: 'env/cookie-secret',
     severity: 'error',
     title: 'COOKIE_SECRET is not set',
-    detail: 'Signs unsubscribe links and unlocks password-protected shares.',
+    detail:
+      'Without it (and without AUTH_SECRET) nobody can sign in. Also signs unsubscribe links and unlocks password-protected shares.',
     fix: (target) => target.env.set('COOKIE_SECRET', randomHex(16)),
+  };
+};
+
+export const authSecret: Check = (install) => {
+  const cookie = install.env.get('COOKIE_SECRET');
+  if (install.env.get('AUTH_SECRET') || !cookie) {
+    return null;
+  }
+  return {
+    id: 'env/auth-secret',
+    severity: 'warn',
+    title: 'AUTH_SECRET is not set',
+    detail:
+      'Sign-in sessions are signed with COOKIE_SECRET until it is. Set it so rotating COOKIE_SECRET does not sign everyone out.',
+    // The current value, so nobody signed in under the fallback is signed out.
+    fix: (target) => target.env.set('AUTH_SECRET', cookie),
   };
 };
 
@@ -508,6 +571,23 @@ export const apiUrl: Check = (install) => {
   };
 };
 
+// `has`, not `get`: a blank `API_URL_SSR=` is an operator opting out of the
+// internal address, and a custom address is theirs to keep. A dashboard on its
+// own network keeps the public route, which works, over one it cannot reach.
+export const apiUrlSsr: Check = (install) => {
+  if (install.env.has('API_URL_SSR') || !dashboardReachesApi(install)) {
+    return null;
+  }
+  return {
+    id: 'env/api-url-ssr',
+    severity: 'warn',
+    title: 'API_URL_SSR is not set',
+    detail:
+      'Without it the dashboard server calls the api through the public API_URL, where a proxy such as Cloudflare can challenge it and break page loads. After the fix, run `openpanel reload` to apply it.',
+    fix: (target) => target.env.set('API_URL_SSR', BUNDLED_API_URL_SSR),
+  };
+};
+
 export const dashboardUrl: Check = (install) => {
   if (install.env.get('DASHBOARD_URL')) {
     return null;
@@ -550,6 +630,40 @@ export const selfHosted: Check = (install) => {
     detail:
       'Only `true` or `1` turns self-hosted mode on in the api and worker.',
     fix: (target) => target.env.set('SELF_HOSTED', 'true'),
+  };
+};
+
+// Any other value reads as off, so `yes` would leave the lookups running for
+// an operator who believes they stopped them.
+export const faviconFetchFlag: Check = (install) => {
+  const value = install.env.get('DISABLE_FAVICON_FETCH');
+  if (!value || FAVICON_FLAG_VALUES.has(value)) {
+    return null;
+  }
+  return {
+    id: 'env/favicon-fetch-flag',
+    severity: 'warn',
+    title: `DISABLE_FAVICON_FETCH is "${value}"`,
+    detail:
+      'Only `true` or `1` stops the api asking icon services for favicons.',
+    manual: 'Set it to `true`, or remove it to keep favicons.',
+  };
+};
+
+export const automaticMigrations: Check = (install) => {
+  const value = install.env.get('AUTOMATIC_MIGRATIONS');
+  if (value === 'true' || value === '1') {
+    return null;
+  }
+  return {
+    id: 'env/automatic-migrations',
+    // The api still boots without it, so it must not block `reload`;
+    // `upgrade` applies the fix either way.
+    severity: 'warn',
+    title: `AUTOMATIC_MIGRATIONS is ${value === undefined ? 'not set' : `"${value}"`}`,
+    detail:
+      'The api and worker apply ClickHouse code migrations only when it is `true` or `1`.',
+    fix: (target) => target.env.set('AUTOMATIC_MIGRATIONS', 'true'),
   };
 };
 
@@ -695,11 +809,15 @@ export const checks: Check[] = [
   kafkaPartitions,
   encryptionKey,
   cookieSecret,
+  authSecret,
   renamedEnvVars,
   dashboardUrl,
   apiUrl,
+  apiUrlSsr,
   adminCredentials,
   selfHosted,
+  faviconFetchFlag,
+  automaticMigrations,
   enabledQueues,
   removedEnvVars,
   caddyBullboardRedirect,

@@ -1,6 +1,28 @@
 import type { ServiceDeps } from '../../../services';
 import type { AssistantUIMessage } from './message';
 
+const NULL_CHARACTER = '\u0000';
+
+/** Postgres json cannot hold NUL, and tool outputs echo raw event data. */
+export function stripNullCharacters<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replaceAll(NULL_CHARACTER, '') as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map(stripNullCharacters) as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    // fromEntries defines own properties, so a "__proto__" key survives.
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        stripNullCharacters(key),
+        stripNullCharacters(entry),
+      ])
+    ) as T;
+  }
+  return value;
+}
+
 /** Rows are one UI message each; `parts` is the message's parts array. */
 export async function loadMessages(
   deps: ServiceDeps,
@@ -41,25 +63,39 @@ export async function saveMessages(
     if (foreign) {
       throw new Error(`Message ${foreign.id} belongs to another conversation`);
     }
-    await tx.conversation.upsert({
+    const title = stripNullCharacters(input.title ?? undefined);
+    // The id comes from the client and is only checked before the model runs;
+    // someone else may have created it since, and must not get these messages.
+    const conversation = await tx.conversation.upsert({
       where: { id: input.conversationId },
       create: {
         id: input.conversationId,
         projectId: input.projectId,
         organizationId: input.organizationId,
         userId: input.userId,
-        title: input.title ?? undefined,
+        title,
       },
       update: {
         updatedAt: new Date(),
-        ...(input.title ? { title: input.title } : {}),
+        ...(title ? { title } : {}),
       },
+      select: { userId: true, projectId: true },
     });
+    const ownedByCaller =
+      conversation.userId === input.userId &&
+      conversation.projectId === input.projectId;
+    if (!ownedByCaller) {
+      throw new Error(
+        `Conversation ${input.conversationId} belongs to another user`
+      );
+    }
     // Rows saved together must load in this order; the default timestamp can tie.
     const baseTime = Date.now();
     for (const [index, message] of input.messages.entries()) {
-      const parts = message.parts as unknown[];
-      const metadata = (message.metadata ?? {}) as Record<string, unknown>;
+      const parts = stripNullCharacters(message.parts as unknown[]);
+      const metadata = stripNullCharacters(
+        (message.metadata ?? {}) as Record<string, unknown>
+      );
       await tx.chatMessage.upsert({
         where: { id: message.id },
         create: {

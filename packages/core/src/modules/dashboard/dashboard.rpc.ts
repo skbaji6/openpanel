@@ -10,6 +10,7 @@
 import { z } from 'zod';
 import { createTRPCRouter, protectedProcedure } from '../../rpc/base';
 import { TRPCNotFoundError } from '../../rpc/errors';
+import { zDashboardFilters } from './dashboard.constants';
 
 export const dashboardRouter = createTRPCRouter({
   list: protectedProcedure
@@ -68,7 +69,8 @@ export const dashboardRouter = createTRPCRouter({
     .input(
       z.object({
         id: z.string(),
-        name: z.string(),
+        name: z.string().optional(),
+        filters: zDashboardFilters.optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -81,6 +83,24 @@ export const dashboardRouter = createTRPCRouter({
         level: 'write',
       });
       return ctx.services.dashboard.updateDashboard(input);
+    }),
+
+  duplicate: protectedProcedure
+    .input(
+      z.object({
+        id: z.string(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const dashboard = await ctx.services.dashboard.getDashboardByIdOrThrow(
+        input.id
+      );
+      await ctx.services.auth.requireProjectAccess({
+        userId: ctx.session.userId,
+        projectId: dashboard.projectId,
+        level: 'write',
+      });
+      return ctx.services.dashboard.duplicateDashboard(input.id);
     }),
 
   delete: protectedProcedure

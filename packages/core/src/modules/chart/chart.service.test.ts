@@ -247,6 +247,67 @@ describe('executeChart', () => {
   });
 });
 
+describe('distribution chart', () => {
+  const distribution = (series: EventSeriesItem) =>
+    report({ chartType: 'distribution', series: [series] });
+  const buckets = (chart: {
+    series: { data: { date: string; count: number }[] }[];
+  }) => chart.series[0]?.data.map((point) => [point.date, point.count]);
+
+  it('buckets users by how many events they sent, empty buckets included', async () => {
+    // Alice sent 3 events, Charlie 5.
+    const chart = await service.execute(distribution(pageView({ name: '*' })));
+
+    expect(chart.series).toHaveLength(1);
+    expect(buckets(chart)).toEqual([
+      ['1', 0],
+      ['2', 0],
+      ['3', 1],
+      ['4-5', 1],
+      ['6-10', 0],
+      ['11+', 0],
+    ]);
+    expect(chart.series[0]?.metrics.count).toBe(2);
+  });
+
+  it('bins a per-user property aggregate between its min and max', async () => {
+    // session_end duration: Alice 120000, Charlie 300000.
+    const chart = await service.execute(
+      distribution(
+        pageView({
+          name: 'session_end',
+          perUser: { aggregation: 'sum', property: 'duration' },
+        })
+      )
+    );
+    const data = buckets(chart) ?? [];
+
+    expect(data).toHaveLength(10);
+    expect(data[0]).toEqual(['120000 - 138000', 1]);
+    expect(data[9]).toEqual(['282000 - 300000', 1]);
+    expect(data.slice(1, 9).every(([, count]) => count === 0)).toBe(true);
+  });
+
+  it('stays empty until a property is picked for the aggregation', async () => {
+    const chart = await service.execute(
+      distribution(
+        pageView({ name: 'session_end', perUser: { aggregation: 'median' } })
+      )
+    );
+
+    expect(chart.series).toEqual([]);
+  });
+
+  it('does not compare against the previous period', async () => {
+    const chart = await service.execute({
+      ...distribution(pageView({ name: '*' })),
+      previous: true,
+    });
+
+    expect(chart.series[0]?.metrics.previous).toBeUndefined();
+  });
+});
+
 describe('executeAggregateChart', () => {
   it('sums revenue per browser without a time axis', async () => {
     const chart = await service.executeAggregate(
@@ -439,5 +500,83 @@ describe('getChartBucketProfiles', () => {
         breakdowns: { 'profile.evil; DROP TABLE profiles': 'x' },
       })
     ).rejects.toThrow(/Refusing to inline identifier/);
+  });
+});
+
+describe('getRetentionChart from a shared report', () => {
+  const nameFilter = (operator: 'is' | 'isNot', value: string) => ({
+    id: 'n',
+    name: 'name',
+    operator,
+    value: [value],
+  });
+  const pathFilter = {
+    id: 'p',
+    name: 'path',
+    operator: 'is' as const,
+    value: ['/signup'],
+  };
+  const savedReport = (
+    chartType: IReportInput['chartType'],
+    operator: 'is' | 'isNot',
+    leadingFilters: (typeof pathFilter)[] = []
+  ) =>
+    ({
+      ...report({
+        chartType,
+        series: [
+          pageView({
+            id: 'A',
+            filters: [...leadingFilters, nameFilter(operator, 'signup')],
+          }),
+          pageView({ id: 'B', filters: [nameFilter('is', 'purchase')] }),
+        ],
+      }),
+      id: 'report_1',
+    }) as unknown as Parameters<typeof service.getRetentionChart>[0];
+  const input = {
+    projectId: TEST_PROJECT_ID,
+    firstEvent: ['page_view'],
+    secondEvent: ['page_view'],
+    criteria: 'on_or_after' as const,
+    interval: 'day' as const,
+    range: '30d' as const,
+  };
+
+  it('refuses a report that is not a retention report', async () => {
+    await expect(
+      service.getRetentionChart(savedReport('linear', 'is'), input)
+    ).rejects.toThrow('Report is not a retention report');
+  });
+
+  it('refuses an excluded event as the cohort selector', async () => {
+    await expect(
+      service.getRetentionChart(savedReport('retention', 'isNot'), input)
+    ).rejects.toThrow('Report must have at least 2 event series');
+  });
+
+  it('refuses a series whose selected events are all excluded', async () => {
+    const excludedSelection = {
+      ...savedReport('retention', 'is'),
+      series: [
+        pageView({
+          id: 'A',
+          filters: [nameFilter('isNot', 'signup'), nameFilter('is', 'signup')],
+        }),
+        pageView({ id: 'B', filters: [nameFilter('is', 'purchase')] }),
+      ],
+    } as unknown as Parameters<typeof service.getRetentionChart>[0];
+    await expect(
+      service.getRetentionChart(excludedSelection, input)
+    ).rejects.toThrow('Report must have at least 2 event series');
+  });
+
+  it('finds the event selector behind a property filter', async () => {
+    await expect(
+      service.getRetentionChart(
+        savedReport('retention', 'is', [pathFilter]),
+        input
+      )
+    ).resolves.toBeDefined();
   });
 });

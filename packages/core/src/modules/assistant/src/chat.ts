@@ -5,10 +5,12 @@ import {
   createUIMessageStreamResponse,
   isStepCount,
   streamText,
+  type Tool,
   toUIMessageStream,
 } from 'ai';
 import type { HttpCtx } from '../../../context';
 import type { ServiceDeps } from '../../../services';
+import { withAiContext } from '../../ai/ai.service';
 import {
   CHAT_MODELS,
   type ChatRequest,
@@ -17,6 +19,7 @@ import {
 } from '../assistant.constants';
 import { createChatActions } from './actions';
 import type { ChatToolContext } from './context';
+import { failInterruptedToolParts } from './interrupted-tools';
 import type { AssistantUIMessage } from './message';
 import { deleteMessagesFrom, loadMessages, saveMessages } from './persistence';
 import { buildSystemPrompt } from './prompt';
@@ -26,7 +29,7 @@ import {
   resolveChatModel,
 } from './providers';
 import { generateConversationTitle } from './title';
-import { CHAT_TOOL_APPROVAL, createChatTools } from './tools';
+import { createChatToolApproval, createChatTools } from './tools';
 
 /** Dashboard-building turns chain many tool calls; the ceiling stops runaway loops. */
 const MAX_STEPS = 30;
@@ -60,6 +63,17 @@ function describeError(error: unknown): string {
     return error;
   }
   return 'Something went wrong.';
+}
+
+/** An abort right after the model started leaves only a step marker or an empty text part. */
+function isSubstantive(part: AssistantUIMessage['parts'][number]): boolean {
+  if (part.type === 'step-start') {
+    return false;
+  }
+  if (part.type === 'text' || part.type === 'reasoning') {
+    return part.text.trim().length > 0;
+  }
+  return true;
 }
 
 /** One chat turn: load history, run the model with tools, stream UI parts, persist on finish. */
@@ -99,6 +113,16 @@ export async function runChat(
       await deleteMessagesFrom(deps, request.id, request.messageId);
     }
   }
+  // A turn cut off mid tool call stores calls without results, and the model
+  // refuses such a history outright. Repaired rows are written back on finish.
+  const repaired = new Map<string, AssistantUIMessage>();
+  history = history.map((message) => {
+    const fixed = failInterruptedToolParts(message);
+    if (fixed !== message && message.id !== incoming?.id) {
+      repaired.set(message.id, fixed);
+    }
+    return fixed;
+  });
   if (incoming) {
     const existing = history.findIndex((message) => message.id === incoming.id);
     history =
@@ -125,6 +149,8 @@ export async function runChat(
     actions: await createChatActions(httpCtx),
   };
   const tools = createChatTools(toolContext);
+  const runsInBrowser = (toolName: string) =>
+    (tools as Record<string, Tool | undefined>)[toolName]?.execute == null;
   const modelMessages = await convertToModelMessages(history, { tools });
   const startedAt = Date.now();
   let title: string | null = null;
@@ -135,89 +161,113 @@ export async function runChat(
       prefix: MESSAGE_ID_PREFIX,
       size: MESSAGE_ID_SIZE,
     }),
-    execute: async ({ writer }) => {
-      const titlePromise = isFirstTurn
-        ? generateConversationTitle(config, firstUserText(incoming)).then(
-            (generated) => {
-              if (generated) {
-                title = generated;
-                writer.write({
-                  type: 'data-title',
-                  data: { title: generated },
-                  transient: true,
-                });
-              }
-            }
-          )
-        : Promise.resolve();
-
-      const result = streamText({
-        model: resolveChatModel(config, entry),
-        instructions: buildSystemPrompt({
-          projectName: input.projectName,
-          timezone: input.timezone,
-          selfHosted: config.selfHosted,
-          hint: request.hint,
-        }),
-        messages: modelMessages,
-        tools,
-        toolApproval: CHAT_TOOL_APPROVAL,
-        stopWhen: isStepCount(MAX_STEPS),
-        reasoning: entry.reasoning,
-        providerOptions: reasoningProviderOptions(entry),
-        abortSignal: input.abortSignal,
-      });
-
-      writer.merge(
-        toUIMessageStream({
-          stream: result.stream,
-          sendReasoning: true,
-          onError: describeError,
-          messageMetadata: ({ part }) => {
-            if (part.type === 'start') {
-              return { modelId: entry.id, createdAt: startedAt };
-            }
-            if (part.type === 'finish') {
-              const durationMs = Date.now() - startedAt;
-              deps.logger.info(
-                {
-                  conversationId: request.id,
-                  organizationId: request.organizationId,
-                  projectId: request.projectId,
-                  userId: input.userId,
-                  modelId: entry.id,
-                  // Keys avoid "token": the log redaction masks any key containing it.
-                  usage: {
-                    input: part.totalUsage.inputTokens,
-                    output: part.totalUsage.outputTokens,
-                    total: part.totalUsage.totalTokens,
-                  },
-                  durationMs,
-                },
-                'chat turn finished'
-              );
-              return {
-                totalTokens: part.totalUsage.totalTokens,
-                durationMs,
-              };
-            }
-            return undefined;
+    // One trace per turn: the title call, every step of the model loop and
+    // its tool calls report under the user, organization and conversation.
+    execute: ({ writer }) =>
+      withAiContext(
+        {
+          profileId: input.userId,
+          groups: [request.organizationId],
+          conversationId: request.id,
+          name: 'assistant-chat',
+          properties: {
+            projectId: request.projectId,
+            organizationId: request.organizationId,
+            modelId: entry.id,
           },
-        })
-      );
+        },
+        async () => {
+          const titlePromise = isFirstTurn
+            ? generateConversationTitle(config, firstUserText(incoming)).then(
+                (generated) => {
+                  if (generated) {
+                    title = generated;
+                    writer.write({
+                      type: 'data-title',
+                      data: { title: generated },
+                      transient: true,
+                    });
+                  }
+                }
+              )
+            : Promise.resolve();
 
-      await titlePromise;
-    },
+          const result = streamText({
+            model: resolveChatModel(config, entry),
+            instructions: buildSystemPrompt({
+              projectName: input.projectName,
+              timezone: input.timezone,
+              selfHosted: config.selfHosted,
+              hint: request.hint,
+            }),
+            messages: modelMessages,
+            tools,
+            toolApproval: createChatToolApproval(toolContext),
+            stopWhen: isStepCount(MAX_STEPS),
+            reasoning: entry.reasoning,
+            providerOptions: reasoningProviderOptions(entry),
+            abortSignal: input.abortSignal,
+          });
+
+          writer.merge(
+            toUIMessageStream({
+              stream: result.stream,
+              sendReasoning: true,
+              onError: describeError,
+              messageMetadata: ({ part }) => {
+                if (part.type === 'start') {
+                  return { modelId: entry.id, createdAt: startedAt };
+                }
+                if (part.type === 'finish') {
+                  const durationMs = Date.now() - startedAt;
+                  deps.logger.info(
+                    {
+                      conversationId: request.id,
+                      organizationId: request.organizationId,
+                      projectId: request.projectId,
+                      userId: input.userId,
+                      modelId: entry.id,
+                      // Keys avoid "token": the log redaction masks any key containing it.
+                      usage: {
+                        input: part.totalUsage.inputTokens,
+                        output: part.totalUsage.outputTokens,
+                        total: part.totalUsage.totalTokens,
+                      },
+                      durationMs,
+                    },
+                    'chat turn finished'
+                  );
+                  return {
+                    totalTokens: part.totalUsage.totalTokens,
+                    durationMs,
+                  };
+                }
+                return undefined;
+              },
+            })
+          );
+
+          await titlePromise;
+        }
+      ),
     onError: describeError,
     onEnd: async ({ responseMessage }) => {
-      const toSave: AssistantUIMessage[] = [];
+      const toSave: AssistantUIMessage[] = [...repaired.values()];
       if (incoming?.role === 'user') {
         toSave.push({
           ...incoming,
           metadata: { ...incoming.metadata, createdAt: startedAt },
         });
       }
-      toSave.push(responseMessage);
+      // An aborted turn ends with server tools still running; a client tool
+      // is meant to end the stream and wait for the browser.
+      const response = failInterruptedToolParts(responseMessage, runsInBrowser);
+      if (response.parts.some(isSubstantive)) {
+        toSave.push(response);
+      }
+      if (toSave.length === 0) {
+        return;
+      }
       await saveMessages(deps, {
         conversationId: request.id,
         projectId: request.projectId,

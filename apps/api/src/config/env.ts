@@ -373,6 +373,12 @@ const rawSchema = z.object({
    * cloud-only cron jobs.
    */
   SELF_HOSTED: trueOrOneSchema,
+  /**
+   * Lets this process apply pending code migrations once it is listening; a
+   * Redis lock makes one process do it. Self-hosted installs set it, cloud
+   * decides per deploy.
+   */
+  AUTOMATIC_MIGRATIONS: trueOrOneSchema,
   SHUTDOWN_FORCE_EXIT_MS: z.preprocess(
     blankToUndefined,
     z.coerce.number().int().positive().default(DEFAULT_SHUTDOWN_FORCE_EXIT_MS)
@@ -412,6 +418,8 @@ const rawSchema = z.object({
     blankToUndefined,
     z.string().optional().default('')
   ),
+  /** Signs better-auth's session cookie. Falls back to COOKIE_SECRET. */
+  AUTH_SECRET: optionalString,
   /** Set on the demo deployment only. `validateSessionToken` short-circuits on
    *  it, and `enforceAccess` bans mutations for it. */
   DEMO_USER_ID: optionalString,
@@ -451,6 +459,10 @@ const rawSchema = z.object({
   ANTHROPIC_BASE_URL: optionalString,
   ANTHROPIC_TOKEN: optionalString,
   ANTHROPIC_VERSION: optionalString,
+  // OpenPanel tracking its own model calls into an OpenPanel project.
+  OP_CLIENT_ID: optionalString,
+  OP_CLIENT_SECRET: optionalString,
+  OP_API_URL: optionalString,
   SLACK_CLIENT_ID: optionalString,
   SLACK_CLIENT_SECRET: optionalString,
   SLACK_OAUTH_REDIRECT_URL: optionalString,
@@ -459,6 +471,7 @@ const rawSchema = z.object({
   POLAR_WEBHOOK_SECRET: optionalString,
   GCS_API_ENDPOINT: optionalString,
   DISABLE_PING: definedIsTrueSchema,
+  DISABLE_FAVICON_FETCH: trueOrOneSchema,
 
   KAFKA_CLIENT_ID: stringWithDefault(DEFAULT_KAFKA_CLIENT_ID),
   KAFKA_BROKERS: tokenList,
@@ -538,6 +551,8 @@ const rawSchema = z.object({
   GROUP_BUFFER_BATCH_SIZE: optionalPositiveInt,
   GROUP_BUFFER_CHUNK_SIZE: optionalPositiveInt,
   GROUP_BUFFER_TTL_IN_SECONDS: optionalPositiveInt,
+  AI_EVENT_BUFFER_BATCH_SIZE: optionalPositiveInt,
+  AI_EVENT_BUFFER_CHUNK_SIZE: optionalPositiveInt,
   PROFILE_BUFFER_BATCH_SIZE: optionalPositiveInt,
   PROFILE_BUFFER_CHUNK_SIZE: optionalPositiveInt,
   PROFILE_BUFFER_TTL_IN_SECONDS: optionalPositiveInt,
@@ -748,6 +763,12 @@ function deriveDashboardUrl(raw: RawEnv): string {
   return raw.DASHBOARD_URL ?? '';
 }
 
+function deriveDashboardOrigins(raw: RawEnv): string[] {
+  return [deriveDashboardUrl(raw), ...splitTokens(raw.API_CORS_ORIGINS)].filter(
+    Boolean
+  );
+}
+
 /** The Kafka transport's knobs, including the producer's three throughput ones. */
 function deriveKafkaConfig(raw: RawEnv): CoreConfig['kafka'] {
   return {
@@ -829,6 +850,7 @@ function deriveCoreConfig(raw: RawEnv): CoreConfig {
         : undefined,
     encryptionKey: raw.ENCRYPTION_KEY,
     pingDisabled: raw.DISABLE_PING,
+    faviconFetchDisabled: raw.DISABLE_FAVICON_FETCH,
     logging: {
       level: raw.LOG_LEVEL,
       silent: raw.LOG_SILENT,
@@ -842,6 +864,8 @@ function deriveCoreConfig(raw: RawEnv): CoreConfig {
         raw.LOG_EXPORTER !== undefined,
     },
     auth: {
+      secret: raw.AUTH_SECRET ?? (raw.COOKIE_SECRET || undefined),
+      trustedOrigins: deriveDashboardOrigins(raw),
       allowRegistration:
         raw.ALLOW_REGISTRATION === undefined
           ? undefined
@@ -878,6 +902,11 @@ function deriveCoreConfig(raw: RawEnv): CoreConfig {
         version: raw.ANTHROPIC_VERSION,
       },
     },
+    selfTracking: {
+      clientId: raw.OP_CLIENT_ID,
+      clientSecret: raw.OP_CLIENT_SECRET,
+      apiUrl: raw.OP_API_URL,
+    },
     slack: {
       clientId: raw.SLACK_CLIENT_ID,
       clientSecret: raw.SLACK_CLIENT_SECRET,
@@ -903,6 +932,10 @@ function deriveCoreConfig(raw: RawEnv): CoreConfig {
         batchSize: raw.GROUP_BUFFER_BATCH_SIZE,
         chunkSize: raw.GROUP_BUFFER_CHUNK_SIZE,
         ttlSeconds: raw.GROUP_BUFFER_TTL_IN_SECONDS,
+      },
+      aiEvent: {
+        batchSize: raw.AI_EVENT_BUFFER_BATCH_SIZE,
+        chunkSize: raw.AI_EVENT_BUFFER_CHUNK_SIZE,
       },
       profile: {
         batchSize: raw.PROFILE_BUFFER_BATCH_SIZE,
@@ -967,6 +1000,7 @@ export interface Config {
   QUEUE_NAMESPACE: string | undefined;
   ENABLED_QUEUES: EnabledQueue[];
   DISABLE_WORKERS: boolean;
+  AUTOMATIC_MIGRATIONS: boolean;
   DISABLE_BULLBOARD: boolean;
   COOKIE_SECRET: string;
   SHUTDOWN_FORCE_EXIT_MS: number;
@@ -1006,7 +1040,6 @@ const envSchema = rawSchema
     checkProfileBackfillProjectsHaveAFlag(raw, ctx);
   })
   .transform((raw): Config => {
-    const dashboardUrl = deriveDashboardUrl(raw);
     return {
       ROLE: raw.ROLE,
       LOG_LEVEL: raw.LOG_LEVEL,
@@ -1015,15 +1048,13 @@ const envSchema = rawSchema
       QUEUE_NAMESPACE: raw.QUEUE_NAMESPACE,
       ENABLED_QUEUES: raw.ENABLED_QUEUES,
       DISABLE_WORKERS: raw.DISABLE_WORKERS,
+      AUTOMATIC_MIGRATIONS: raw.AUTOMATIC_MIGRATIONS,
       DISABLE_BULLBOARD: raw.DISABLE_BULLBOARD,
       COOKIE_SECRET: raw.COOKIE_SECRET,
       SHUTDOWN_FORCE_EXIT_MS: raw.SHUTDOWN_FORCE_EXIT_MS,
       REDIS_CACHE_COMMAND_TIMEOUT_MS: raw.REDIS_CACHE_COMMAND_TIMEOUT_MS,
       INGEST_DEAD_LETTER_MAX_ENTRIES: raw.INGEST_DEAD_LETTER_MAX_ENTRIES,
-      dashboardOrigins: [
-        dashboardUrl,
-        ...splitTokens(raw.API_CORS_ORIGINS),
-      ].filter(Boolean),
+      dashboardOrigins: deriveDashboardOrigins(raw),
       verboseClientIds: splitTokens(raw.ENABLE_VERBOSE_LOGGING),
       listen: raw.API_HOST
         ? { port: raw.API_PORT, hostname: raw.API_HOST }

@@ -182,6 +182,55 @@ describe('compose version key', () => {
   });
 });
 
+describe('API_URL_SSR', () => {
+  test('a missing value is filled with the internal api address', () => {
+    const dir = v1Copy();
+    expect(ids(dir)).toContain('env/api-url-ssr');
+    expect(fixed(dir).env.get('API_URL_SSR')).toBe('http://op-api:3000');
+  });
+
+  test('a custom address is kept', () => {
+    const dir = v1Copy();
+    editEnv(dir, (text) => `${text}API_URL_SSR="http://10.0.0.5:3000"\n`);
+    expect(ids(dir)).not.toContain('env/api-url-ssr');
+    expect(fixed(dir).env.get('API_URL_SSR')).toBe('http://10.0.0.5:3000');
+  });
+
+  test('a blank line is an opt-out and stays blank', () => {
+    const dir = v1Copy();
+    editEnv(dir, (text) => `${text}API_URL_SSR=\n`);
+    expect(ids(dir)).not.toContain('env/api-url-ssr');
+    expect(fixed(dir).env.get('API_URL_SSR')).toBeUndefined();
+  });
+
+  test('a dashboard on a separate network keeps the public route', () => {
+    const dir = v1Copy();
+    editCompose(dir, (text) =>
+      text.replace(
+        '  op-dashboard:\n    image:',
+        '  op-dashboard:\n    networks: [edge]\n    image:'
+      )
+    );
+    expect(ids(dir)).not.toContain('env/api-url-ssr');
+  });
+
+  test('a network shared with the api still gets the internal address', () => {
+    const dir = v1Copy();
+    editCompose(dir, (text) =>
+      text
+        .replace(
+          '  op-dashboard:\n    image:',
+          '  op-dashboard:\n    networks: [edge, backend]\n    image:'
+        )
+        .replace(
+          '  op-api:\n    image:',
+          '  op-api:\n    networks:\n      backend: {}\n    image:'
+        )
+    );
+    expect(ids(dir)).toContain('env/api-url-ssr');
+  });
+});
+
 describe('files', () => {
   test('a bootstrap.yaml directory (made by docker) is reported, not written over', () => {
     const dir = v1Copy();
@@ -228,6 +277,24 @@ describe('worker replicas', () => {
       'replicas',
     ]);
     expect(replicas).toBe(`${DOLLAR}{OP_WORKER_REPLICAS:-1}`);
+  });
+});
+
+describe('DISABLE_FAVICON_FETCH', () => {
+  const findingFor = (value: string) => {
+    const install = loadInstall(V1_FIXTURE);
+    install.env.set('DISABLE_FAVICON_FETCH', value);
+    return runDoctor(install).find(
+      (candidate) => candidate.id === 'env/favicon-fetch-flag'
+    );
+  };
+
+  test('flags a value that leaves the lookups running', () => {
+    expect(findingFor('yes')?.title).toContain('"yes"');
+  });
+
+  test.each(['true', '1', 'false', '0'])('accepts %s', (value) => {
+    expect(findingFor(value)).toBeUndefined();
   });
 });
 

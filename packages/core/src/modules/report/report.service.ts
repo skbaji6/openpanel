@@ -76,6 +76,8 @@ export function transformReportEventItem(
     name: item.name || 'unknown_event',
     displayName: item.displayName,
     property: item.property,
+    firstTime: item.firstTime,
+    ...(item.perUser ? { perUser: item.perUser } : {}),
   };
 }
 

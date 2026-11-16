@@ -2,7 +2,10 @@ import type {
   IChartMetric,
   IConversionYAxisScale,
 } from '@openpanel/core/modules/report/report.constants';
-import { conversionYAxisScales } from '@openpanel/core/modules/report/report.constants';
+import {
+  conversionYAxisScales,
+  timeToConvertAggregations,
+} from '@openpanel/core/modules/report/report.constants';
 import { useMemo } from 'react';
 import {
   changeConversionYAxisScale,
@@ -16,6 +19,7 @@ import {
   changeSankeyMode,
   changeSankeySteps,
   changeStacked,
+  changeTimeToConvert,
   changeUnit,
 } from '../reportSlice';
 import { SidebarSection } from './sidebar-section';
@@ -30,6 +34,14 @@ import { useDispatch, useSelector } from '@/redux';
 import { objectToZodEnums } from '@/utils/object-to-zod-enums';
 
 const DEFAULT_CONVERSION_Y_AXIS_SCALE: IConversionYAxisScale = 'fixed';
+const TIME_TO_CONVERT_OFF = 'off' as const;
+const TIME_TO_CONVERT_ITEMS = [
+  { label: 'Off', value: TIME_TO_CONVERT_OFF },
+  ...objectToZodEnums(timeToConvertAggregations).map((key) => ({
+    label: timeToConvertAggregations[key],
+    value: key,
+  })),
+];
 
 export function ReportSettings() {
   const chartType = useSelector((state) => state.report.chartType);
@@ -43,9 +55,15 @@ export function ReportSettings() {
 
   const funnelOptions = options?.type === 'funnel' ? options : undefined;
   const funnelGroup = funnelOptions?.funnelGroup;
+  // Conversion has no group key, so a stored `group` runs per session there.
+  const shownFunnelGroup =
+    chartType !== 'funnel' && funnelGroup === 'group'
+      ? 'session_id'
+      : funnelGroup || 'session_id';
   const funnelWindow = funnelOptions?.funnelWindow;
   const conversionYAxisScale =
     funnelOptions?.yAxisScale ?? DEFAULT_CONVERSION_Y_AXIS_SCALE;
+  const timeToConvert = funnelOptions?.timeToConvert ?? TIME_TO_CONVERT_OFF;
 
   const histogramOptions = options?.type === 'histogram' ? options : undefined;
   const stacked = histogramOptions?.stacked ?? false;
@@ -57,7 +75,11 @@ export function ReportSettings() {
   const fields = useMemo(() => {
     const fields: string[] = [];
 
-    if (chartType !== 'retention' && chartType !== 'sankey') {
+    if (
+      chartType !== 'retention' &&
+      chartType !== 'sankey' &&
+      chartType !== 'distribution'
+    ) {
       fields.push('previous');
     }
 
@@ -69,6 +91,10 @@ export function ReportSettings() {
     if (chartType === 'funnel' || chartType === 'conversion') {
       fields.push('funnelGroup');
       fields.push('funnelWindow');
+    }
+
+    if (chartType === 'funnel') {
+      fields.push('timeToConvert');
     }
 
     if (chartType === 'conversion') {
@@ -201,6 +227,11 @@ export function ReportSettings() {
                   label: 'Profile',
                   value: 'profile_id',
                 },
+                // Only the funnel query keys on a group; conversion stays
+                // session or profile.
+                ...(chartType === 'funnel'
+                  ? [{ label: 'Group', value: 'group' }]
+                  : []),
               ]}
               onChange={(val) => {
                 dispatch(
@@ -209,7 +240,7 @@ export function ReportSettings() {
               }}
               placeholder="Default: Session"
               size="sm"
-              value={funnelGroup || 'session_id'}
+              value={shownFunnelGroup}
               variant="input"
             />
           </div>
@@ -233,6 +264,28 @@ export function ReportSettings() {
               size="sm"
               type="number"
               value={funnelWindow ? String(funnelWindow) : ''}
+            />
+          </div>
+        )}
+        {fields.includes('timeToConvert') && (
+          <div className="flex items-center justify-between gap-4">
+            <Label className="mb-0 whitespace-nowrap font-medium">
+              Time to convert
+            </Label>
+            <Combobox
+              align="end"
+              items={TIME_TO_CONVERT_ITEMS}
+              onChange={(val) => {
+                dispatch(
+                  changeTimeToConvert(
+                    val === TIME_TO_CONVERT_OFF ? undefined : val
+                  )
+                );
+              }}
+              placeholder="Default: Off"
+              size="sm"
+              value={timeToConvert}
+              variant="input"
             />
           </div>
         )}

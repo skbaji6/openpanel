@@ -16,10 +16,16 @@ import {
 } from '../../cacheable-per-deps';
 import { chQuery } from '../../ch-query';
 import { sendEmail } from '../../clients/email';
-import { TRPCBadRequestError, TRPCNotFoundError } from '../../rpc/errors';
-import type { ServiceDeps, Services } from '../../services';
 import {
-  effectiveProjectGrants,
+  TRPCBadRequestError,
+  TRPCForbiddenError,
+  TRPCNotFoundError,
+} from '../../rpc/errors';
+import type { ServiceDeps, Services } from '../../services';
+
+type MembershipDeps = Pick<ServiceDeps, 'db' | 'config'>;
+
+import {
   getOrganizationAccess,
   getProjectAccess,
 } from '../../shared/access-lookups';
@@ -33,9 +39,7 @@ import {
   normalizeOrganizationRole,
   type OrganizationRole,
   type ProjectScope,
-  resolveOrganizationRole,
   STORED_ADMIN_ROLES,
-  toStoredOrganizationRole,
 } from './organization.constants';
 
 export type IServiceOrganization = Awaited<
@@ -54,10 +58,6 @@ export type IServiceMember = Omit<
 // Session bookkeeping rows are worker-generated (the reaper can emit
 // session_end long after tracking stopped), so they are not billable activity.
 const NON_BILLABLE_EVENT_NAMES = ['session_start', 'session_end'];
-/** A module function's parameters with its leading `ServiceDeps` dropped. */
-type Tail<T extends unknown[]> = T extends [unknown, ...infer Rest]
-  ? Rest
-  : never;
 
 const DELETE_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
 const INVITE_EXPIRY_MS = 3 * 24 * 60 * 60 * 1000;
@@ -179,49 +179,27 @@ export async function getMembers(
   organizationId: string
 ): Promise<IServiceMember[]> {
   const db = deps.db;
-  const [members, legacyGrants] = await Promise.all([
-    db.member.findMany({
-      where: {
-        organizationId,
-        userId: {
-          not: null,
-        },
+  const members = await db.member.findMany({
+    where: {
+      organizationId,
+      userId: {
+        not: null,
       },
-      include: {
-        user: true,
-        projects: { select: { projectId: true, level: true } },
-        organization: { select: { createdByUserId: true } },
-      },
-    }),
-    db.projectAccess.findMany({
-      where: { organizationId },
-      select: { userId: true, projectId: true, level: true },
-    }),
-  ]);
-
-  // The same projection the access lookup applies, so the edit modal never
-  // starts from "all projects" for a member an old pod restricted.
-  return members.map(({ organization, ...member }) => ({
+    },
+    include: {
+      user: true,
+      projects: { select: { projectId: true, level: true } },
+    },
+  });
+  return members.map((member) => ({
     ...member,
-    ...effectiveProjectGrants({
-      projectScope: member.projectScope,
-      projects: member.projects,
-      legacyGrants: legacyGrants.filter(
-        (grant) => grant.userId === member.userId
-      ),
-    }),
-    role: resolveOrganizationRole({ ...member, organization }),
+    role: normalizeOrganizationRole(member.role),
   }));
 }
 
-/**
- * Write a member's project grants to both tables. `project_access` is the
- * previous build's source of truth and is kept in step for one more build so
- * a rollback changes nobody's access; the next build drops it.
- */
 function writeMemberProjects(
-  deps: ServiceDeps,
-  member: { id: string; userId: string; organizationId: string },
+  deps: MembershipDeps,
+  memberId: string,
   projectScope: ProjectScope,
   grants: IProjectAccessGrant[]
 ) {
@@ -229,27 +207,16 @@ function writeMemberProjects(
   const selected = projectScope === 'all' ? [] : grants;
   return [
     db.member.update({
-      where: { id: member.id },
+      where: { id: memberId },
       data: { projectScope },
     }),
-    db.memberProject.deleteMany({ where: { memberId: member.id } }),
+    db.memberProject.deleteMany({ where: { memberId } }),
     db.memberProject.createMany({
       data: selected.map((grant) => ({
-        memberId: member.id,
+        memberId,
         projectId: grant.projectId,
         // Write is what the role gives; only a restriction is worth storing.
         level: grant.level === 'read' ? 'read' : null,
-      })),
-    }),
-    db.projectAccess.deleteMany({
-      where: { userId: member.userId, organizationId: member.organizationId },
-    }),
-    db.projectAccess.createMany({
-      data: selected.map((grant) => ({
-        userId: member.userId,
-        organizationId: member.organizationId,
-        projectId: grant.projectId,
-        level: grant.level,
       })),
     }),
   ];
@@ -263,7 +230,7 @@ function writeMemberProjects(
  * concurrent request can cache the old answer again.
  */
 async function clearMemberAccessCache(
-  deps: ServiceDeps,
+  deps: MembershipDeps,
   { userId, organizationId }: { userId: string; organizationId: string }
 ): Promise<void> {
   const projects = await deps.db.project.findMany({
@@ -279,12 +246,12 @@ async function clearMemberAccessCache(
 }
 
 export async function connectUserToOrganization(
-  deps: ServiceDeps,
+  deps: MembershipDeps,
   {
     user,
     inviteId,
   }: {
-    user: User;
+    user: Pick<User, 'id' | 'email'>;
     inviteId: string;
   }
 ) {
@@ -310,10 +277,7 @@ export async function connectUserToOrganization(
     throw new Error('Invite expired');
   }
 
-  // Invites written before the scope column, or by the previous image during
-  // a rolling deploy, carry their restriction only in `projectAccess`.
-  const projectScope: ProjectScope =
-    invite.projectAccess.length > 0 ? 'selected' : invite.projectScope;
+  const { projectScope } = invite;
 
   const existing = await db.member.findUnique({
     where: {
@@ -349,16 +313,7 @@ export async function connectUserToOrganization(
 
   if (!existing) {
     await db.$transaction(
-      writeMemberProjects(
-        deps,
-        {
-          id: member.id,
-          userId: user.id,
-          organizationId: invite.organizationId,
-        },
-        projectScope,
-        invite.projectAccess
-      )
+      writeMemberProjects(deps, member.id, projectScope, invite.projectAccess)
     );
   }
 
@@ -367,13 +322,47 @@ export async function connectUserToOrganization(
     organizationId: invite.organizationId,
   });
 
-  await db.invite.delete({
+  // deleteMany: a concurrent acceptance may already have consumed it.
+  await db.invite.deleteMany({
     where: {
       id: inviteId,
     },
   });
 
   return member;
+}
+
+/**
+ * Join an organization from an invite while signed in. The session's email must
+ * be the invited address, so an account that merely registered that address
+ * without proving it still cannot take the invite without the link.
+ */
+export async function acceptInvite(
+  deps: ServiceDeps,
+  { userId, inviteId }: { userId: string; inviteId: string }
+): Promise<{ organizationId: string }> {
+  const [user, invite] = await Promise.all([
+    deps.db.user.findUniqueOrThrow({ where: { id: userId } }),
+    deps.db.invite.findUnique({ where: { id: inviteId } }),
+  ]);
+
+  if (!invite) {
+    throw new TRPCNotFoundError('Invite not found');
+  }
+  if (invite.email.toLowerCase() !== user.email.toLowerCase()) {
+    throw new TRPCForbiddenError(
+      'This invitation was sent to a different email address'
+    );
+  }
+  if (deps.config.auth.allowInvitation === false) {
+    throw new TRPCForbiddenError('Invitations are not allowed');
+  }
+  if (invite.expiresAt < new Date()) {
+    throw new TRPCBadRequestError('This invitation has expired');
+  }
+
+  await connectUserToOrganization(deps, { user, inviteId });
+  return { organizationId: invite.organizationId };
 }
 
 export async function getOrganizationBillingEventsCount(
@@ -456,45 +445,129 @@ export async function getOrganizationEventsCountSince(
   return res[0]?.count ?? 0;
 }
 
-export async function getOrganizationBillingEventsCountSerie(
-  deps: ServiceDeps,
-  organization: IServiceOrganization & { projects: { id: string }[] },
-  {
-    startDate,
-    endDate,
-  }: {
-    startDate: Date;
-    endDate: Date;
-  }
-): Promise<{ count: number; day: string }[]> {
-  // `day` is the SELECT alias, referenced by both the WHERE clause and the
-  // WITH FILL below.
-  const from = formatClickhouseDate(startDate, true);
-  const to = formatClickhouseDate(endDate, true);
-  const statement = sql`
-    SELECT COUNT(*) AS count, toDate(toStartOfDay(created_at)) AS day
-    FROM ${sql.id(TABLE_NAMES.events)} e
-    WHERE project_id IN ${sql.array(
-      'String',
-      organization.projects.map((project) => project.id)
-    )}
-      AND day BETWEEN ${sql.string(from)} AND ${sql.string(to)}
-      AND name NOT IN ${sql.array('String', NON_BILLABLE_EVENT_NAMES)}
-    GROUP BY day
-    ORDER BY day WITH FILL FROM toDate(${sql.string(from)}) TO toDate(${sql.string(to)}) STEP INTERVAL 1 DAY
-  `;
-
-  return chQuery<{ count: number; day: string }>(deps, statement);
+export interface IOrganizationBillingUsageInput {
+  projectIds: string[];
+  /** Inclusive UTC day, `YYYY-MM-DD`. */
+  from: string;
+  /** Inclusive UTC day, `YYYY-MM-DD`. */
+  to: string;
+  /** Exact lower bound within `from`, `YYYY-MM-DD HH:mm:ss` UTC, when the window starts mid-day. */
+  since?: string;
 }
 
-const BILLING_EVENTS_SERIE_CACHE_TTL_SEC = 60 * 10;
-export const getOrganizationBillingEventsCountSerieCached = cacheablePerDeps(
-  'getOrganizationBillingEventsCountSerie',
-  (
-    deps: ServiceDeps,
-    ...args: Tail<Parameters<typeof getOrganizationBillingEventsCountSerie>>
-  ) => getOrganizationBillingEventsCountSerie(deps, ...args),
-  BILLING_EVENTS_SERIE_CACHE_TTL_SEC
+export interface IOrganizationBillingUsage {
+  from: string;
+  to: string;
+  /** One row per UTC day in the window, zero-filled; `counts` is keyed by project id. */
+  days: { day: string; counts: Record<string, number> }[];
+  /** Billable events per project over the window. */
+  projectTotals: Record<string, number>;
+  /** The most frequent billable event names over the window, descending. */
+  eventNames: { name: string; count: number }[];
+  /** The same per project, keyed by project id. */
+  eventNamesByProject: Record<string, { name: string; count: number }[]>;
+}
+
+// Enough slices for a legible pie; the dashboard folds the rest into "Other".
+export const BILLING_USAGE_EVENT_NAMES_LIMIT = 9;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+function listUtcDays(from: string, to: string): string[] {
+  const days: string[] = [];
+  const end = new Date(`${to}T00:00:00.000Z`).getTime();
+  for (
+    let cursor = new Date(`${from}T00:00:00.000Z`).getTime();
+    cursor <= end;
+    cursor += MS_PER_DAY
+  ) {
+    days.push(new Date(cursor).toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+export async function getOrganizationBillingUsage(
+  deps: ServiceDeps,
+  { projectIds, from, to, since }: IOrganizationBillingUsageInput
+): Promise<IOrganizationBillingUsage> {
+  const empty: IOrganizationBillingUsage = {
+    from,
+    to,
+    days: listUtcDays(from, to).map((day) => ({ day, counts: {} })),
+    projectTotals: {},
+    eventNames: [],
+    eventNamesByProject: {},
+  };
+  if (projectIds.length === 0) {
+    return empty;
+  }
+
+  // Both statements share the billable-event filter so the pie's "Other"
+  // slice (total minus the named slices) adds up against the bars.
+  const billable = sql`
+    project_id IN ${sql.array('String', projectIds)}
+      AND toDate(created_at) BETWEEN toDate(${sql.string(from)}) AND toDate(${sql.string(to)})
+      ${since ? sql`AND created_at >= ${sql.string(since)}` : sql.empty}
+      AND name NOT IN ${sql.array('String', NON_BILLABLE_EVENT_NAMES)}
+  `;
+  const [perProjectDay, perName, perProjectName] = await Promise.all([
+    chQuery<{ project_id: string; day: string; count: number }>(
+      deps,
+      sql`
+        SELECT project_id, toDate(created_at) AS day, COUNT(*) AS count
+        FROM ${sql.id(TABLE_NAMES.events)}
+        WHERE ${billable}
+        GROUP BY project_id, day
+      `
+    ),
+    chQuery<{ name: string; count: number }>(
+      deps,
+      sql`
+        SELECT name, COUNT(*) AS count
+        FROM ${sql.id(TABLE_NAMES.events)}
+        WHERE ${billable}
+        GROUP BY name
+        ORDER BY count DESC
+        LIMIT ${sql.uint64(BILLING_USAGE_EVENT_NAMES_LIMIT)}
+      `
+    ),
+    chQuery<{ project_id: string; name: string; count: number }>(
+      deps,
+      sql`
+        SELECT project_id, name, COUNT(*) AS count
+        FROM ${sql.id(TABLE_NAMES.events)}
+        WHERE ${billable}
+        GROUP BY project_id, name
+        ORDER BY project_id, count DESC
+        LIMIT ${sql.uint64(BILLING_USAGE_EVENT_NAMES_LIMIT)} BY project_id
+      `
+    ),
+  ]);
+
+  const countsByDay = new Map(empty.days.map((row) => [row.day, row.counts]));
+  for (const row of perProjectDay) {
+    const count = Number(row.count);
+    countsByDay.get(row.day)![row.project_id] = count;
+    empty.projectTotals[row.project_id] =
+      (empty.projectTotals[row.project_id] ?? 0) + count;
+  }
+  empty.eventNames = perName.map((row) => ({
+    name: row.name,
+    count: Number(row.count),
+  }));
+  for (const row of perProjectName) {
+    const names = empty.eventNamesByProject[row.project_id] ?? [];
+    names.push({ name: row.name, count: Number(row.count) });
+    empty.eventNamesByProject[row.project_id] = names;
+  }
+  return empty;
+}
+
+const BILLING_USAGE_CACHE_TTL_SEC = 60 * 10;
+export const getOrganizationBillingUsageCached = cacheablePerDeps(
+  'getOrganizationBillingUsage',
+  (deps: ServiceDeps, input: IOrganizationBillingUsageInput) =>
+    getOrganizationBillingUsage(deps, input),
+  BILLING_USAGE_CACHE_TTL_SEC
 );
 
 export async function getOrganizationSubscriptionChartEndDate(
@@ -672,7 +745,7 @@ export async function runDeleteCron(
     where: {
       OR: [
         { deleteAt: { lte: now } },
-        { members: { none: { role: { in: [...STORED_ADMIN_ROLES] } } } },
+        { members: { none: { role: { in: STORED_ADMIN_ROLES } } } },
       ],
     },
     include: { projects: { select: { id: true } } },
@@ -867,7 +940,7 @@ export async function inviteUserToOrganization(
       id: generateSecureId('invite'),
       email,
       organizationId: input.organizationId,
-      role: toStoredOrganizationRole(input.role),
+      role: input.role,
       createdById: input.invitedById,
       projectScope: input.projectScope,
       projectAccess: access,
@@ -882,7 +955,9 @@ export async function inviteUserToOrganization(
     },
   });
 
-  if (userExists) {
+  // Only a verified address may join without the link: anyone can register
+  // an unverified account under someone else's email.
+  if (userExists?.emailVerified) {
     const member = await connectUserToOrganization(deps, {
       user: userExists,
       inviteId: invite.id,
@@ -953,21 +1028,13 @@ export async function removeOrganizationMember(
     throw new Error('You cannot remove yourself from the organization');
   }
 
-  await db.$transaction([
-    db.member.delete({
-      where: {
-        id: input.memberId,
-        userId: input.targetUserId,
-        organizationId: input.organizationId,
-      },
-    }),
-    db.projectAccess.deleteMany({
-      where: {
-        userId: input.targetUserId,
-        organizationId: input.organizationId,
-      },
-    }),
-  ]);
+  await db.member.delete({
+    where: {
+      id: input.memberId,
+      userId: input.targetUserId,
+      organizationId: input.organizationId,
+    },
+  });
   await clearMemberAccessCache(deps, {
     userId: input.targetUserId,
     organizationId: input.organizationId,
@@ -976,8 +1043,8 @@ export async function removeOrganizationMember(
 
 /**
  * A grant may only name a project inside the organization it is granted in.
- * Without this an admin of one organization could write projectAccess rows
- * pointing at another organization's projects.
+ * Without this an admin of one organization could grant access to another
+ * organization's projects.
  */
 async function assertProjectsInOrganization(
   deps: ServiceDeps,
@@ -1028,16 +1095,7 @@ export async function updateOrganizationMemberAccess(
   await assertProjectsInOrganization(deps, input.organizationId, access);
 
   await db.$transaction(
-    writeMemberProjects(
-      deps,
-      {
-        id: member.id,
-        userId: input.targetUserId,
-        organizationId: input.organizationId,
-      },
-      input.projectScope,
-      access
-    )
+    writeMemberProjects(deps, member.id, input.projectScope, access)
   );
   await clearMemberAccessCache(deps, {
     userId: input.targetUserId,
@@ -1083,6 +1141,10 @@ export function createOrganizationService(
       getInvites(deps, organizationId),
     getInvite: (inviteId: string): ReturnType<typeof getInviteById> =>
       getInviteById(deps, inviteId),
+    acceptInvite: (input: {
+      userId: string;
+      inviteId: string;
+    }): Promise<{ organizationId: string }> => acceptInvite(deps, input),
     runDeleteCron: (): Promise<DeleteCronResult> => runDeleteCron(deps),
   };
 }

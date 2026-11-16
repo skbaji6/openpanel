@@ -53,6 +53,7 @@ describe('init output', () => {
     expect(files.get('.env')).toContain(
       `CLICKHOUSE_URL="${BUNDLED_URLS.clickhouse}"`
     );
+    expect(files.get('.env')).toContain('API_URL_SSR="http://op-api:3000"');
     expect(files.has('clickhouse/init-db.sh')).toBe(true);
     expect(files.has('caddy/Caddyfile')).toBe(true);
   });
@@ -67,6 +68,16 @@ describe('init output', () => {
     expect(compose.volumes).not.toHaveProperty('op-db-data');
     expect(files.get('.env')).toContain(`DATABASE_URL="${url}"`);
     expect(files.get('.env')).toContain(`DATABASE_URL_DIRECT="${url}"`);
+  });
+
+  test('placeholder text inside an external url is kept literally', async () => {
+    const url = `redis://user:${DOLLAR}ENCRYPTION_KEY@redis.internal:6379`;
+    const env = (await generate({ external: { redis: url } })).get(
+      '.env'
+    ) as string;
+
+    expect(env).toContain(`REDIS_URL="${url}"`);
+    expect(env).not.toContain(`${secrets.encryptionKey}@`);
   });
 
   test('an external clickhouse skips its config files', async () => {

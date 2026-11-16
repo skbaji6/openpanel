@@ -6,6 +6,8 @@ import {
   createPortal,
   getProduct,
   getProducts,
+  type IPolarProduct,
+  isCustomProduct,
   pauseSubscription as pausePolarSubscription,
   reactivateSubscription,
   resumeSubscription as resumePolarSubscription,
@@ -18,11 +20,13 @@ import { z } from 'zod';
 import type { Logger } from '../../logger';
 import { TRPCBadRequestError } from '../../rpc/errors';
 import type { ServiceDeps, Services } from '../../services';
+import { formatClickhouseDate } from '../../shared/ch-dates';
 import { getAccessChecks } from '../auth/auth.service';
 import {
-  getOrganizationBillingEventsCountSerieCached,
+  getOrganizationBillingUsageCached,
   getOrganizationById,
   getOrganizationByProjectIdCached,
+  type IOrganizationBillingUsage,
 } from '../organization/organization.service';
 import {
   type ICancellationReason,
@@ -34,7 +38,17 @@ import {
 
 const POLAR_PRODUCTS_CACHE_KEY = 'polar:products';
 const POLAR_PRODUCTS_CACHE_TTL_SECONDS = 60 * 60 * 24;
-const DEFAULT_USAGE_WINDOW_DAYS = 30;
+const TRAILING_USAGE_WINDOW_DAYS = 30;
+const PRODUCT_OVER_LIMIT_MESSAGE =
+  'This product is not applicable since you have exceeded the limits for this subscription.';
+const PRODUCT_UNAVAILABLE_MESSAGE =
+  'This product is not available for this organization';
+
+export type IOrganizationUsage = IOrganizationBillingUsage & {
+  projects: { id: string; name: string }[];
+  /** `billing_period` runs from the current period's start to today. */
+  window: 'billing_period' | 'trailing';
+};
 
 async function requireOrgAdmin(
   userId: string,
@@ -42,6 +56,40 @@ async function requireOrgAdmin(
 ): Promise<void> {
   const { requireOrganizationAdmin } = await getAccessChecks();
   await requireOrganizationAdmin({ userId, organizationId });
+}
+
+/**
+ * Why an organization may not move to a product, or null when it may. The
+ * catalog shows it and checkout enforces it, so the two cannot drift.
+ */
+function getProductIneligibility(
+  product: Pick<IPolarProduct, 'metadata' | 'isArchived'>,
+  organization: { id: string; subscriptionPeriodEventsCount: number }
+): string | null {
+  const isOtherOrganizationsProduct =
+    isCustomProduct(product) &&
+    product.metadata.organizationId !== organization.id;
+  if (product.isArchived || isOtherOrganizationsProduct) {
+    return PRODUCT_UNAVAILABLE_MESSAGE;
+  }
+  const eventsLimit = product.metadata.eventsLimit;
+  const isOverLimit =
+    typeof eventsLimit === 'number' &&
+    organization.subscriptionPeriodEventsCount >= eventsLimit;
+  return isOverLimit ? PRODUCT_OVER_LIMIT_MESSAGE : null;
+}
+
+async function requireEligibleProduct(
+  productId: string,
+  organization: { id: string; subscriptionPeriodEventsCount: number }
+): Promise<void> {
+  const ineligibility = getProductIneligibility(
+    await getProduct(productId),
+    organization
+  );
+  if (ineligibility) {
+    throw new TRPCBadRequestError(ineligibility);
+  }
 }
 
 export async function getCurrentSubscriptionProduct(
@@ -104,10 +152,12 @@ export async function checkout(
       return null;
     }
 
+    await requireEligibleProduct(input.productId, organization);
     await changeSubscription(organization.subscriptionId, input.productId);
     return null;
   }
 
+  await requireEligibleProduct(input.productId, organization);
   const checkoutSession = await createCheckout({
     productId: input.productId,
     organizationId: input.organizationId,
@@ -121,7 +171,7 @@ export async function checkout(
 export async function listProducts(deps: ServiceDeps, organizationId: string) {
   const organization = await deps.db.organization.findUniqueOrThrow({
     where: { id: organizationId },
-    select: { subscriptionPeriodEventsCount: true },
+    select: { id: true, subscriptionPeriodEventsCount: true },
   });
 
   return (
@@ -130,53 +180,55 @@ export async function listProducts(deps: ServiceDeps, organizationId: string) {
       POLAR_PRODUCTS_CACHE_TTL_SECONDS,
       () => getProducts()
     )
-  ).map((product) => {
-    const eventsLimit = product.metadata.eventsLimit;
-    return {
-      ...product,
-      disabled:
-        typeof eventsLimit === 'number' &&
-        organization.subscriptionPeriodEventsCount >= eventsLimit
-          ? 'This product is not applicable since you have exceeded the limits for this subscription.'
-          : null,
-    };
-  });
+  ).map((product) => ({
+    ...product,
+    disabled: getProductIneligibility(product, organization),
+  }));
 }
 
-export async function getUsage(deps: ServiceDeps, organizationId: string) {
+/** Admin-only: it names and counts every project, including ones a `selected`-scope member cannot open. */
+export async function getUsage(
+  deps: ServiceDeps,
+  userId: string,
+  organizationId: string
+): Promise<IOrganizationUsage> {
+  await requireOrgAdmin(userId, organizationId);
   const organization = await deps.db.organization.findUniqueOrThrow({
     where: { id: organizationId },
-    include: { projects: { select: { id: true } } },
+    include: {
+      projects: {
+        select: { id: true, name: true },
+        orderBy: { createdAt: 'asc' },
+      },
+    },
   });
-
-  if (
-    organization.hasSubscription &&
-    organization.subscriptionStartsAt &&
-    organization.subscriptionEndsAt
-  ) {
-    // The CURRENT billing period, not the whole subscription term. The usage
-    // counter this chart sits beside resets each period, and
-    // `subscriptionStartsAt` is overwritten with each period start on renewal,
-    // so one interval from it is the period the counter belongs to. A term
-    // running years out — a seeded org, or a long commitment — would otherwise
-    // bucket thousands of days and repeat week numbers along the axis.
-    const periodEnd = addMonths(
-      organization.subscriptionStartsAt,
-      organization.subscriptionInterval === 'year' ? 12 : 1
-    );
-    return getOrganizationBillingEventsCountSerieCached(deps, organization, {
-      startDate: organization.subscriptionStartsAt,
-      endDate:
-        periodEnd < organization.subscriptionEndsAt
-          ? periodEnd
-          : organization.subscriptionEndsAt,
-    });
-  }
-
-  return getOrganizationBillingEventsCountSerieCached(deps, organization, {
-    startDate: subDays(new Date(), DEFAULT_USAGE_WINDOW_DAYS),
-    endDate: new Date(),
+  // The period the usage counter belongs to, so the breakdown adds up to the
+  // number on the plan card. `subscriptionCurrentPeriodStart` is already the
+  // monthly cycle for yearly plans, since limits are per month. Gated on the
+  // product too, as the plan card is: without one there is no counter to match.
+  const today = new Date();
+  const hasPlan =
+    organization.hasSubscription && organization.subscriptionProductId !== null;
+  const periodStart = hasPlan
+    ? organization.subscriptionCurrentPeriodStart
+    : null;
+  const isBillingPeriod = periodStart !== null && periodStart <= today;
+  const from = isBillingPeriod
+    ? periodStart
+    : subDays(today, TRAILING_USAGE_WINDOW_DAYS - 1);
+  // The counter starts at the exact period start, so the first day only
+  // counts from that moment.
+  const usage = await getOrganizationBillingUsageCached(deps, {
+    projectIds: organization.projects.map((project) => project.id),
+    from: formatClickhouseDate(from, true),
+    to: formatClickhouseDate(today, true),
+    since: isBillingPeriod ? formatClickhouseDate(from) : undefined,
   });
+  return {
+    ...usage,
+    projects: organization.projects,
+    window: isBillingPeriod ? 'billing_period' : 'trailing',
+  };
 }
 
 export async function cancelSubscription(
@@ -783,8 +835,10 @@ export function createSubscriptionService(
     ): ReturnType<typeof checkout> => checkout(deps, userId, input, ipAddress),
     listProducts: (organizationId: string): ReturnType<typeof listProducts> =>
       listProducts(deps, organizationId),
-    getUsage: (organizationId: string): ReturnType<typeof getUsage> =>
-      getUsage(deps, organizationId),
+    getUsage: (
+      userId: string,
+      organizationId: string
+    ): ReturnType<typeof getUsage> => getUsage(deps, userId, organizationId),
     cancelSubscription: (
       userId: string,
       input: ICancelSubscription

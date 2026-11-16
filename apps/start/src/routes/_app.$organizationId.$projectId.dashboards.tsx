@@ -1,11 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { format } from 'date-fns';
-import { LayoutPanelTopIcon, Pencil, PlusIcon, Trash } from 'lucide-react';
+import {
+  Copy,
+  LayoutPanelTopIcon,
+  Pencil,
+  PlusIcon,
+  Trash,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardActions, CardActionsItem } from '@/components/card';
 import { DashboardPreview } from '@/components/dashboard-preview';
-import { FullPageEmptyState } from '@/components/full-page-empty-state';
+import { EmptyState } from '@/components/empty-state';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { PageContainer } from '@/components/page-container';
 import { PageHeader } from '@/components/page-header';
@@ -47,6 +53,17 @@ function Component() {
     })
   );
   const dashboards = query.data ?? [];
+  const duplication = useMutation(
+    trpc.dashboard.duplicate.mutationOptions({
+      onError: handleErrorToastOptions({}),
+      onSuccess(dashboard) {
+        query.refetch();
+        toast('Success', {
+          description: `Created "${dashboard.name}".`,
+        });
+      },
+    })
+  );
   const deletion = useMutation(
     trpc.dashboard.delete.mutationOptions({
       onError: (error, variables) => {
@@ -72,21 +89,6 @@ function Component() {
     })
   );
 
-  if (dashboards.length === 0) {
-    return (
-      <FullPageEmptyState icon={LayoutPanelTopIcon} title="No dashboards">
-        <p>You have not created any dashboards for this project yet</p>
-        <Button
-          className="mt-14"
-          icon={PlusIcon}
-          onClick={() => pushModal('AddDashboard')}
-        >
-          Create dashboard
-        </Button>
-      </FullPageEmptyState>
-    );
-  }
-
   return (
     <PageContainer>
       <PageHeader
@@ -100,56 +102,78 @@ function Component() {
         description="Access all your dashboards here"
         title="Dashboards"
       />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-        {dashboards.map((item) => (
-          <Card className="group" hover key={item.id}>
-            <Link
-              className="col gap-3 p-3"
-              from={Route.fullPath}
-              to={`${item.id}`}
-            >
-              <DashboardPreview reports={item.reports} />
-              <div className="col gap-0.5 px-1">
-                <div className="truncate font-medium">{item.name}</div>
-                <div className="truncate text-muted-foreground text-sm">
-                  {item.reports.length}{' '}
-                  {item.reports.length === 1 ? 'report' : 'reports'} · Updated{' '}
-                  {format(item.updatedAt, 'MMM d, HH:mm')}
+      {dashboards.length === 0 ? (
+        <EmptyState
+          description="Put the reports you check most often on one page, then share it with your team or embed it."
+          icon={LayoutPanelTopIcon}
+          title="No dashboards yet"
+        >
+          <Button icon={PlusIcon} onClick={() => pushModal('AddDashboard')}>
+            Create dashboard
+          </Button>
+        </EmptyState>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
+          {dashboards.map((item) => (
+            <Card className="group" hover key={item.id}>
+              <Link
+                className="col gap-3 p-3"
+                from={Route.fullPath}
+                to={`${item.id}`}
+              >
+                <DashboardPreview reports={item.reports} />
+                <div className="col gap-0.5 px-1">
+                  <div className="truncate font-medium">{item.name}</div>
+                  <div className="truncate text-muted-foreground text-sm">
+                    {item.reports.length}{' '}
+                    {item.reports.length === 1 ? 'report' : 'reports'} · Updated{' '}
+                    {format(item.updatedAt, 'MMM d, HH:mm')}
+                  </div>
                 </div>
-              </div>
-            </Link>
+              </Link>
 
-            <CardActions>
-              <CardActionsItem asChild className="w-full">
-                <button
-                  onClick={() => {
-                    pushModal('EditDashboard', item);
-                  }}
-                  type="button"
-                >
-                  <Pencil size={16} />
-                  Edit
-                </button>
-              </CardActionsItem>
-              <CardActionsItem asChild className="w-full text-destructive">
-                <button
-                  onClick={() => {
-                    showConfirm({
-                      title: 'Delete dashboard',
-                      text: 'Are you sure you want to delete this dashboard? All your reports will be deleted!',
-                      onConfirm: () => deletion.mutate({ id: item.id }),
-                    });
-                  }}
-                  type="button"
-                >
-                  <Trash size={16} />
-                  Delete
-                </button>
-              </CardActionsItem>
-            </CardActions>
-          </Card>
-        ))}
-      </div>
+              <CardActions>
+                <CardActionsItem asChild className="w-full">
+                  <button
+                    onClick={() => {
+                      pushModal('EditDashboard', item);
+                    }}
+                    type="button"
+                  >
+                    <Pencil size={16} />
+                    Edit
+                  </button>
+                </CardActionsItem>
+                <CardActionsItem asChild className="w-full">
+                  <button
+                    disabled={duplication.isPending}
+                    onClick={() => duplication.mutate({ id: item.id })}
+                    type="button"
+                  >
+                    <Copy size={16} />
+                    Duplicate
+                  </button>
+                </CardActionsItem>
+                <CardActionsItem asChild className="w-full text-destructive">
+                  <button
+                    onClick={() => {
+                      showConfirm({
+                        title: 'Delete dashboard',
+                        text: 'Are you sure you want to delete this dashboard? All your reports will be deleted!',
+                        onConfirm: () => deletion.mutate({ id: item.id }),
+                      });
+                    }}
+                    type="button"
+                  >
+                    <Trash size={16} />
+                    Delete
+                  </button>
+                </CardActionsItem>
+              </CardActions>
+            </Card>
+          ))}
+        </div>
+      )}
     </PageContainer>
   );
 }
