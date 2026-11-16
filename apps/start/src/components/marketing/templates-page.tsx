@@ -159,13 +159,13 @@ export function TemplatesPage() {
   if (search.id && linked.error && !linked.data) {
     return (
       <EmptyState
-        variant="section"
         description={describeMarketingError(linked.error)}
         icon={MessageSquareTextIcon}
         title={templateLoadErrorTitle(linked.error)}
+        variant="section"
       >
         <Button onClick={close}>Back to templates</Button>
-      </FullPageEmptyState>
+      </EmptyState>
     );
   }
   if (search.id && linked.data?.channel === 'email') {
@@ -205,13 +205,13 @@ export function TemplatesPage() {
   if (search.id && linked.data) {
     return (
       <EmptyState
-        variant="section"
         description="This template is not edited on this tab yet."
         icon={MessageSquareTextIcon}
         title="Template cannot be edited here"
+        variant="section"
       >
         <Button onClick={close}>Back to templates</Button>
-      </FullPageEmptyState>
+      </EmptyState>
     );
   }
 
@@ -245,7 +245,6 @@ export function TemplatesPage() {
       {templates.isPending && <FullPageLoadingState />}
       {templates.error && (
         <EmptyState
-          variant="section"
           description={describeMarketingError(templates.error)}
           icon={MessageSquareTextIcon}
           title={
@@ -253,11 +252,11 @@ export function TemplatesPage() {
               ? 'Could not refresh templates'
               : 'Templates are not available'
           }
+          variant="section"
         />
       )}
       {templates.data && rows.length === 0 && (
         <EmptyState
-          variant="section"
           description={
             channel === 'push'
               ? 'Write a push title and body here, then pick it in a journey step or a campaign.'
@@ -267,6 +266,7 @@ export function TemplatesPage() {
           }
           icon={MessageSquareTextIcon}
           title="No templates yet"
+          variant="section"
         />
       )}
       {rows.length > 0 && (

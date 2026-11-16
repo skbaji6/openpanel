@@ -45,7 +45,6 @@ export function ReportShell<T>({
       query.error instanceof MarketingApiError && query.error.status === 404;
     return (
       <EmptyState
-        variant="section"
         description={
           missing
             ? `This ${noun} no longer exists, so there is no report for it.`
@@ -53,9 +52,10 @@ export function ReportShell<T>({
         }
         icon={BarChart3Icon}
         title={missing ? 'Report not found' : 'The report is not available'}
+        variant="section"
       >
         <Button onClick={onClose}>Back to results</Button>
-      </FullPageEmptyState>
+      </EmptyState>
     );
   }
   return (

@@ -52,18 +52,18 @@ export function CampaignList({
       {campaigns.isPending && <FullPageLoadingState />}
       {campaigns.error && (
         <EmptyState
-          variant="section"
           description={describeMarketingError(campaigns.error)}
           icon={MegaphoneIcon}
           title="Campaigns are not available"
+          variant="section"
         />
       )}
       {campaigns.data && rows.length === 0 && (
         <EmptyState
-          variant="section"
           description="Create a campaign to draft a message for an audience."
           icon={MegaphoneIcon}
           title="No campaigns yet"
+          variant="section"
         />
       )}
       {rows.length > 0 && audiences.error && (

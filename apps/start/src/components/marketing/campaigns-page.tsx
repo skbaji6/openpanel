@@ -29,13 +29,13 @@ function OpenCampaign({
   if (campaign.error && !campaign.data) {
     return (
       <EmptyState
-        variant="section"
         description={describeMarketingError(campaign.error)}
         icon={MegaphoneIcon}
         title={campaignLoadErrorTitle(campaign.error)}
+        variant="section"
       >
         <Button onClick={onClose}>Back to campaigns</Button>
-      </FullPageEmptyState>
+      </EmptyState>
     );
   }
   if (campaign.data.state !== 'draft') {

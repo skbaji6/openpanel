@@ -248,26 +248,26 @@ export function RulesPage() {
   if (rules.error) {
     return (
       <EmptyState
-        variant="section"
         description={describeMarketingError(rules.error)}
         icon={WorkflowIcon}
         title="Journeys are not available"
+        variant="section"
       />
     );
   }
   if (rules.data.rules.length === 0) {
     return (
       <EmptyState
-        variant="section"
         description="A rule watches for an event, waits, and messages the profile until it reaches the goal. New here? Pick a template to start, or open the How it works tab."
         icon={WorkflowIcon}
         title="No rules yet"
+        variant="section"
       >
         {actions}
         {importing && (
           <JourneyImportDialog onClose={() => setImporting(false)} />
         )}
-      </FullPageEmptyState>
+      </EmptyState>
     );
   }
   return (

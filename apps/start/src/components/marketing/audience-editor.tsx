@@ -23,8 +23,8 @@ import type {
 } from './campaign-contract';
 import { FilterBuilder } from './filter-builder';
 import { isVersionConflict, useAudienceRow } from './use-audience-row';
-import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import { EmptyState } from '@/components/empty-state';
+import { InputWithLabel, WithLabel } from '@/components/forms/input-with-label';
 import FullPageLoadingState from '@/components/full-page-loading-state';
 import { Button } from '@/components/ui/button';
 import { showConfirm } from '@/modals';
@@ -390,10 +390,10 @@ export function AudienceEditor({
     return (
       <div className="col gap-2">
         <EmptyState
-          variant="section"
           description={describeMarketingError(audience.error)}
           icon={UsersIcon}
           title="This audience could not be loaded"
+          variant="section"
         />
         <Button className="self-center" onClick={onClose} variant="ghost">
           Back to audiences

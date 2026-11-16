@@ -137,20 +137,20 @@ function JourneyResults({ onOpen }: { onOpen: (result: RuleResult) => void }) {
   if (results.error) {
     return (
       <EmptyState
-        variant="section"
         description={describeMarketingError(results.error)}
         icon={BarChart3Icon}
         title="Results are not available"
+        variant="section"
       />
     );
   }
   if (results.data.results.length === 0) {
     return (
       <EmptyState
-        variant="section"
         description="Create a rule to see how many profiles it messages and how many reach the goal."
         icon={BarChart3Icon}
         title="No results yet"
+        variant="section"
       />
     );
   }

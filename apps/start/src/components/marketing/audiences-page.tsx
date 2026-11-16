@@ -232,15 +232,14 @@ export function AudiencesPage() {
       {audiences.isPending && <FullPageLoadingState />}
       {audiences.error && (
         <EmptyState
-          variant="section"
           description={describeMarketingError(audiences.error)}
           icon={UsersIcon}
           title="Audiences are not available"
+          variant="section"
         />
       )}
       {audiences.data && rows.length === 0 && (
         <EmptyState
-          variant="section"
           description={
             notConnected
               ? 'Connect the audience API on the Channels tab first.'
@@ -248,9 +247,10 @@ export function AudiencesPage() {
           }
           icon={UsersIcon}
           title={notConnected ? 'No audience API yet' : 'No audiences yet'}
+          variant="section"
         >
           {notConnected && <ConnectSourceLink />}
-        </FullPageEmptyState>
+        </EmptyState>
       )}
       {rows.length > 0 && (
         <AudienceTable isAdmin={isAdmin} onOpen={open} rows={rows} />
