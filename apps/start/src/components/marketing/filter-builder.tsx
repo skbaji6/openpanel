@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input';
 import { useDebounceValue } from '@/hooks/use-debounce-value';
 
 const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_THRESHOLD = 12;
 const SELECT_CLASS = 'h-8 rounded-md border bg-background px-2 text-sm';
 
 type FilterValue = Condition['values'][number];
@@ -49,11 +50,30 @@ function inputTypeFor(dimension: Dimension): string {
   return dimension.type === 'date' ? 'date' : 'text';
 }
 
+function useDimensionValues(
+  dimension: Dimension,
+  search: string,
+  enabled: boolean
+) {
+  const marketingFetch = useMarketingFetch();
+  const queryKey = useMarketingQueryKey();
+  return useQuery({
+    queryKey: queryKey('audience-values', dimension.key, search),
+    queryFn: () =>
+      marketingFetch<{ values: DimensionValue[] }>(
+        `audience/dimensions/${encodeURIComponent(dimension.key)}/values?q=${encodeURIComponent(search)}`
+      ),
+    enabled,
+  });
+}
+
 function ValueChips({
   values,
+  labelOf,
   onRemove,
 }: {
   values: FilterValue[];
+  labelOf: (value: FilterValue) => string;
   onRemove: (index: number) => void;
 }) {
   return (
@@ -63,9 +83,9 @@ function ValueChips({
           className="row items-center gap-1 rounded border px-2 py-0.5 text-xs"
           key={String(value)}
         >
-          {String(value)}
+          {labelOf(value)}
           <button
-            aria-label={`Remove ${String(value)}`}
+            aria-label={`Remove ${labelOf(value)}`}
             onClick={() => onRemove(index)}
             type="button"
           >
@@ -84,21 +104,12 @@ function ValuePicker({
 }: {
   dimension: Dimension;
   id: string;
-  onPick: (value: string) => void;
+  onPick: (item: DimensionValue) => void;
 }) {
-  const marketingFetch = useMarketingFetch();
-  const queryKey = useMarketingQueryKey();
   const [search, setSearch] = useState('');
   const [open, setOpen] = useState(false);
   const query = useDebounceValue(search.trim(), SEARCH_DEBOUNCE_MS);
-  const values = useQuery({
-    queryKey: queryKey('audience-values', dimension.key, query),
-    queryFn: () =>
-      marketingFetch<{ values: DimensionValue[] }>(
-        `audience/dimensions/${encodeURIComponent(dimension.key)}/values?q=${encodeURIComponent(query)}`
-      ),
-    enabled: open,
-  });
+  const values = useDimensionValues(dimension, query, open);
   return (
     <div className="col gap-1">
       <Input
@@ -120,7 +131,7 @@ function ValuePicker({
           {values.data.values.map((item) => (
             <Button
               key={item.value}
-              onClick={() => onPick(item.value)}
+              onClick={() => onPick(item)}
               size="sm"
               type="button"
               variant="outline"
@@ -129,6 +140,64 @@ function ValuePicker({
             </Button>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// A plain dropdown for short lists; the search box only appears once there is something to narrow down.
+function ValueSelect({
+  dimension,
+  id,
+  selected,
+  labelOf,
+  onPick,
+}: {
+  dimension: Dimension;
+  id: string;
+  selected: FilterValue | undefined;
+  labelOf: (value: FilterValue) => string;
+  onPick: (item: DimensionValue | undefined) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const query = useDebounceValue(search.trim(), SEARCH_DEBOUNCE_MS);
+  const values = useDimensionValues(dimension, query, true);
+  const options = values.data?.values ?? [];
+  const showSearch = search !== '' || options.length > SEARCH_THRESHOLD;
+  const isSelectedListed = options.some(
+    (item) => item.value === String(selected)
+  );
+  return (
+    <div className="col gap-1">
+      {showSearch && (
+        <Input
+          aria-label={`Search ${dimension.label} values`}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={`Search ${dimension.label.toLowerCase()}`}
+          value={search}
+        />
+      )}
+      <select
+        aria-label={`${dimension.label} value`}
+        className={SELECT_CLASS}
+        id={id}
+        onChange={(event) =>
+          onPick(options.find((item) => item.value === event.target.value))
+        }
+        value={selected === undefined ? '' : String(selected)}
+      >
+        <option value="">Choose</option>
+        {selected !== undefined && !isSelectedListed && (
+          <option value={String(selected)}>{labelOf(selected)}</option>
+        )}
+        {options.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+      {values.error && (
+        <p className="text-destructive text-xs">Values could not be loaded</p>
       )}
     </div>
   );
@@ -187,6 +256,19 @@ function ValuesEditor({
   onChange: (values: FilterValue[]) => void;
 }) {
   const { op, values } = condition;
+  // Picked values keep their label even when a later search no longer lists them.
+  const [picked, setPicked] = useState<Map<string, string>>(new Map());
+  const listed = useDimensionValues(dimension, '', dimension.valuesListable);
+  const labelOf = (value: FilterValue) => {
+    const key = String(value);
+    return (
+      picked.get(key) ??
+      listed.data?.values.find((item) => item.value === key)?.label ??
+      key
+    );
+  };
+  const remember = (item: DimensionValue) =>
+    setPicked((current) => new Map(current).set(item.value, item.label));
   if (op === 'exists') {
     return null;
   }
@@ -200,11 +282,19 @@ function ValuesEditor({
     return (
       <div className="col gap-1">
         <ValueChips
+          labelOf={labelOf}
           onRemove={(index) => onChange(values.filter((_, i) => i !== index))}
           values={values}
         />
         {dimension.valuesListable ? (
-          <ValuePicker dimension={dimension} id={id} onPick={add} />
+          <ValuePicker
+            dimension={dimension}
+            id={id}
+            onPick={(item) => {
+              remember(item);
+              add(item.value);
+            }}
+          />
         ) : (
           <FreeValueInput dimension={dimension} id={id} onAdd={add} />
         )}
@@ -230,6 +320,24 @@ function ValuesEditor({
         <option value="true">Yes</option>
         <option value="false">No</option>
       </select>
+    );
+  }
+  if (op === 'eq' && dimension.valuesListable) {
+    return (
+      <ValueSelect
+        dimension={dimension}
+        id={id}
+        labelOf={labelOf}
+        onPick={(item) => {
+          if (!item) {
+            onChange([]);
+            return;
+          }
+          remember(item);
+          onChange([coerceValue(dimension, item.value)]);
+        }}
+        selected={values[0]}
+      />
     );
   }
   const slots = op === 'between' ? [0, 1] : [0];
@@ -321,6 +429,7 @@ function ConditionRow({
           condition={condition}
           dimension={dimension}
           id={`${baseId}-value`}
+          key={dimension.key}
           onChange={(values) => setCondition({ ...condition, values })}
         />
       )}
